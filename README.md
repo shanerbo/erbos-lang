@@ -26,7 +26,7 @@ spark {
 - **Reads like English** — `is`, `be`, `give`, `nah`, `through`, `infi`, `stop`, `skip`
 - **Compiles to native ARM64** — no VM, no interpreter, no runtime
 - **Zero dependencies** — no libc, just syscalls
-- **Memory safe** — RAII, ownership, move semantics, use-after-move detection
+- **Memory safe** — use-after-move detection, bounds checking, capacity panics
 - **Type checked** — catches mismatches at compile time
 - **Fast compilation** — instant builds, single-pass compiler
 
@@ -117,12 +117,17 @@ a is Point()
 b is now a          // move — a is dead
 // yell(a.x)       // COMPILE ERROR: use of moved variable
 
-c is rep b          // clone — both live
+c is rep b          // clone — shallow copy (pointer copy)
 
 {
   temp is Point()
-}                   // temp auto-freed here (RAII)
+}                   // scope tracked (real free requires v0.2 allocator)
 ```
+
+> **Note:** RAII scope tracking is implemented (the compiler knows what to free and when) but the
+> bump allocator does not reclaim memory. Real deallocation is planned for v0.2.
+> `rep` performs a shallow copy (pointer copy), not a deep clone.
+> `ref` is parsed but borrow rules are not enforced by the checker yet.
 
 ---
 
@@ -174,30 +179,58 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 
 ## Current Features
 
+### Implemented
 | Feature | Status |
 |---------|--------|
-| Integer arithmetic | ✅ |
-| Strings + interpolation | ✅ |
+| Integer arithmetic (+, -, *, /, mod) | ✅ |
+| Strings + interpolation (`"hello {name}"`) | ✅ |
+| String concat with `+` operator | ✅ |
 | Functions + recursion | ✅ |
+| Function arg count validation | ✅ |
+| Unknown function/type detection | ✅ |
 | Structs (heap-allocated) | ✅ |
-| Dynamic lists (push/pop/len) | ✅ |
-| Ordered maps (set/get/keys/len) | ✅ |
+| Dynamic lists (push/pop/len, max 8) | ✅ |
+| Ordered maps (set/get/keys/len, max 16) | ✅ |
 | Conditionals (?{ / nah) | ✅ |
-| Loops (through, infi) | ✅ |
-| RAII (auto-free at scope end) | ✅ |
-| Move semantics (is now) | ✅ |
-| Clone (is rep) | ✅ |
-| Use-after-move detection | ✅ |
-| Type inference + checking | ✅ |
+| Loops (through range, through in, infi) | ✅ |
+| Move semantics (`is now`) | ✅ |
+| Use-after-move detection (heap vars) | ✅ |
+| Type inference + type mismatch errors | ✅ |
 | Bounds checking (panic on OOB) | ✅ |
+| Capacity checking (panic on overflow) | ✅ |
 | nomut enforcement | ✅ |
-| String interpolation | ✅ |
 | Negative numbers | ✅ |
 | Method syntax (obj.method()) | ✅ |
 | Scoped blocks ({} for lifetimes) | ✅ |
-| Green thread runtime | ✅ (separate) |
-| Channels | ✅ (separate) |
-| Multi-core work-stealing | ✅ (separate) |
+| `erbos run` (compile + execute + cleanup) | ✅ |
+
+### Partial / Experimental
+| Feature | Status |
+|---------|--------|
+| RAII scope tracking | Compiler tracks allocations per scope; emits cleanup markers. Bump allocator does not actually free. |
+| Clone (`is rep`) | Shallow copy (pointer copy). Deep clone not implemented. |
+| `ref` params | Parsed and stored. Borrow/mutation rules not enforced by checker or codegen. |
+| Struct field access | Resolves field by name across all structs, not per-type. Works if field names are unique. |
+| Green thread runtime | Separate C library (`src/runtime.c`). Not integrated into compiled `.erbos` output. |
+| Channels | Separate C library (`src/channel.c`). Not integrated into compiled output. |
+| String comparison (eq/ne) | Uses `_str_eq` when checker detects both operands are str. |
+
+### Planned (v0.2+)
+| Feature | Status |
+|---------|--------|
+| Real deallocation (free at scope end) | Requires replacing bump allocator |
+| Deep clone for `rep` | Requires type-aware copy |
+| Borrow checker (`ref` enforcement) | Requires full type propagation in codegen |
+| Per-struct field resolution | Requires type tracking through variables |
+| Enums with data (algebraic types) | — |
+| Pattern matching | — |
+| Result/Option types | — |
+| Traits / interfaces | — |
+| Generics (monomorphization) | — |
+| Multi-file imports | — |
+| Growable lists/maps | — |
+| Operator overloading | — |
+| Self-hosting | — |
 
 ---
 
@@ -207,8 +240,8 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 |--|-------|------|-----|-----|--------|
 | **Syntax** | English words | Symbol-heavy | Verbose | Clean | Clean |
 | **Compilation** | Instant | Slow | Slow | Fast | Interpreted |
-| **Memory** | RAII + ownership | Borrow checker | Manual/RAII | GC | GC |
-| **Safety** | Move semantics, bounds checks | Full borrow checker | Opt-in | Nil panics | Runtime errors |
+| **Memory** | Scope tracking + move | Borrow checker | Manual/RAII | GC | GC |
+| **Safety** | Move detection, bounds/capacity panics | Full borrow checker | Opt-in | Nil panics | Runtime errors |
 | **Dependencies** | Zero (no libc) | Minimal | Heavy (STL) | Runtime | Interpreter |
 | **Learning curve** | Low | High | High | Low | Low |
 | **Performance** | Native ARM64 | Native | Native | Native + GC | Slow |
@@ -218,24 +251,29 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 
 ### Erbos vs Rust
 **Wins:** Simpler syntax, no lifetime annotations, faster to learn, instant compilation.
-**Loses:** Less mature, no borrow checker (yet), smaller ecosystem.
+**Loses:** No borrow checker, no real deallocation yet, no ecosystem.
 
 ### Erbos vs C++
-**Wins:** No headers, no UB, no preprocessor, readable syntax, memory safe by default.
-**Loses:** No templates (yet), no operator overloading (yet), less control over memory layout.
+**Wins:** No headers, no UB, no preprocessor, readable syntax, compile-time move checking.
+**Loses:** No templates, no operator overloading, no real RAII deallocation yet, less control.
 
 ### Erbos vs Go
-**Wins:** No GC pauses, ownership model prevents leaks, word-based syntax.
-**Loses:** No goroutine integration in compiled output yet, single-file only.
+**Wins:** No GC, move semantics prevent some leaks, word-based syntax.
+**Loses:** No goroutine integration in compiled output, single-file only, bump allocator leaks.
 
 ### Erbos vs Python
-**Wins:** 100x+ faster, compiled, type safe, no runtime needed.
-**Loses:** Less libraries, no REPL (yet), less forgiving.
+**Wins:** 100x+ faster, compiled, type safe at compile time, no runtime needed.
+**Loses:** No libraries, no REPL, less forgiving, early stage.
 
 ---
 
 ## Roadmap
 
+- [ ] Real deallocation (replace bump allocator with free-list)
+- [ ] Deep clone for `rep`
+- [ ] Borrow checker (`ref` enforcement)
+- [ ] Per-struct type-aware field resolution
+- [ ] Growable lists and maps (beyond 8/16 capacity)
 - [ ] Enums with data (algebraic types)
 - [ ] Pattern matching
 - [ ] Result/Option types

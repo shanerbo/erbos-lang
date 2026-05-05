@@ -1,0 +1,2 @@
+add(a int, b int) int { give a + b }
+spark { yell(add(1)) }

@@ -1,0 +1,4 @@
+spark {
+  x is 10
+  x be "hello"
+}

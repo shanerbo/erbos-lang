@@ -1,0 +1,6 @@
+Point is { x int }
+spark {
+  a is Point()
+  b is now a
+  yell(a.x)
+}

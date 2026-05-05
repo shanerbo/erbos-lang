@@ -194,7 +194,14 @@ static void emit_expr(Gen *g, Node *n) {
             fprintf(g->out, "    ldr x1, [sp], #16\n");
             switch (n->binary.op) {
                 case TOK_PLUS:
-                    fprintf(g->out, "    add x0, x0, x1\n"); break;
+                    if (n->resolved_type == 2) {
+                        // str + str → _str_concat(left, right)
+                        // left in x0, right in x1
+                        fprintf(g->out, "    bl _str_concat\n");
+                    } else {
+                        fprintf(g->out, "    add x0, x0, x1\n");
+                    }
+                    break;
                 case TOK_MINUS:
                     fprintf(g->out, "    sub x0, x0, x1\n"); break;
                 case TOK_STAR:
@@ -205,9 +212,20 @@ static void emit_expr(Gen *g, Node *n) {
                     fprintf(g->out, "    msub x0, x2, x1, x0\n");
                     break;
                 case TOK_EQ: case TOK_EQ_WORD:
-                    fprintf(g->out, "    cmp x0, x1\n    cset x0, eq\n"); break;
+                    if (n->resolved_type == 2) {
+                        fprintf(g->out, "    bl _str_eq\n");
+                    } else {
+                        fprintf(g->out, "    cmp x0, x1\n    cset x0, eq\n");
+                    }
+                    break;
                 case TOK_NEQ: case TOK_NE_WORD:
-                    fprintf(g->out, "    cmp x0, x1\n    cset x0, ne\n"); break;
+                    if (n->resolved_type == 2) {
+                        fprintf(g->out, "    bl _str_eq\n");
+                        fprintf(g->out, "    eor x0, x0, #1\n");
+                    } else {
+                        fprintf(g->out, "    cmp x0, x1\n    cset x0, ne\n");
+                    }
+                    break;
                 case TOK_LT: case TOK_LT_WORD:
                     fprintf(g->out, "    cmp x0, x1\n    cset x0, lt\n"); break;
                 case TOK_GT: case TOK_GT_WORD:
@@ -850,8 +868,10 @@ static void emit_map_builtins(Gen *g) {
     fprintf(g->out, "    add x4, x4, #24\n"); // value slot = key slot + 8
     fprintf(g->out, "    str x21, [x19, x4]\n");
     fprintf(g->out, "    b _ms_done\n");
-    // Insert new
+    // Insert new (capacity check: max 16 entries)
     fprintf(g->out, "_ms_insert:\n");
+    fprintf(g->out, "    cmp x22, #16\n");
+    fprintf(g->out, "    b.ge _panic_capacity\n");
     fprintf(g->out, "    lsl x4, x22, #4\n");
     fprintf(g->out, "    add x4, x4, #16\n");
     fprintf(g->out, "    str x20, [x19, x4]\n");   // store key
@@ -943,10 +963,12 @@ static void emit_list_builtins(Gen *g) {
     fprintf(g->out, "    str xzr, [x0]\n"); // count = 0
     fprintf(g->out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 
-    // _list_push(list, value) -> appends value
+    // _list_push(list, value) -> appends value (max 8 elements)
     fprintf(g->out, "// built-in: _list_push(x0=list, x1=value)\n");
     fprintf(g->out, ".globl _list_push\n.p2align 2\n_list_push:\n");
     fprintf(g->out, "    ldr x2, [x0]\n");          // count
+    fprintf(g->out, "    cmp x2, #8\n");            // capacity check
+    fprintf(g->out, "    b.ge _panic_capacity\n");
     fprintf(g->out, "    add x3, x2, #1\n");        // new slot index (count+1 because [0]=count)
     fprintf(g->out, "    str x1, [x0, x3, lsl #3]\n"); // store at [count+1]
     fprintf(g->out, "    add x2, x2, #1\n");
@@ -1011,6 +1033,14 @@ void codegen(Node *program, const char *output_path) {
     fprintf(g.out, "    bl _yell_str\n");
     fprintf(g.out, "    mov x16, #1\n    mov x0, #1\n    svc #0x80\n\n");
 
+    // Panic handler for capacity overflow
+    fprintf(g.out, "// panic: capacity overflow\n");
+    fprintf(g.out, ".globl _panic_capacity\n.p2align 2\n_panic_capacity:\n");
+    fprintf(g.out, "    adrp x0, _cap_msg@PAGE\n");
+    fprintf(g.out, "    add x0, x0, _cap_msg@PAGEOFF\n");
+    fprintf(g.out, "    bl _yell_str\n");
+    fprintf(g.out, "    mov x16, #1\n    mov x0, #1\n    svc #0x80\n\n");
+
     // Emit struct allocators (heap-based)
     for (int i = 0; i < g.struct_count; i++) {
         Node *s = program->program.structs.items[i];
@@ -1047,6 +1077,7 @@ void codegen(Node *program, const char *output_path) {
     // Panic messages
     fprintf(g.out, ".section __DATA,__data\n");
     fprintf(g.out, "_oob_msg: .asciz \"panic: index out of bounds\"\n");
+    fprintf(g.out, "_cap_msg: .asciz \"panic: collection capacity exceeded\"\n");
 
     fclose(g.out);
 }

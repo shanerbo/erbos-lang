@@ -42,6 +42,7 @@ typedef struct {
 struct Node {
     NodeType type;
     int line;
+    int resolved_type; // filled by checker: 0=unknown, 1=int, 2=str, 3=bool
 
     union {
         // NODE_PROGRAM

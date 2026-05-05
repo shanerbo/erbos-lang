@@ -13,9 +13,10 @@ typedef struct {
 typedef struct {
     Symbol syms[MAX_SYMS];
     int count;
-    // Function return types
+    // Function info
     char **func_names;
     Type *func_types;
+    int *func_param_counts;
     int func_count;
     // Struct names
     char **struct_names;
@@ -77,24 +78,30 @@ static Type check_expr(Checker *c, Node *n) {
         case NODE_BINARY: {
             Type left = check_expr(c, n->binary.left);
             Type right = check_expr(c, n->binary.right);
-            // Arithmetic: both must be int
             switch (n->binary.op) {
                 case TOK_PLUS: case TOK_ADD_WORD:
-                    // Allow str + str (concat) or int + int
-                    if (left.kind == TYPE_STR && right.kind == TYPE_STR) return make_type(TYPE_STR);
+                    if (left.kind == TYPE_STR && right.kind == TYPE_STR) {
+                        n->resolved_type = 2; // str
+                        return make_type(TYPE_STR);
+                    }
                     if (left.kind != TYPE_INT || right.kind != TYPE_INT) {
                         fprintf(stderr, "error:%d: cannot use '%s' + '%s'\n", n->line, type_name(left), type_name(right));
                         exit(1);
                     }
+                    n->resolved_type = 1; // int
                     return make_type(TYPE_INT);
                 case TOK_MINUS: case TOK_STAR: case TOK_SLASH: case TOK_PERCENT: case TOK_MOD_WORD:
                     if (left.kind != TYPE_INT || right.kind != TYPE_INT) {
                         fprintf(stderr, "error:%d: arithmetic requires int, got '%s' and '%s'\n", n->line, type_name(left), type_name(right));
                         exit(1);
                     }
+                    n->resolved_type = 1;
                     return make_type(TYPE_INT);
                 case TOK_EQ: case TOK_NEQ: case TOK_LT: case TOK_GT: case TOK_LTE: case TOK_GTE:
                 case TOK_EQ_WORD: case TOK_NE_WORD: case TOK_LT_WORD: case TOK_GT_WORD: case TOK_LE_WORD: case TOK_GE_WORD:
+                    // For eq/ne on strings, mark so codegen can use _str_eq
+                    if (left.kind == TYPE_STR && right.kind == TYPE_STR) n->resolved_type = 2;
+                    else n->resolved_type = 1;
                     return make_type(TYPE_BOOL);
                 case TOK_AND: case TOK_OR:
                     return make_type(TYPE_BOOL);
@@ -110,14 +117,35 @@ static Type check_expr(Checker *c, Node *n) {
             if (!strcmp(name, "list") || !strcmp(name, "list_new")) return make_type(TYPE_LIST);
             if (!strcmp(name, "map") || !strcmp(name, "map_new")) return make_type(TYPE_MAP);
             if (!strcmp(name, "task")) return make_type(TYPE_TASK);
-            if (!strcmp(name, "map_get")) return make_type(TYPE_INT); // simplified
+            // Built-in functions (variable arg counts, skip validation)
+            if (!strcmp(name, "yell")) { if (n->call.arg_count > 0) check_expr(c, n->call.args[0]); return make_type(TYPE_VOID); }
+            if (!strcmp(name, "map_get")) return make_type(TYPE_INT);
             if (!strcmp(name, "map_keys")) return make_type(TYPE_LIST);
-            if (!strcmp(name, "map_len") || !strcmp(name, "list_len")) return make_type(TYPE_INT);
+            if (!strcmp(name, "map_set") || !strcmp(name, "map_len") || !strcmp(name, "list_len") || !strcmp(name, "list_push")) return make_type(TYPE_VOID);
             if (!strcmp(name, "list_pop")) return make_type(TYPE_INT);
             if (!strcmp(name, "str_concat")) return make_type(TYPE_STR);
             if (!strcmp(name, "int_to_str")) return make_type(TYPE_STR);
-            // User function
-            return get_func_return(c, name);
+            // User function — validate arg count
+            int found = 0;
+            for (int i = 0; i < c->func_count; i++) {
+                if (!strcmp(c->func_names[i], name)) {
+                    found = 1;
+                    if (n->call.arg_count != c->func_param_counts[i]) {
+                        fprintf(stderr, "error:%d: function '%s' expects %d arguments, got %d\n",
+                            n->line, name, c->func_param_counts[i], n->call.arg_count);
+                        exit(1);
+                    }
+                    // Check arg expressions
+                    for (int j = 0; j < n->call.arg_count; j++)
+                        check_expr(c, n->call.args[j]);
+                    return c->func_types[i];
+                }
+            }
+            if (!found) {
+                fprintf(stderr, "error:%d: unknown function '%s'\n", n->line, name);
+                exit(1);
+            }
+            return make_type(TYPE_UNKNOWN);
         }
         case NODE_METHOD_CALL: {
             const char *m = n->method_call.method;
@@ -211,16 +239,21 @@ void checker_run(Node *program) {
     // Register function return types
     c.func_names = malloc(program->program.funcs.count * sizeof(char *));
     c.func_types = malloc(program->program.funcs.count * sizeof(Type));
+    c.func_param_counts = malloc(program->program.funcs.count * sizeof(int));
     c.func_count = program->program.funcs.count;
     for (int i = 0; i < c.func_count; i++) {
         Node *f = program->program.funcs.items[i];
         c.func_names[i] = f->func_def.name;
+        c.func_param_counts[i] = f->func_def.param_count;
         if (!f->func_def.return_type) c.func_types[i] = make_type(TYPE_VOID);
         else if (!strcmp(f->func_def.return_type, "int")) c.func_types[i] = make_type(TYPE_INT);
         else if (!strcmp(f->func_def.return_type, "str")) c.func_types[i] = make_type(TYPE_STR);
         else if (!strcmp(f->func_def.return_type, "bool")) c.func_types[i] = make_type(TYPE_BOOL);
         else if (is_struct(&c, f->func_def.return_type)) c.func_types[i] = make_struct(f->func_def.return_type);
-        else c.func_types[i] = make_type(TYPE_INT); // default
+        else {
+            fprintf(stderr, "error: unknown return type '%s' for function '%s'\n", f->func_def.return_type, f->func_def.name);
+            exit(1);
+        }
     }
 
     // Check each function body
