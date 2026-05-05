@@ -119,6 +119,12 @@ static Type check_expr(Checker *c, Node *n) {
             if (!strcmp(name, "task")) return make_type(TYPE_TASK);
             // Built-in functions (variable arg counts, skip validation)
             if (!strcmp(name, "yell")) { if (n->call.arg_count > 0) check_expr(c, n->call.args[0]); return make_type(TYPE_VOID); }
+            if (!strcmp(name, "len")) {
+                if (n->call.arg_count != 1) { fprintf(stderr, "error:%d: len() takes 1 argument\n", n->line); exit(1); }
+                Type arg_t = check_expr(c, n->call.args[0]);
+                n->call.args[0]->resolved_type = (arg_t.kind == TYPE_MAP) ? 4 : 3; // 4=map, 3=list
+                return make_type(TYPE_INT);
+            }
             if (!strcmp(name, "map_get")) return make_type(TYPE_INT);
             if (!strcmp(name, "map_keys")) return make_type(TYPE_LIST);
             if (!strcmp(name, "map_set") || !strcmp(name, "map_len") || !strcmp(name, "list_len") || !strcmp(name, "list_push")) return make_type(TYPE_VOID);

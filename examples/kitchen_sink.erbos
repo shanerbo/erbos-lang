@@ -101,7 +101,7 @@ spark {
   m.set("b", 20)
   yell(m.get("a"))
   yell(m.get("b"))
-  yell(map_len(m))
+  yell(len(m))
 
   // Map iteration
   keys is m.keys()

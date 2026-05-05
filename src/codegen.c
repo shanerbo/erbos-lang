@@ -284,6 +284,17 @@ static void emit_expr(Gen *g, Node *n) {
                 // task() just returns 0 — placeholder handle
                 fprintf(g->out, "    mov x0, #0\n");
                 break;
+            } else if (!strcmp(call_name, "len")) {
+                // Universal len(): reads count from list (offset 0) or map (offset 8)
+                emit_expr(g, n->call.args[0]);
+                if (n->call.args[0]->resolved_type == 4) {
+                    // map: count at offset 8
+                    fprintf(g->out, "    ldr x0, [x0, #8]\n");
+                } else {
+                    // list: count at offset 0
+                    fprintf(g->out, "    ldr x0, [x0]\n");
+                }
+                break;
             } else {
                 snprintf(actual_name, sizeof(actual_name), "_%s", call_name);
             }
