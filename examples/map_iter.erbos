@@ -1,12 +1,12 @@
 spark {
   m is map()
-  map_set(m, "alice", 100)
-  map_set(m, "bob", 85)
-  map_set(m, "charlie", 92)
+  m.set("alice", 100)
+  m.set("bob", 85)
+  m.set("charlie", 92)
 
-  keys is map_keys(m)
+  keys is m.keys()
   through (k in keys) {
     yell(k)
-    yell(map_get(m, k))
+    yell(m.get(k))
   }
 }

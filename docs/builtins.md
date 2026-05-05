@@ -18,25 +18,50 @@ name is "erbos"
 yell("hello {name}")    // prints: hello erbos
 ```
 
+## Lists
+
+| Method | Description | Example |
+|--------|-------------|---------|
+| `list()` | Create empty dynamic list | `nums is list()` |
+| `.push(val)` | Append value | `nums.push(10)` |
+| `.pop()` | Remove and return last element | `last is nums.pop()` |
+| `.len()` | Get number of elements | `yell(nums.len())` |
+
+List literals also work:
+```
+nums is [1, 2, 3]
+yell(nums[0])           // bounds-checked
+```
+
 ## Maps
 
-| Function | Description | Example |
-|----------|-------------|---------|
-| `map_new()` | Create empty ordered map | `m is map_new()` |
-| `map_set(m, key, val)` | Insert or update entry | `map_set(m, "age", 25)` |
-| `map_get(m, key)` | Get value by key (0 if missing) | `map_get(m, "age")` |
-| `map_len(m)` | Get number of entries | `map_len(m)` |
-| `map_keys(m)` | Get list of keys (insertion order) | `map_keys(m)` |
+| Method | Description | Example |
+|--------|-------------|---------|
+| `map()` | Create empty ordered map | `m is map()` |
+| `.set(key, val)` | Insert or update entry | `m.set("age", 25)` |
+| `.get(key)` | Get value by key (0 if missing) | `m.get("age")` |
+| `.len()` | Get number of entries | `m.len()` |
+| `.keys()` | Get list of keys (insertion order) | `m.keys()` |
 
 ## Structs
 
-| Function | Description | Example |
-|----------|-------------|---------|
-| `alloc_StructName()` | Heap-allocate a struct instance | `alloc_Point()` |
+| Syntax | Description | Example |
+|--------|-------------|---------|
+| `StructName()` | Heap-allocate a struct instance | `Point()` |
 
-Automatically generated for every struct definition.
+Automatically generated for every struct definition:
+```
+Point is {
+  x int
+  y int
+}
+
+p is Point()
+p.x be 10
+```
 
 ## Memory
 
-All allocations are heap-backed via `mmap`. No libc dependency.
-No garbage collector — memory is freed when the process exits (RAII planned).
+All allocations are heap-backed via `mmap` syscall. No libc dependency.
+
+RAII is implemented — heap allocations are automatically freed when their scope ends. Move semantics (`is now`) transfer ownership. Clone (`is rep`) creates deep copies.

@@ -16,8 +16,10 @@ spark {
 x is 10              // inferred type
 x is int 10          // explicit type
 nomut pi is 3        // immutable — cannot reassign
-x be 20               // reassignment
+x be 20              // reassignment
 ```
+
+All variables must be initialized. `x is int` without a value is a compile error.
 
 ## Types
 
@@ -47,14 +49,14 @@ spark {
 }
 ```
 
-`give` returns a value. Last expression is NOT implicit — you must use `give`.
+`give` returns a value. Bare `give` returns void (early exit).
 
 ## Conditionals
 
 ```
-x > 10 ?{
+x gt 10 ?{
   yell("big")
-} x > 5 ?{
+} x gt 5 ?{
   yell("mid")
 } nah {
   yell("smol")
@@ -83,7 +85,7 @@ through (item in my_list) {
 
 ### While loop
 ```
-infi (x > 0) {
+infi (x gt 0) {
   x be x - 1
 }
 ```
@@ -91,8 +93,7 @@ infi (x > 0) {
 ### Infinite loop
 ```
 infi {
-  // runs forever
-  x == 10 ?{
+  x eq 10 ?{
     stop
   }
 }
@@ -119,7 +120,7 @@ Point is {
 }
 
 spark {
-  p is alloc_Point()
+  p is Point()
   p.x be 10
   p.y be 20
   yell(p.x + p.y)
@@ -129,9 +130,14 @@ spark {
 ## Lists
 
 ```
-nums is [10, 20, 30]
-yell(nums[0])                 // indexing
-yell(nums[2])
+nums is [10, 20, 30]          // literal
+yell(nums[0])                 // indexing (bounds-checked)
+
+nums is list()                // dynamic list
+nums.push(10)
+nums.push(20)
+last is nums.pop()
+yell(nums.len())
 
 through (n in nums) {         // iteration
   yell(n)
@@ -141,42 +147,129 @@ through (n in nums) {         // iteration
 ## Maps
 
 ```
-m is map_new()
-map_set(m, "alice", 100)
-map_set(m, "bob", 85)
+m is map()
+m.set("alice", 100)
+m.set("bob", 85)
 
-yell(map_get(m, "alice"))     // 100
-yell(map_len(m))              // 2
+yell(m.get("alice"))          // 100
+yell(m.len())                 // 2
 
 // Iteration (ordered by insertion)
-keys is map_keys(m)
+keys is m.keys()
 through (k in keys) {
   yell(k)
-  yell(map_get(m, k))
+  yell(m.get(k))
 }
 ```
 
 ## Operators
 
-| Operator | Meaning |
-|----------|---------|
-| `+` `-` `*` `/` | arithmetic |
-| `==` `!=` | equality |
-| `<` `>` `<=` `>=` | comparison |
-| `and` `or` `not` | logical |
+### Arithmetic (symbols only)
+| Symbol | Meaning |
+|--------|---------|
+| `+` | add |
+| `-` | subtract |
+| `*` | multiply |
+| `/` | divide |
+
+### Modulo (both work)
+| Symbol | Word |
+|--------|------|
+| `%` | `mod` |
+
+### Comparisons (both work)
+| Symbol | Word | Meaning |
+|--------|------|---------|
+| `>` | `gt` | greater than |
+| `<` | `lt` | less than |
+| `>=` | `ge` | greater or equal |
+| `<=` | `le` | less or equal |
+| `==` | `eq` | equal |
+| `!=` | `ne` | not equal |
+
+### Logical (words only)
+| Word | Meaning |
+|------|---------|
+| `and` | logical AND |
+| `or` | logical OR |
+| `not` | negation |
+
+## Ownership & Memory
+
+### RAII — automatic cleanup
+Every heap allocation is freed when its scope ends:
+```
+spark {
+  p is Point()
+  p.x be 42
+}                   // p auto-freed here
+```
+
+### Scoped blocks
+Use bare `{ }` for short-lived allocations:
+```
+spark {
+  {
+    temp is Point()
+    temp.x be 99
+  }                 // temp freed here
+  // temp doesn't exist here
+}
+```
+
+### Move semantics
+Transfer ownership — original is dead:
+```
+a is Point()
+b is now a          // a is dead, b owns it
+// yell(a.x)       // COMPILE ERROR: use of moved variable 'a'
+```
+
+### Clone
+Deep copy — both live:
+```
+a is Point()
+b is rep a          // b is a copy, both live
+```
+
+### give transfers ownership
+```
+make_point() int {
+  p is Point()
+  p.x be 42
+  give p            // ownership moves to caller, no free here
+}
+```
+
+### Ref params (mutable borrow)
+```
+reset(p ref int) {
+  p.x be 0         // allowed — p is ref
+}
+
+read(p int) {
+  yell(p.x)
+  // p.x be 5     // COMPILE ERROR: p is not ref
+}
+
+spark {
+  p is Point()
+  reset(ref p)     // caller acknowledges mutation
+}
+```
 
 ## Immutability
 
 ```
 nomut x is 10
-x be 20              // COMPILE ERROR: cannot reassign nomut variable
+x be 20             // COMPILE ERROR: cannot reassign nomut variable
 ```
 
 ## Recursion
 
 ```
 fib(n int) int {
-  n <= 1 ?{
+  n le 1 ?{
     give n
   }
   give fib(n - 1) + fib(n - 2)
@@ -187,11 +280,18 @@ spark {
 }
 ```
 
+## Bounds Checking
+
+```
+nums is [10, 20, 30]
+yell(nums[5])       // RUNTIME PANIC: index out of bounds
+```
+
 ## Concurrency (runtime)
 
 ```
 spark {
-  t is task
+  t is task()
   t.fire(worker())
   yell("done")
 }
@@ -216,7 +316,7 @@ All source files use `.erbos` extension.
 
 ## Build & Run
 
-```
-./erbos program.erbos
-./program
+```bash
+./erbos program.erbos    # compile to binary
+./erbos run program.erbos # compile + run + cleanup
 ```

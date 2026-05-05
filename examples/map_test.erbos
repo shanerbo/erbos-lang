@@ -1,11 +1,11 @@
 spark {
   m is map()
-  map_set(m, "alice", 100)
-  map_set(m, "bob", 85)
-  map_set(m, "charlie", 92)
+  m.set("alice", 100)
+  m.set("bob", 85)
+  m.set("charlie", 92)
 
-  yell(map_get(m, "alice"))
-  yell(map_get(m, "bob"))
-  yell(map_get(m, "charlie"))
-  yell(map_len(m))
+  yell(m.get("alice"))
+  yell(m.get("bob"))
+  yell(m.get("charlie"))
+  yell(m.len())
 }
