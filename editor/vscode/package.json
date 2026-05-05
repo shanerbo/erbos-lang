@@ -1,0 +1,28 @@
+{
+  "name": "erbos-lang",
+  "displayName": "Erbos Language",
+  "description": "Syntax highlighting for the Erbos programming language",
+  "version": "0.1.0",
+  "publisher": "shanerbo",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "erbos",
+        "aliases": ["Erbos", "erbos"],
+        "extensions": [".erbos"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "erbos",
+        "scopeName": "source.erbos",
+        "path": "./syntaxes/erbos.tmLanguage.json"
+      }
+    ]
+  }
+}
