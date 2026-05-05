@@ -75,6 +75,25 @@ static int add_local(Gen *g, const char *name, int nomut) {
 static void emit_expr(Gen *g, Node *n);
 static void emit_stmt(Gen *g, Node *n);
 
+// Emit load/store that handles offsets > 255 (ARM64 limitation)
+static void emit_store_local(Gen *g, int reg, int offset) {
+    if (offset <= 255) {
+        fprintf(g->out, "    str x%d, [x29, #-%d]\n", reg, offset);
+    } else {
+        fprintf(g->out, "    sub x9, x29, #%d\n", offset);
+        fprintf(g->out, "    str x%d, [x9]\n", reg);
+    }
+}
+
+static void emit_load_local(Gen *g, int reg, int offset) {
+    if (offset <= 255) {
+        fprintf(g->out, "    ldr x%d, [x29, #-%d]\n", reg, offset);
+    } else {
+        fprintf(g->out, "    sub x9, x29, #%d\n", offset);
+        fprintf(g->out, "    ldr x%d, [x9]\n", reg);
+    }
+}
+
 static void mark_heap(Gen *g, const char *name) {
     for (int i = 0; i < g->local_count; i++)
         if (!strcmp(g->locals[i], name)) { g->is_heap[i] = 1; return; }
@@ -147,7 +166,7 @@ static void emit_expr(Gen *g, Node *n) {
                         // Load variable and convert to string
                         int off = find_local(g, varname);
                         if (off < 0) { fprintf(stderr, "error line %d: undefined variable '%s' in interpolation\n", n->line, varname); exit(1); }
-                        fprintf(g->out, "    ldr x0, [x29, #-%d]\n", off);
+                        emit_load_local(g, 0, off);
                         fprintf(g->out, "    bl _int_to_str\n");
                         // Concat: accumulator + var_str
                         fprintf(g->out, "    mov x1, x0\n");
@@ -184,7 +203,7 @@ static void emit_expr(Gen *g, Node *n) {
             }
             int off = find_local(g, n->ident.name);
             if (off < 0) { fprintf(stderr, "error: undefined variable '%s'\n", n->ident.name); exit(1); }
-            fprintf(g->out, "    ldr x0, [x29, #-%d]\n", off);
+            emit_load_local(g, 0, off);
             break;
         }
         case NODE_BINARY: {
@@ -400,7 +419,7 @@ static void emit_stmt(Gen *g, Node *n) {
             if (n->var_decl.is_move) {
                 // Move: copy value, mark source as moved
                 emit_expr(g, n->var_decl.value);
-                fprintf(g->out, "    str x0, [x29, #-%d]\n", off);
+                emit_store_local(g, 0, off);
                 // Mark source as moved (if it's an ident)
                 if (n->var_decl.value->type == NODE_IDENT) {
                     mark_moved(g, n->var_decl.value->ident.name);
@@ -411,11 +430,11 @@ static void emit_stmt(Gen *g, Node *n) {
                 // Clone: call _heap_alloc + memcpy (simplified: just copy pointer for now)
                 // TODO: deep clone. For now, shallow copy (same as regular assign)
                 emit_expr(g, n->var_decl.value);
-                fprintf(g->out, "    str x0, [x29, #-%d]\n", off);
+                emit_store_local(g, 0, off);
                 mark_heap(g, n->var_decl.name);
             } else {
                 emit_expr(g, n->var_decl.value);
-                fprintf(g->out, "    str x0, [x29, #-%d]\n", off);
+                emit_store_local(g, 0, off);
                 // Detect heap allocations: struct constructors, list(), map()
                 if (n->var_decl.value->type == NODE_CALL) {
                     const char *fn = n->var_decl.value->call.name;
@@ -438,7 +457,7 @@ static void emit_stmt(Gen *g, Node *n) {
             int off = find_local(g, n->assign.name);
             if (off < 0) { fprintf(stderr, "error:%d: undefined variable '%s'\n", n->line, n->assign.name); exit(1); }
             emit_expr(g, n->assign.value);
-            fprintf(g->out, "    str x0, [x29, #-%d]\n", off);
+            emit_store_local(g, 0, off);
             break;
         }
         case NODE_FIELD_ASSIGN: {
@@ -499,7 +518,7 @@ static void emit_stmt(Gen *g, Node *n) {
         case NODE_THROUGH_RANGE: {
             int off = add_local(g, n->through_range.var_name, 0);
             emit_expr(g, n->through_range.from);
-            fprintf(g->out, "    str x0, [x29, #-%d]\n", off);
+            emit_store_local(g, 0, off);
             int loop_start = new_label(g);
             int loop_end = new_label(g);
             int loop_cont = new_label(g);
@@ -510,7 +529,7 @@ static void emit_stmt(Gen *g, Node *n) {
             g->loop_end_label = loop_end;
             g->loop_continue_label = loop_cont;
             fprintf(g->out, "_L%d:\n", loop_start);
-            fprintf(g->out, "    ldr x0, [x29, #-%d]\n", off);
+            emit_load_local(g, 0, off);
             fprintf(g->out, "    str x0, [sp, #-16]!\n");
             emit_expr(g, n->through_range.to);
             fprintf(g->out, "    mov x1, x0\n");
@@ -522,7 +541,7 @@ static void emit_stmt(Gen *g, Node *n) {
                 emit_stmt(g, body->block.stmts.items[j]);
             // Increment (skip jumps here)
             fprintf(g->out, "_L%d:\n", loop_cont);
-            fprintf(g->out, "    ldr x0, [x29, #-%d]\n", off);
+            emit_load_local(g, 0, off);
             if (n->through_range.by) {
                 fprintf(g->out, "    str x0, [sp, #-16]!\n");
                 emit_expr(g, n->through_range.by);
@@ -532,7 +551,7 @@ static void emit_stmt(Gen *g, Node *n) {
             } else {
                 fprintf(g->out, "    add x0, x0, #1\n");
             }
-            fprintf(g->out, "    str x0, [x29, #-%d]\n", off);
+            emit_store_local(g, 0, off);
             fprintf(g->out, "    b _L%d\n", loop_start);
             fprintf(g->out, "_L%d:\n", loop_end);
             g->loop_start_label = prev_start;
@@ -545,9 +564,9 @@ static void emit_stmt(Gen *g, Node *n) {
             int idx_off = add_local(g, "__idx", 0);
             int var_off = add_local(g, n->through_in.var_name, 0);
             emit_expr(g, n->through_in.collection);
-            fprintf(g->out, "    str x0, [x29, #-%d]\n", list_off);
+            emit_store_local(g, 0, list_off);
             fprintf(g->out, "    mov x0, #0\n");
-            fprintf(g->out, "    str x0, [x29, #-%d]\n", idx_off);
+            emit_store_local(g, 0, idx_off);
             int loop_start = new_label(g);
             int loop_end = new_label(g);
             int loop_cont = new_label(g);
@@ -558,21 +577,21 @@ static void emit_stmt(Gen *g, Node *n) {
             g->loop_end_label = loop_end;
             g->loop_continue_label = loop_cont;
             fprintf(g->out, "_L%d:\n", loop_start);
-            fprintf(g->out, "    ldr x0, [x29, #-%d]\n", list_off);
+            emit_load_local(g, 0, list_off);
             fprintf(g->out, "    ldr x1, [x0]\n");
-            fprintf(g->out, "    ldr x2, [x29, #-%d]\n", idx_off);
+            emit_load_local(g, 2, idx_off);
             fprintf(g->out, "    cmp x2, x1\n");
             fprintf(g->out, "    b.ge _L%d\n", loop_end);
             fprintf(g->out, "    add x3, x2, #1\n");
             fprintf(g->out, "    ldr x0, [x0, x3, lsl #3]\n");
-            fprintf(g->out, "    str x0, [x29, #-%d]\n", var_off);
+            emit_store_local(g, 0, var_off);
             Node *body2 = n->through_in.body;
             for (int j = 0; j < body2->block.stmts.count; j++)
                 emit_stmt(g, body2->block.stmts.items[j]);
             fprintf(g->out, "_L%d:\n", loop_cont);
-            fprintf(g->out, "    ldr x0, [x29, #-%d]\n", idx_off);
+            emit_load_local(g, 0, idx_off);
             fprintf(g->out, "    add x0, x0, #1\n");
-            fprintf(g->out, "    str x0, [x29, #-%d]\n", idx_off);
+            emit_store_local(g, 0, idx_off);
             fprintf(g->out, "    b _L%d\n", loop_start);
             fprintf(g->out, "_L%d:\n", loop_end);
             g->loop_start_label = prev_start;
@@ -636,10 +655,10 @@ static void emit_func(Gen *g, Node *n) {
     fprintf(g->out, ".globl _%s\n.p2align 2\n_%s:\n", n->func_def.name, n->func_def.name);
     fprintf(g->out, "    stp x29, x30, [sp, #-16]!\n");
     fprintf(g->out, "    mov x29, sp\n");
-    fprintf(g->out, "    sub sp, sp, #512\n");
+    fprintf(g->out, "    sub sp, sp, #1024\n");
 
     for (int i = 0; i < n->func_def.param_count && i < 8; i++)
-        fprintf(g->out, "    str x%d, [x29, #-%d]\n", i, g->offsets[i]);
+        emit_store_local(g, i, g->offsets[i]);
 
     Node *body = n->func_def.body;
     for (int i = 0; i < body->block.stmts.count; i++)

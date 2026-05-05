@@ -1,0 +1,137 @@
+// Kitchen sink test — exercises every implemented feature
+
+Point is {
+  x int
+  y int
+}
+
+add(a int, b int) int {
+  give a + b
+}
+
+spark {
+  // Variables
+  x is 10
+  flag is true
+  nomut pi is 3
+
+  // Arithmetic
+  yell(x + 5)
+  yell(x - 3)
+  yell(x * 2)
+  yell(x / 3)
+  yell(x mod 3)
+  yell(0 - 42)
+
+  // String interpolation (int vars)
+  yell("x is {x}")
+
+  // String concat with +
+  greeting is "hi " + "there"
+  yell(greeting)
+
+  // Comparisons
+  x gt 5 ?{
+    yell(1)
+  } nah {
+    yell(0)
+  }
+
+  // Conditionals with else-if
+  x eq 10 ?{
+    yell("ten")
+  } nah {
+    yell("other")
+  }
+
+  // Range loop
+  sum is 0
+  through (i from 1 to 6 by 1) {
+    sum be sum + i
+  }
+  yell(sum)
+
+  // While loop
+  count is 3
+  infi (count gt 0) {
+    yell(count)
+    count be count - 1
+  }
+
+  // Infinite loop with stop
+  n is 0
+  infi {
+    n be n + 1
+    n eq 3 ?{
+      stop
+    }
+  }
+  yell(n)
+
+  // Functions
+  yell(add(100, 200))
+
+  // Structs
+  p is Point()
+  p.x be 7
+  p.y be 8
+  yell(p.x + p.y)
+
+  // Lists
+  nums is [10, 20, 30]
+  yell(nums[0])
+  yell(nums[2])
+
+  // Dynamic list
+  dyn is list()
+  dyn.push(1)
+  dyn.push(2)
+  dyn.push(3)
+  yell(dyn.len())
+  yell(dyn.pop())
+
+  // Collection iteration
+  through (item in dyn) {
+    yell(item)
+  }
+
+  // Maps
+  m is map()
+  m.set("a", 10)
+  m.set("b", 20)
+  yell(m.get("a"))
+  yell(m.get("b"))
+  yell(map_len(m))
+
+  // Map iteration
+  keys is m.keys()
+  through (k in keys) {
+    yell(k)
+  }
+
+  // Move semantics
+  pt is Point()
+  pt.x be 99
+  pt2 is now pt
+  yell(pt2.x)
+
+  // Scoped block
+  val is 0
+  {
+    tmp is 42
+    val be tmp
+  }
+  yell(val)
+
+  // Recursion
+  yell(fib(8))
+
+  yell("done")
+}
+
+fib(n int) int {
+  n le 1 ?{
+    give n
+  }
+  give fib(n - 1) + fib(n - 2)
+}
