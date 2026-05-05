@@ -1,19 +1,23 @@
 {
   "name": "erbos-lang",
   "displayName": "Erbos Language",
-  "description": "Syntax highlighting for the Erbos programming language",
+  "description": "Syntax highlighting and file icons for the Erbos programming language",
   "version": "0.1.0",
   "publisher": "shanerbo",
   "engines": {
     "vscode": "^1.75.0"
   },
-  "categories": ["Programming Languages"],
+  "categories": ["Programming Languages", "Themes"],
   "contributes": {
     "languages": [
       {
         "id": "erbos",
         "aliases": ["Erbos", "erbos"],
         "extensions": [".erbos"],
+        "icon": {
+          "light": "./icons/erbos.svg",
+          "dark": "./icons/erbos.svg"
+        },
         "configuration": "./language-configuration.json"
       }
     ],
@@ -22,6 +26,13 @@
         "language": "erbos",
         "scopeName": "source.erbos",
         "path": "./syntaxes/erbos.tmLanguage.json"
+      }
+    ],
+    "iconThemes": [
+      {
+        "id": "erbos-icons",
+        "label": "Erbos Icons",
+        "path": "./erbos-icon-theme.json"
       }
     ]
   }

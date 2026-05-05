@@ -1,0 +1,10 @@
+{
+  "iconDefinitions": {
+    "erbos": {
+      "iconPath": "./icons/erbos.svg"
+    }
+  },
+  "fileExtensions": {
+    "erbos": "erbos"
+  }
+}
