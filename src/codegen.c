@@ -358,11 +358,13 @@ static void emit_expr(Gen *g, Node *n) {
             fprintf(g->out, "    str x0, [sp, #-16]!\n");
             emit_expr(g, n->index_access.object);
             fprintf(g->out, "    ldr x1, [sp], #16\n");
-            // Bounds check: x1-1 < count at [x0]
+            // Bounds check: original index must be >= 0 and < count
             fprintf(g->out, "    ldr x2, [x0]\n");       // x2 = count
             fprintf(g->out, "    sub x3, x1, #1\n");     // x3 = original index
+            fprintf(g->out, "    cmp x3, #0\n");
+            fprintf(g->out, "    b.lt _panic_oob\n");    // negative index
             fprintf(g->out, "    cmp x3, x2\n");
-            fprintf(g->out, "    b.ge _panic_oob\n");
+            fprintf(g->out, "    b.ge _panic_oob\n");    // index >= count
             fprintf(g->out, "    ldr x0, [x0, x1, lsl #3]\n");
             break;
         }
