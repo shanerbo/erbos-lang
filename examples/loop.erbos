@@ -1,0 +1,13 @@
+spark {
+  count is 0
+  through (i from 1 to 10 by 1) {
+    count be count + i
+  }
+  yell(count)
+
+  count gt 40 ?{
+    yell(1)
+  } nah {
+    yell(0)
+  }
+}

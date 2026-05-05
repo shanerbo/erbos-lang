@@ -1,0 +1,6 @@
+spark {
+  x is 0 - 5
+  yell(x)
+  y is 0 - 1000
+  yell(y)
+}

@@ -1,0 +1,15 @@
+spark {
+  nums is list()
+  nums.push(10)
+  nums.push(20)
+  nums.push(30)
+  yell(nums.len())
+
+  last is nums.pop()
+  yell(last)
+  yell(nums.len())
+
+  through (x in nums) {
+    yell(x)
+  }
+}

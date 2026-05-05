@@ -1,0 +1,8 @@
+spark {
+  result is add(15, 27)
+  yell(result)
+}
+
+add(a int, b int) int {
+  give a + b
+}

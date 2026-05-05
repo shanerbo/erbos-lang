@@ -1,0 +1,8 @@
+spark {
+  x is 5
+  infi (x gt 0) {
+    yell(x)
+    x be x - 1
+  }
+  yell(99)
+}

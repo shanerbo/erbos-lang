@@ -1,0 +1,12 @@
+spark {
+  m is map()
+  m.set("x", 10)
+  m.set("y", 20)
+  yell(m.get("x"))
+  yell(m.get("y"))
+
+  keys is m.keys()
+  through (k in keys) {
+    yell(k)
+  }
+}

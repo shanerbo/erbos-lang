@@ -1,0 +1,6 @@
+spark {
+  nums is [10, 20, 30]
+  yell(nums[0])
+  yell(nums[5])
+  yell("should not reach here")
+}

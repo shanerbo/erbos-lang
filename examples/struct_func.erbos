@@ -1,0 +1,22 @@
+Point is {
+  x int
+  y int
+}
+
+print_point(p int) {
+  yell(p)
+}
+
+add_points(a int, b int) int {
+  ax is a
+  bx is b
+  give ax + bx
+}
+
+spark {
+  p is Point()
+  p.x be 10
+  p.y be 20
+  yell(p.x)
+  yell(p.y)
+}

@@ -1,0 +1,11 @@
+spark {
+  through (i from 0 to 10 by 1) {
+    i gt 3 ?{
+      i eq 7 ?{
+        give
+      }
+      yell(i)
+    }
+  }
+  yell(99)
+}

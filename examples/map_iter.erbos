@@ -1,0 +1,12 @@
+spark {
+  m is map()
+  map_set(m, "alice", 100)
+  map_set(m, "bob", 85)
+  map_set(m, "charlie", 92)
+
+  keys is map_keys(m)
+  through (k in keys) {
+    yell(k)
+    yell(map_get(m, k))
+  }
+}

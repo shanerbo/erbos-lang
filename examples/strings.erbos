@@ -1,0 +1,4 @@
+spark {
+  yell("hello erbos")
+  yell(42)
+}

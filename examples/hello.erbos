@@ -1,0 +1,5 @@
+spark {
+  x is 10
+  y is 20
+  yell(x + y)
+}

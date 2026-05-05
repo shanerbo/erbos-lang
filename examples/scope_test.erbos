@@ -1,0 +1,16 @@
+Point is {
+  x int
+  y int
+}
+
+spark {
+  x is 10
+
+  {
+    temp is Point()
+    temp.x be 99
+    x be temp.x
+  }
+
+  yell(x)
+}

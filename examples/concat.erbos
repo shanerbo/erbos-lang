@@ -1,0 +1,6 @@
+spark {
+  a is "hello"
+  b is " world"
+  c is str_concat(a, b)
+  yell(c)
+}

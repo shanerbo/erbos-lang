@@ -1,0 +1,8 @@
+spark {
+  through (i from 0 to 6 by 1) {
+    i eq 3 ?{
+      skip
+    }
+    yell(i)
+  }
+}

@@ -1,0 +1,5 @@
+spark {
+  age is 25
+  score is 100
+  yell("age is {age} and score is {score}")
+}

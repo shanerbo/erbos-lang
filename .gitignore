@@ -1,0 +1,46 @@
+# Build output
+erbos
+
+# Object files
+*.o
+*.s
+
+# Compiled examples
+examples/hello
+examples/funcs
+examples/loop
+examples/fizzbuzz
+examples/recursion
+examples/strings
+examples/concat
+examples/interp
+examples/modulo
+examples/negative
+examples/linked
+examples/list_test
+examples/list_methods
+examples/map_test
+examples/map_update
+examples/map_iter
+examples/map_methods
+examples/methods
+examples/struct_test
+examples/struct_func
+examples/task_test
+examples/infi_test
+examples/infi_stop
+examples/stop_test
+examples/skip_test
+examples/nah_test
+examples/spark_test
+examples/scope_test
+examples/raii_test
+examples/move_valid
+examples/move_test
+examples/nomut_test
+examples/oob_test
+examples/give_nested
+examples/give_ownership
+
+# OS
+.DS_Store

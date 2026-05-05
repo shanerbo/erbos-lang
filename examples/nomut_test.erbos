@@ -1,0 +1,5 @@
+spark {
+  nomut x is 10
+  x be 20
+  yell(x)
+}

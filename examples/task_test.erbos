@@ -1,0 +1,9 @@
+spark {
+  t is task()
+  t.fire(worker())
+  yell("done")
+}
+
+worker() {
+  yell(42)
+}

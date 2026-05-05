@@ -1,0 +1,8 @@
+spark {
+  x is 3
+  x gt 5 ?{
+    yell(1)
+  } nah {
+    yell(0)
+  }
+}

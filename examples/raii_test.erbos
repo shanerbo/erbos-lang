@@ -1,0 +1,10 @@
+spark {
+  p is Point()
+  p.x be 42
+  yell(p.x)
+}
+
+Point is {
+  x int
+  y int
+}

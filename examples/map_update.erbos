@@ -1,0 +1,8 @@
+spark {
+  m is map()
+  map_set(m, "score", 50)
+  yell(map_get(m, "score"))
+  map_set(m, "score", 99)
+  yell(map_get(m, "score"))
+  yell(map_len(m))
+}

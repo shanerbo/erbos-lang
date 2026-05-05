@@ -1,0 +1,11 @@
+spark {
+  yell(10 mod 3)
+  yell(15 mod 5)
+  yell(7 mod 2)
+
+  x is -42
+  yell(x)
+
+  y is -7
+  yell(y + 10)
+}

@@ -1,0 +1,15 @@
+Point is {
+  x int
+  y int
+}
+
+make_point(val int) int {
+  p is Point()
+  p.x be val
+  give p
+}
+
+spark {
+  pt is make_point(99)
+  yell(pt.x)
+}

@@ -1,0 +1,18 @@
+Node is {
+  value int
+  next int
+}
+
+spark {
+  n1 is Node()
+  n1.value be 10
+  n1.next be 0
+
+  n2 is Node()
+  n2.value be 20
+  n2.next be n1
+
+  yell(n2.value)
+  yell(n1.value)
+  yell("linked list works")
+}

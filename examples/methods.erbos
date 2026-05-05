@@ -1,0 +1,21 @@
+Point is {
+  x int
+  y int
+}
+
+// "method" — takes struct pointer as first arg
+describe(p int) {
+  yell("point created")
+}
+
+spark {
+  p is Point()
+  p.x be 7
+  p.y be 3
+
+  // Method syntax: p.describe() calls _describe(p)
+  p.describe()
+
+  yell(p.x)
+  yell(p.y)
+}

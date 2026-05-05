@@ -1,0 +1,11 @@
+spark {
+  yell(fib(10))
+  yell(fib(7))
+}
+
+fib(n int) int {
+  n le 1 ?{
+    give n
+  }
+  give fib(n - 1) + fib(n - 2)
+}
