@@ -16,7 +16,7 @@ spark {
 x is 10              // inferred type
 x is int 10          // explicit type
 nomut pi is 3        // immutable — cannot reassign
-x = 20               // reassignment
+x be 20               // reassignment
 ```
 
 ## Types
@@ -84,7 +84,7 @@ through (item in my_list) {
 ### While loop
 ```
 infi (x > 0) {
-  x = x - 1
+  x be x - 1
 }
 ```
 
@@ -120,8 +120,8 @@ Point is {
 
 spark {
   p is alloc_Point()
-  p.x = 10
-  p.y = 20
+  p.x be 10
+  p.y be 20
   yell(p.x + p.y)
 }
 ```
@@ -169,7 +169,7 @@ through (k in keys) {
 
 ```
 nomut x is 10
-x = 20              // COMPILE ERROR: cannot reassign nomut variable
+x be 20              // COMPILE ERROR: cannot reassign nomut variable
 ```
 
 ## Recursion

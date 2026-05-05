@@ -47,12 +47,12 @@ Node is {
 
 spark {
   n1 is alloc_Node()
-  n1.value = 10
-  n1.next = 0
+  n1.value be 10
+  n1.next be 0
 
   n2 is alloc_Node()
-  n2.value = 20
-  n2.next = n1
+  n2.value be 20
+  n2.next be n1
 
   yell(n2.value)
   yell(n1.value)
@@ -80,7 +80,7 @@ spark {
   count is 0
   infi (count < 5) {
     yell(count)
-    count = count + 1
+    count be count + 1
   }
 }
 ```
@@ -89,7 +89,7 @@ spark {
 ```
 spark {
   nomut max is 100
-  // max = 200  ← compile error!
+  // max be 200  ← compile error!
   yell(max)
 }
 ```
