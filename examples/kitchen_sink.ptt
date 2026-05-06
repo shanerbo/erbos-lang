@@ -1,132 +1,34 @@
-// Kitchen sink test — exercises every implemented feature
+// Kitchen Sink Stress Test
+// Exercises EVERY feature of Potato lang in one file
+// Tests: variables, types, functions, structs, lists, maps, generics,
+//        loops, conditionals, recursion, ownership, RAII, string ops,
+//        nested collections, chained indexing, methods, operators
 
+// === Structs ===
 Point is {
   x int
   y int
 }
 
+Person is {
+  age int
+  score int
+}
+
+// === Functions with typed params and returns ===
 add(a int, b int) int {
   give a + b
 }
 
-spark {
-  // Variables
-  x is 10
-  flag is true
-  nomut pi is 3
-
-  // Arithmetic
-  yell(x + 5)
-  yell(x - 3)
-  yell(x * 2)
-  yell(x / 3)
-  yell(x mod 3)
-  yell(0 - 42)
-
-  // String interpolation (int vars)
-  yell("x is {x}")
-
-  // String concat with +
-  greeting is "hi " + "there"
-  yell(greeting)
-
-  // Comparisons
-  x gt 5 ?{
-    yell(1)
-  } nah {
-    yell(0)
-  }
-
-  // Conditionals with else-if
-  x eq 10 ?{
-    yell("ten")
-  } nah {
-    yell("other")
-  }
-
-  // Range loop
-  sum is 0
-  through (i from 1 to 6 by 1) {
-    sum be sum + i
-  }
-  yell(sum)
-
-  // While loop
-  count is 3
-  infi (count gt 0) {
-    yell(count)
-    count be count - 1
-  }
-
-  // Infinite loop with stop
-  n is 0
-  infi {
-    n be n + 1
-    n eq 3 ?{
-      stop
-    }
-  }
-  yell(n)
-
-  // Functions
-  yell(add(100, 200))
-
-  // Structs
+make_point(x int, y int) Point {
   p is Point()
-  p.x be 7
-  p.y be 8
-  yell(p.x + p.y)
+  p.x be x
+  p.y be y
+  give p
+}
 
-  // Lists
-  nums is [10, 20, 30]
-  yell(nums[0])
-  yell(nums[2])
-
-  // Dynamic list
-  dyn is list of int
-  dyn.push(1)
-  dyn.push(2)
-  dyn.push(3)
-  yell(dyn.len())
-  yell(dyn.pop())
-
-  // Collection iteration
-  through (item in dyn) {
-    yell(item)
-  }
-
-  // Maps
-  m is map of str to int
-  m.set("a", 10)
-  m.set("b", 20)
-  yell(m.get("a"))
-  yell(m.get("b"))
-  yell(len(m))
-
-  // Map iteration
-  keys is m.keys()
-  through (k in keys) {
-    yell(k)
-  }
-
-  // Move semantics
-  pt is Point()
-  pt.x be 99
-  pt2 is now pt
-  yell(pt2.x)
-
-  // Scoped block
-  val is 0
-  {
-    tmp is 42
-    val be tmp
-  }
-  yell(val)
-
-  // Recursion
-  yell(fib(8))
-
-  yell("done")
+distance_sq(p Point) int {
+  give p.x * p.x + p.y * p.y
 }
 
 fib(n int) int {
@@ -134,4 +36,274 @@ fib(n int) int {
     give n
   }
   give fib(n - 1) + fib(n - 2)
+}
+
+// === String helpers ===
+greet(name str) str {
+  give "hello " + name
+}
+
+spark {
+  // === 1. Basic types and arithmetic ===
+  x is 42
+  y is -7
+  yell(x + y)
+  yell(x - y)
+  yell(x * 2)
+  yell(x / 7)
+  yell(x mod 5)
+  yell("---")
+
+  // === 2. Strings and interpolation ===
+  age2 is 99
+  yell("age is {age2}")
+  yell(greet("world"))
+  yell(len("hello"))
+  yell(char_at("abcdef", 3))
+  msg is "hi" + " " + "there"
+  yell(msg)
+  yell("---")
+
+  // === 3. Booleans and comparisons (word form) ===
+  a is 10
+  b is 20
+  r1 is 0
+  a lt b ?{ r1 be 1 }
+  yell(r1)
+  r2 is 0
+  a eq 10 ?{ r2 be 1 }
+  yell(r2)
+  r3 is 0
+  a ne 20 ?{ r3 be 1 }
+  yell(r3)
+  r4 is 0
+  a ge 10 ?{ r4 be 1 }
+  yell(r4)
+  r5 is 0
+  a le 10 ?{ r5 be 1 }
+  yell(r5)
+  yell("---")
+
+  // === 4. Conditionals (multi-branch) ===
+  val is 15
+  val gt 20 ?{
+    yell("high")
+  } val gt 10 ?{
+    yell("mid")
+  } nah {
+    yell("low")
+  }
+  yell("---")
+
+  // === 5. Loops: through range ===
+  sum is 0
+  through (i from 1 to 11 by 1) {
+    sum be sum + i
+  }
+  yell(sum)
+
+  // === 6. Loops: infi (while) ===
+  count is 5
+  infi (count gt 0) {
+    yell(count)
+    count be count - 1
+  }
+
+  // === 7. Loops: infi + stop ===
+  n is 0
+  infi {
+    n be n + 1
+    n eq 3 ?{ stop }
+  }
+  yell(n)
+
+  // === 8. Loops: skip ===
+  through (i from 0 to 5 by 1) {
+    i eq 2 ?{ skip }
+    yell(i)
+  }
+  yell("---")
+
+  // === 9. Functions and recursion ===
+  yell(add(100, 200))
+  yell(fib(10))
+  yell("---")
+
+  // === 10. Structs ===
+  p is make_point(3, 4)
+  yell(p.x)
+  yell(p.y)
+  yell(distance_sq(p))
+  yell("---")
+
+  // === 11. Typed lists ===
+  nums is list of int
+  nums.push(10)
+  nums.push(20)
+  nums.push(30)
+  nums.push(40)
+  nums.push(50)
+  yell(len(nums))
+  yell(nums[0])
+  yell(nums[4])
+  last is nums.pop()
+  yell(last)
+  yell(len(nums))
+  yell("---")
+
+  // === 12. List iteration ===
+  through (item in nums) {
+    yell(item)
+  }
+  yell("---")
+
+  // === 13. List mutation with list_set ===
+  list_set(nums, 0, 99)
+  yell(nums[0])
+  yell("---")
+
+  // === 14. Typed maps ===
+  scores is map of str to int
+  scores.set("alice", 95)
+  scores.set("bob", 87)
+  scores.set("charlie", 92)
+  yell(len(scores))
+  yell(scores.get("alice"))
+  yell(scores.get("bob"))
+  scores.set("bob", 100)
+  yell(scores.get("bob"))
+  yell("---")
+
+  // === 15. Map iteration ===
+  keys is scores.keys()
+  through (k in keys) {
+    yell(k)
+  }
+  yell("---")
+
+  // === 16. Nested collections: list of lists ===
+  grid is list()
+  grid.push([1, 2, 3])
+  grid.push([4, 5, 6])
+  grid.push([7, 8, 9])
+  yell(grid[0][0])
+  yell(grid[1][1])
+  yell(grid[2][2])
+  yell("---")
+
+  // === 17. Nested: map + list combo ===
+  registry is map of str to int
+  people is list()
+  p1 is Person()
+  p1.age be 25
+  p1.score be 100
+  people.push(p1)
+  p2 is Person()
+  p2.age be 30
+  p2.score be 85
+  people.push(p2)
+  registry.set("count", len(people))
+  yell(registry.get("count"))
+  yell("---")
+
+  // === 18. Ownership: move ===
+  pt is Point()
+  pt.x be 77
+  pt2 is now pt
+  yell(pt2.x)
+  yell("---")
+
+  // === 19. RAII: scoped block ===
+  result is 0
+  {
+    tmp is Point()
+    tmp.x be 42
+    result be tmp.x
+  }
+  yell(result)
+  yell("---")
+
+  // === 20. RAII in loop (stress: 500 allocations, all freed) ===
+  total is 0
+  through (i from 0 to 500 by 1) {
+    p3 is Point()
+    p3.x be i
+    total be total + p3.x
+  }
+  yell(total)
+  yell("---")
+
+  // === 21. Growable list stress (100 elements) ===
+  big is list of int
+  through (i from 0 to 100 by 1) {
+    big.push(i * 2)
+  }
+  yell(len(big))
+  yell(big[0])
+  yell(big[50])
+  yell(big[99])
+  yell("---")
+
+  // === 22. Growable map stress (50 entries) ===
+  bigmap is map of str to int
+  through (i from 0 to 50 by 1) {
+    bigmap.set(int_to_str(i), i * i)
+  }
+  yell(len(bigmap))
+  yell(bigmap.get("0"))
+  yell(bigmap.get("7"))
+  yell(bigmap.get("49"))
+  yell("---")
+
+  // === 23. String interpolation with computed values ===
+  age is 25
+  yell("age is {age}")
+  score is add(40, 60)
+  yell("score is {score}")
+  yell("---")
+
+  // === 24. Negative numbers ===
+  neg is -42
+  yell(neg)
+  yell(neg + 50)
+  yell(0 - 100)
+  yell("---")
+
+  // === 25. nomut ===
+  nomut pi is 3
+  yell(pi)
+  yell("---")
+
+  // === 26. Modulo and comparisons (symbol form) ===
+  yell(100 % 7)
+  yell(5 > 3)
+  yell(5 < 3)
+  yell(5 == 5)
+  yell(5 != 3)
+  yell("---")
+
+  // === 27. give with no value (void return) ===
+  do_nothing()
+  yell("alive")
+  yell("---")
+
+  // === 28. Multiple function calls in expression ===
+  yell(add(add(1, 2), add(3, 4)))
+  yell("---")
+
+  // === 29. String comparison ===
+  seq is 0
+  "abc" eq "abc" ?{ seq be 1 }
+  yell(seq)
+  sne is 0
+  "abc" ne "xyz" ?{ sne be 1 }
+  yell(sne)
+  yell("---")
+
+  // === 30. Final ===
+  yell("all done")
+}
+
+do_nothing() {
+  give
 }
