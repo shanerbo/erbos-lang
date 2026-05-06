@@ -18,7 +18,7 @@ test: $(OUT) test-pass test-fail test-runtime
 test-pass: $(OUT)
 	@echo "=== Passing examples ==="
 	@fail=0; \
-	for f in examples/*.ptt; do \
+	for f in examples/*.ptt examples/leetcode/*.ptt; do \
 		b=$$(basename $$f); \
 		case $$b in nomut_test.ptt|oob_test.ptt|move_test.ptt) continue;; esac; \
 		if ! ./$(OUT) run "$$f" > /dev/null 2>&1; then \
