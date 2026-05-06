@@ -969,38 +969,47 @@ static void emit_str_builtins(Gen *g) {
 }
 
 static void emit_map_builtins(Gen *g) {
-    // Map layout: [capacity(8) | count(8) | key0(8) | val0(8) | key1(8) | val1(8) | ...]
-    // _map_new() -> ptr to map (initial capacity 16 entries)
-    fprintf(g->out, "// built-in: _map_new() -> map ptr\n");
+    // Map layout (growable, indirection):
+    //   Header (24 bytes, fixed): [capacity | count | data_ptr]
+    //   Data (growable): [key0(8) | val0(8) | key1(8) | val1(8) | ...]
+    //   Each entry = 16 bytes. On insert when full: alloc 2x, copy, free old.
+
+    // _map_new() -> map header (initial capacity 8)
+    fprintf(g->out, "// built-in: _map_new() -> map header ptr\n");
     fprintf(g->out, ".globl _map_new\n.p2align 2\n_map_new:\n");
     fprintf(g->out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
-    // 16 + 16*16 = 272 bytes (header + 16 key-value pairs)
-    fprintf(g->out, "    mov x0, #272\n");
-    fprintf(g->out, "    bl _heap_alloc\n");
-    fprintf(g->out, "    mov x1, #16\n");
-    fprintf(g->out, "    str x1, [x0]\n");       // capacity = 16
-    fprintf(g->out, "    str xzr, [x0, #8]\n");  // count = 0
+    // Alloc header
+    fprintf(g->out, "    mov x0, #24\n    bl _heap_alloc\n");
+    fprintf(g->out, "    mov x19, x0\n    str x19, [sp, #-16]!\n");
+    // Alloc data (8 entries * 16 bytes = 128)
+    fprintf(g->out, "    mov x0, #128\n    bl _heap_alloc\n");
+    fprintf(g->out, "    ldr x19, [sp], #16\n");
+    fprintf(g->out, "    mov x1, #8\n");
+    fprintf(g->out, "    str x1, [x19]\n");        // capacity = 8
+    fprintf(g->out, "    str xzr, [x19, #8]\n");   // count = 0
+    fprintf(g->out, "    str x0, [x19, #16]\n");   // data_ptr
+    fprintf(g->out, "    mov x0, x19\n");
     fprintf(g->out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 
-    // _map_set(map, key, value) — linear scan, insert or update
+    // _map_set(x0=map, x1=key, x2=value) — linear scan, insert or update, grows if needed
     fprintf(g->out, "// built-in: _map_set(x0=map, x1=key, x2=value)\n");
     fprintf(g->out, ".globl _map_set\n.p2align 2\n_map_set:\n");
     fprintf(g->out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
     fprintf(g->out, "    stp x19, x20, [sp, #-16]!\n");
     fprintf(g->out, "    stp x21, x22, [sp, #-16]!\n");
-    fprintf(g->out, "    mov x19, x0\n");  // map
-    fprintf(g->out, "    mov x20, x1\n");  // key
-    fprintf(g->out, "    mov x21, x2\n");  // value
-    fprintf(g->out, "    ldr x22, [x19, #8]\n"); // count
+    fprintf(g->out, "    stp x23, x24, [sp, #-16]!\n");
+    fprintf(g->out, "    mov x19, x0\n");   // header
+    fprintf(g->out, "    mov x20, x1\n");   // key
+    fprintf(g->out, "    mov x21, x2\n");   // value
+    fprintf(g->out, "    ldr x22, [x19, #8]\n");   // count
+    fprintf(g->out, "    ldr x23, [x19, #16]\n");  // data_ptr
     // Scan for existing key
-    fprintf(g->out, "    mov x3, #0\n");   // i = 0
+    fprintf(g->out, "    mov x3, #0\n");
     fprintf(g->out, "_ms_scan:\n");
     fprintf(g->out, "    cmp x3, x22\n");
     fprintf(g->out, "    b.ge _ms_insert\n");
-    // Load key at offset 16 + i*16
-    fprintf(g->out, "    lsl x4, x3, #4\n");
-    fprintf(g->out, "    add x4, x4, #16\n");
-    fprintf(g->out, "    ldr x0, [x19, x4]\n"); // existing key
+    fprintf(g->out, "    lsl x4, x3, #4\n");       // offset = i * 16
+    fprintf(g->out, "    ldr x0, [x23, x4]\n");    // existing key
     fprintf(g->out, "    mov x1, x20\n");
     fprintf(g->out, "    stp x3, x4, [sp, #-16]!\n");
     fprintf(g->out, "    bl _str_eq\n");
@@ -1011,51 +1020,80 @@ static void emit_map_builtins(Gen *g) {
     // Update existing
     fprintf(g->out, "_ms_update:\n");
     fprintf(g->out, "    lsl x4, x3, #4\n");
-    fprintf(g->out, "    add x4, x4, #24\n"); // value slot = key slot + 8
-    fprintf(g->out, "    str x21, [x19, x4]\n");
+    fprintf(g->out, "    add x4, x4, #8\n");       // value offset = key offset + 8
+    fprintf(g->out, "    str x21, [x23, x4]\n");
     fprintf(g->out, "    b _ms_done\n");
-    // Insert new (capacity check: max 16 entries)
+    // Insert new — grow if needed
     fprintf(g->out, "_ms_insert:\n");
-    fprintf(g->out, "    cmp x22, #16\n");
-    fprintf(g->out, "    b.ge _panic_capacity\n");
+    fprintf(g->out, "    ldr x24, [x19]\n");       // capacity
+    fprintf(g->out, "    cmp x22, x24\n");
+    fprintf(g->out, "    b.lt _ms_do_insert\n");
+    // Grow: alloc 2x capacity
+    fprintf(g->out, "    lsl x24, x24, #1\n");     // new_cap = cap * 2
+    fprintf(g->out, "    str x24, [x19]\n");        // update capacity
+    fprintf(g->out, "    lsl x0, x24, #4\n");       // new_cap * 16 bytes
+    fprintf(g->out, "    bl _heap_alloc\n");
+    fprintf(g->out, "    mov x5, x0\n");            // new data
+    // Copy old entries
+    fprintf(g->out, "    mov x6, #0\n");
+    fprintf(g->out, "    lsl x7, x22, #4\n");      // old_size = count * 16
+    fprintf(g->out, "_ms_copy:\n");
+    fprintf(g->out, "    cmp x6, x7\n");
+    fprintf(g->out, "    b.ge _ms_copied\n");
+    fprintf(g->out, "    ldr x8, [x23, x6]\n");
+    fprintf(g->out, "    str x8, [x5, x6]\n");
+    fprintf(g->out, "    add x6, x6, #8\n");
+    fprintf(g->out, "    b _ms_copy\n");
+    fprintf(g->out, "_ms_copied:\n");
+    // Free old data
+    fprintf(g->out, "    mov x0, x23\n");
+    fprintf(g->out, "    lsr x1, x22, #0\n    lsl x1, x22, #4\n");
+    fprintf(g->out, "    bl _heap_free\n");
+    // Update data_ptr
+    fprintf(g->out, "    mov x23, x5\n");
+    fprintf(g->out, "    str x23, [x19, #16]\n");
+    // Do insert
+    fprintf(g->out, "_ms_do_insert:\n");
     fprintf(g->out, "    lsl x4, x22, #4\n");
-    fprintf(g->out, "    add x4, x4, #16\n");
-    fprintf(g->out, "    str x20, [x19, x4]\n");   // store key
+    fprintf(g->out, "    str x20, [x23, x4]\n");    // store key
     fprintf(g->out, "    add x4, x4, #8\n");
-    fprintf(g->out, "    str x21, [x19, x4]\n");   // store value
+    fprintf(g->out, "    str x21, [x23, x4]\n");    // store value
     fprintf(g->out, "    add x22, x22, #1\n");
-    fprintf(g->out, "    str x22, [x19, #8]\n");   // update count
+    fprintf(g->out, "    str x22, [x19, #8]\n");    // count++
     fprintf(g->out, "_ms_done:\n");
+    fprintf(g->out, "    ldp x23, x24, [sp], #16\n");
     fprintf(g->out, "    ldp x21, x22, [sp], #16\n");
     fprintf(g->out, "    ldp x19, x20, [sp], #16\n");
     fprintf(g->out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 
-    // _map_get(map, key) -> value (0 if not found)
+    // _map_get(x0=map, x1=key) -> value (0 if not found)
     fprintf(g->out, "// built-in: _map_get(x0=map, x1=key) -> value in x0\n");
     fprintf(g->out, ".globl _map_get\n.p2align 2\n_map_get:\n");
     fprintf(g->out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
     fprintf(g->out, "    stp x19, x20, [sp, #-16]!\n");
-    fprintf(g->out, "    mov x19, x0\n");  // map
-    fprintf(g->out, "    mov x20, x1\n");  // key
-    fprintf(g->out, "    ldr x5, [x19, #8]\n"); // count
+    fprintf(g->out, "    mov x19, x0\n");
+    fprintf(g->out, "    mov x20, x1\n");
+    fprintf(g->out, "    ldr x5, [x19, #8]\n");    // count
+    fprintf(g->out, "    ldr x6, [x19, #16]\n");   // data_ptr
     fprintf(g->out, "    mov x3, #0\n");
     fprintf(g->out, "_mg_scan:\n");
     fprintf(g->out, "    cmp x3, x5\n");
     fprintf(g->out, "    b.ge _mg_notfound\n");
     fprintf(g->out, "    lsl x4, x3, #4\n");
-    fprintf(g->out, "    add x4, x4, #16\n");
-    fprintf(g->out, "    ldr x0, [x19, x4]\n");
+    fprintf(g->out, "    ldr x0, [x6, x4]\n");
     fprintf(g->out, "    mov x1, x20\n");
     fprintf(g->out, "    stp x3, x5, [sp, #-16]!\n");
+    fprintf(g->out, "    str x6, [sp, #-16]!\n");
     fprintf(g->out, "    bl _str_eq\n");
+    fprintf(g->out, "    ldr x6, [sp], #16\n");
     fprintf(g->out, "    ldp x3, x5, [sp], #16\n");
     fprintf(g->out, "    cbnz x0, _mg_found\n");
     fprintf(g->out, "    add x3, x3, #1\n");
     fprintf(g->out, "    b _mg_scan\n");
     fprintf(g->out, "_mg_found:\n");
     fprintf(g->out, "    lsl x4, x3, #4\n");
-    fprintf(g->out, "    add x4, x4, #24\n");
-    fprintf(g->out, "    ldr x0, [x19, x4]\n");
+    fprintf(g->out, "    add x4, x4, #8\n");
+    fprintf(g->out, "    ldr x0, [x6, x4]\n");
     fprintf(g->out, "    b _mg_done\n");
     fprintf(g->out, "_mg_notfound:\n");
     fprintf(g->out, "    mov x0, #0\n");
@@ -1063,54 +1101,53 @@ static void emit_map_builtins(Gen *g) {
     fprintf(g->out, "    ldp x19, x20, [sp], #16\n");
     fprintf(g->out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 
-    // _map_len(map) -> count
+    // _map_len(x0=map) -> count
     fprintf(g->out, ".globl _map_len\n.p2align 2\n_map_len:\n");
     fprintf(g->out, "    ldr x0, [x0, #8]\n    ret\n\n");
 
-    // _map_keys(map) -> list of keys (header format)
+    // _map_keys(x0=map) -> list of keys (header format)
     fprintf(g->out, "// built-in: _map_keys(x0=map) -> list ptr\n");
     fprintf(g->out, ".globl _map_keys\n.p2align 2\n_map_keys:\n");
     fprintf(g->out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
     fprintf(g->out, "    stp x19, x20, [sp, #-16]!\n");
     fprintf(g->out, "    stp x21, x22, [sp, #-16]!\n");
-    fprintf(g->out, "    mov x19, x0\n");           // map
+    fprintf(g->out, "    mov x19, x0\n");
     fprintf(g->out, "    ldr x20, [x19, #8]\n");    // count
-    // Alloc header (24 bytes)
+    fprintf(g->out, "    ldr x24, [x19, #16]\n");   // map data_ptr
+    // Alloc list header
     fprintf(g->out, "    mov x0, #24\n    bl _heap_alloc\n");
-    fprintf(g->out, "    mov x21, x0\n");           // header
-    // Alloc data (count * 8)
+    fprintf(g->out, "    mov x21, x0\n");
+    // Alloc list data
     fprintf(g->out, "    lsl x0, x20, #3\n");
     fprintf(g->out, "    cmp x0, #16\n    b.ge _mk_alloc\n");
-    fprintf(g->out, "    mov x0, #16\n");           // minimum 16 bytes
+    fprintf(g->out, "    mov x0, #16\n");
     fprintf(g->out, "_mk_alloc:\n");
     fprintf(g->out, "    bl _heap_alloc\n");
-    fprintf(g->out, "    mov x22, x0\n");           // data
-    // Fill header
-    fprintf(g->out, "    str x20, [x21]\n");        // capacity = count
-    fprintf(g->out, "    str x20, [x21, #8]\n");    // count
-    fprintf(g->out, "    str x22, [x21, #16]\n");   // data_ptr
-    // Copy keys
+    fprintf(g->out, "    mov x22, x0\n");
+    // Fill list header
+    fprintf(g->out, "    str x20, [x21]\n");
+    fprintf(g->out, "    str x20, [x21, #8]\n");
+    fprintf(g->out, "    str x22, [x21, #16]\n");
+    // Copy keys from map data
+    fprintf(g->out, "    ldr x24, [x19, #16]\n");   // reload map data_ptr
     fprintf(g->out, "    mov x3, #0\n");
     fprintf(g->out, "_mk_loop:\n");
     fprintf(g->out, "    cmp x3, x20\n");
     fprintf(g->out, "    b.ge _mk_done\n");
-    fprintf(g->out, "    lsl x4, x3, #4\n");
-    fprintf(g->out, "    add x4, x4, #16\n");
-    fprintf(g->out, "    ldr x5, [x19, x4]\n");    // key from map
-    fprintf(g->out, "    str x5, [x22, x3, lsl #3]\n"); // store in data
+    fprintf(g->out, "    lsl x4, x3, #4\n");        // map entry offset = i*16
+    fprintf(g->out, "    ldr x5, [x24, x4]\n");     // key
+    fprintf(g->out, "    str x5, [x22, x3, lsl #3]\n"); // list data[i]
     fprintf(g->out, "    add x3, x3, #1\n");
     fprintf(g->out, "    b _mk_loop\n");
     fprintf(g->out, "_mk_done:\n");
-    fprintf(g->out, "    mov x0, x21\n");           // return header
+    fprintf(g->out, "    mov x0, x21\n");
     fprintf(g->out, "    ldp x21, x22, [sp], #16\n");
     fprintf(g->out, "    ldp x19, x20, [sp], #16\n");
     fprintf(g->out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 }
 
 static void emit_list_builtins(Gen *g) {
-    // List layout: [count(8) | elem0(8) | elem1(8) | ...]
-    // Dynamic lists: [capacity(8) | count(8) | elem0(8) | ...]
-    // For simplicity, we use: [count | e0 | e1 | ...] with realloc on push
+    // List layout (indirection for growable):
 
     // List layout (indirection for growable):
     //   Header (fixed, 24 bytes): [capacity | count | data_ptr]

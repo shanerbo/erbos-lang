@@ -191,7 +191,7 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 | Unknown function/type detection | ✅ |
 | Structs (heap-allocated) | ✅ |
 | Dynamic lists (push/pop/len, growable) | ✅ |
-| Ordered maps (set/get/keys/len, max 16) | ✅ |
+| Ordered maps (set/get/keys/len, growable) | ✅ |
 | Conditionals (?{ / nah) | ✅ |
 | Loops (through range, through in, infi) | ✅ |
 | Move semantics (`is now`) | ✅ |
