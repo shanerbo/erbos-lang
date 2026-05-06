@@ -16,6 +16,7 @@ typedef struct {
     int *nomut_flags;
     int *is_heap;       // 1 if heap-allocated (needs free at scope end)
     int *is_moved;      // 1 if ownership was moved out
+    int *alloc_sizes;   // size of heap allocation (for free)
     int local_count;
     int local_cap;
     int stack_size;
@@ -61,6 +62,7 @@ static int add_local(Gen *g, const char *name, int nomut) {
         g->nomut_flags = realloc(g->nomut_flags, g->local_cap * sizeof(int));
         g->is_heap = realloc(g->is_heap, g->local_cap * sizeof(int));
         g->is_moved = realloc(g->is_moved, g->local_cap * sizeof(int));
+        g->alloc_sizes = realloc(g->alloc_sizes, g->local_cap * sizeof(int));
     }
     g->stack_size += 16;
     g->locals[g->local_count] = (char *)name;
@@ -68,6 +70,7 @@ static int add_local(Gen *g, const char *name, int nomut) {
     g->nomut_flags[g->local_count] = nomut;
     g->is_heap[g->local_count] = 0;
     g->is_moved[g->local_count] = 0;
+    g->alloc_sizes[g->local_count] = 0;
     g->local_count++;
     return g->stack_size;
 }
@@ -99,6 +102,11 @@ static void mark_heap(Gen *g, const char *name) {
         if (!strcmp(g->locals[i], name)) { g->is_heap[i] = 1; return; }
 }
 
+static void mark_heap_size(Gen *g, const char *name, int size) {
+    for (int i = 0; i < g->local_count; i++)
+        if (!strcmp(g->locals[i], name)) { g->is_heap[i] = 1; g->alloc_sizes[i] = size; return; }
+}
+
 static void mark_moved(Gen *g, const char *name) {
     for (int i = 0; i < g->local_count; i++)
         if (!strcmp(g->locals[i], name)) { g->is_moved[i] = 1; return; }
@@ -114,9 +122,9 @@ static int check_moved(Gen *g, const char *name) {
 static void emit_scope_cleanup(Gen *g, int from) {
     for (int i = from; i < g->local_count; i++) {
         if (g->is_heap[i] && !g->is_moved[i]) {
-            // For now, we don't actually have a free — bump allocator doesn't reclaim.
-            // But emit a comment showing RAII is tracked. Real free comes with a real allocator.
-            fprintf(g->out, "    // RAII: free %s [x29, #-%d]\n", g->locals[i], g->offsets[i]);
+            emit_load_local(g, 0, g->offsets[i]); // load ptr into x0
+            fprintf(g->out, "    mov x1, #%d\n", g->alloc_sizes[i] ? g->alloc_sizes[i] : 16);
+            fprintf(g->out, "    bl _heap_free\n");
         }
     }
 }
@@ -450,11 +458,23 @@ static void emit_stmt(Gen *g, Node *n) {
                 if (n->var_decl.value->type == NODE_CALL) {
                     const char *fn = n->var_decl.value->call.name;
                     int is_struct_alloc = 0;
-                    for (int si = 0; si < g->struct_count; si++)
-                        if (!strcmp(g->struct_names[si], fn)) { is_struct_alloc = 1; break; }
-                    if (is_struct_alloc || !strcmp(fn, "list") || !strcmp(fn, "map") ||
-                        strncmp(fn, "alloc_", 6) == 0 || !strcmp(fn, "list_new") || !strcmp(fn, "map_new")) {
-                        mark_heap(g, n->var_decl.name);
+                    int struct_size = 16;
+                    for (int si = 0; si < g->struct_count; si++) {
+                        if (!strcmp(g->struct_names[si], fn)) {
+                            is_struct_alloc = 1;
+                            struct_size = g->struct_field_counts[si] * 8;
+                            if (struct_size == 0) struct_size = 8;
+                            break;
+                        }
+                    }
+                    if (is_struct_alloc) {
+                        mark_heap_size(g, n->var_decl.name, struct_size);
+                    } else if (!strcmp(fn, "list")) {
+                        mark_heap_size(g, n->var_decl.name, 72); // 8 count + 8*8 slots
+                    } else if (!strcmp(fn, "map")) {
+                        mark_heap_size(g, n->var_decl.name, 272); // 16 header + 16*16 entries
+                    } else if (strncmp(fn, "alloc_", 6) == 0 || !strcmp(fn, "list_new") || !strcmp(fn, "map_new")) {
+                        mark_heap_size(g, n->var_decl.name, 72);
                     }
                 }
             }
@@ -752,13 +772,53 @@ static void emit_task_builtins(Gen *g) {
 }
 
 static void emit_heap_alloc(Gen *g) {
-    // _heap_alloc: allocate x0 bytes from a bump allocator backed by mmap
+    // Free list: singly-linked list of freed blocks
+    // Each free block: [next_ptr(8) | size(8) | ... unused space ...]
+    // _heap_free_list points to first free block (or 0)
+
+    // _heap_free(ptr=x0, size=x1): add block to free list
+    fprintf(g->out, "// built-in: _heap_free(ptr=x0, size=x1)\n");
+    fprintf(g->out, ".globl _heap_free\n.p2align 2\n_heap_free:\n");
+    fprintf(g->out, "    cbz x0, _hf_ret\n"); // null check
+    fprintf(g->out, "    adrp x2, _heap_free_list@PAGE\n");
+    fprintf(g->out, "    add x2, x2, _heap_free_list@PAGEOFF\n");
+    fprintf(g->out, "    ldr x3, [x2]\n");       // x3 = current head
+    fprintf(g->out, "    str x3, [x0]\n");       // block->next = head
+    fprintf(g->out, "    str x1, [x0, #8]\n");   // block->size = size
+    fprintf(g->out, "    str x0, [x2]\n");       // head = block
+    fprintf(g->out, "_hf_ret:\n    ret\n\n");
+
+    // _heap_alloc: check free list first, then bump
     fprintf(g->out, "// built-in: _heap_alloc(size in x0) -> ptr in x0\n");
     fprintf(g->out, ".globl _heap_alloc\n.p2align 2\n_heap_alloc:\n");
     fprintf(g->out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
-    fprintf(g->out, "    add x0, x0, #7\n");
-    fprintf(g->out, "    and x0, x0, #-8\n");
-    fprintf(g->out, "    mov x9, x0\n");
+    // Align size to 16 bytes (minimum block size for free list metadata)
+    fprintf(g->out, "    add x0, x0, #15\n");
+    fprintf(g->out, "    and x0, x0, #-16\n");
+    fprintf(g->out, "    mov x9, x0\n"); // x9 = aligned size
+    // Check free list
+    fprintf(g->out, "    adrp x10, _heap_free_list@PAGE\n");
+    fprintf(g->out, "    add x10, x10, _heap_free_list@PAGEOFF\n");
+    fprintf(g->out, "    ldr x11, [x10]\n");     // x11 = head
+    fprintf(g->out, "    cbz x11, _ha_bump\n");  // empty free list -> bump
+    // Walk free list for first-fit
+    fprintf(g->out, "    mov x12, x10\n");       // x12 = prev_ptr (points to head slot)
+    fprintf(g->out, "_ha_search:\n");
+    fprintf(g->out, "    cbz x11, _ha_bump\n");
+    fprintf(g->out, "    ldr x13, [x11, #8]\n"); // x13 = block size
+    fprintf(g->out, "    cmp x13, x9\n");
+    fprintf(g->out, "    b.ge _ha_found\n");     // block big enough
+    fprintf(g->out, "    mov x12, x11\n");       // prev = current
+    fprintf(g->out, "    ldr x11, [x11]\n");     // current = current->next
+    fprintf(g->out, "    b _ha_search\n");
+    // Found a block: unlink and return
+    fprintf(g->out, "_ha_found:\n");
+    fprintf(g->out, "    ldr x14, [x11]\n");     // next = block->next
+    fprintf(g->out, "    str x14, [x12]\n");     // prev->next = next (unlink)
+    fprintf(g->out, "    mov x0, x11\n");        // return block ptr
+    fprintf(g->out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n");
+    // Bump allocate
+    fprintf(g->out, "_ha_bump:\n");
     fprintf(g->out, "    adrp x10, _heap_ptr@PAGE\n");
     fprintf(g->out, "    add x10, x10, _heap_ptr@PAGEOFF\n");
     fprintf(g->out, "    ldr x11, [x10]\n");
@@ -767,7 +827,8 @@ static void emit_heap_alloc(Gen *g) {
     fprintf(g->out, "    ldr x13, [x12]\n");
     fprintf(g->out, "    add x14, x11, x9\n");
     fprintf(g->out, "    cmp x14, x13\n");
-    fprintf(g->out, "    b.le _heap_ok\n");
+    fprintf(g->out, "    b.le _ha_ok\n");
+    // mmap new page
     fprintf(g->out, "    mov x0, #0\n");
     fprintf(g->out, "    mov x1, #0x10000\n");
     fprintf(g->out, "    mov x2, #3\n");
@@ -779,7 +840,7 @@ static void emit_heap_alloc(Gen *g) {
     fprintf(g->out, "    mov x11, x0\n");
     fprintf(g->out, "    add x13, x0, #0x10000\n");
     fprintf(g->out, "    add x14, x11, x9\n");
-    fprintf(g->out, "_heap_ok:\n");
+    fprintf(g->out, "_ha_ok:\n");
     fprintf(g->out, "    mov x0, x11\n");
     fprintf(g->out, "    str x14, [x10]\n");
     fprintf(g->out, "    str x13, [x12]\n");
@@ -1105,6 +1166,7 @@ void codegen(Node *program, const char *output_path) {
     fprintf(g.out, ".p2align 3\n");
     fprintf(g.out, "_heap_ptr: .quad 0\n");
     fprintf(g.out, "_heap_end: .quad 0\n");
+    fprintf(g.out, "_heap_free_list: .quad 0\n");
 
     // Panic messages
     fprintf(g.out, ".section __DATA,__data\n");
