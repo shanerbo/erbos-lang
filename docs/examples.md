@@ -1,4 +1,4 @@
-# Erbos Examples 🥔
+# Potato Examples 🥔
 
 ## Hello World
 ```

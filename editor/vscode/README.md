@@ -1,4 +1,4 @@
-# Erbos VS Code Extension 🥔
+# Potato VS Code Extension 🥔
 
 Syntax highlighting for `.ptt` (potato) files.
 

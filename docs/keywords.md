@@ -1,4 +1,4 @@
-# Erbos Keywords 🥔
+# Potato Keywords 🥔
 
 | Keyword | Purpose | Example |
 |---------|---------|---------|

@@ -1,4 +1,4 @@
-# Erbos 🥔
+# Potato 🥔
 
 A systems programming language that reads like English, compiles to native code, and doesn't need a runtime.
 
@@ -23,7 +23,7 @@ spark {
 
 ---
 
-## Why Erbos?
+## Why Potato?
 
 - **Reads like English** — `is`, `be`, `give`, `nah`, `through`, `infi`, `stop`, `skip`
 - **Compiles to native ARM64** — no VM, no interpreter, no runtime
@@ -238,7 +238,7 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 
 ## Comparison
 
-| | Erbos | Rust | C++ | Go | Python |
+| | Potato | Rust | C++ | Go | Python |
 |--|-------|------|-----|-----|--------|
 | **Syntax** | English words | Symbol-heavy | Verbose | Clean | Clean |
 | **Compilation** | Instant | Slow | Slow | Fast | Interpreted |
@@ -251,19 +251,19 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 | **Error handling** | Planned (Result types) | Result<T,E> | Exceptions | error return | Exceptions |
 | **Generics** | Planned | Monomorphized | Templates | Type params | Duck typing |
 
-### Erbos vs Rust
+### Potato vs Rust
 **Wins:** Simpler syntax, no lifetime annotations, faster to learn, instant compilation.
 **Loses:** No borrow checker, no real deallocation yet, no ecosystem.
 
-### Erbos vs C++
+### Potato vs C++
 **Wins:** No headers, no UB, no preprocessor, readable syntax, compile-time move checking.
 **Loses:** No templates, no operator overloading, no real RAII deallocation yet, less control.
 
-### Erbos vs Go
+### Potato vs Go
 **Wins:** No GC, move semantics prevent some leaks, word-based syntax.
 **Loses:** No goroutine integration in compiled output, single-file only, bump allocator leaks.
 
-### Erbos vs Python
+### Potato vs Python
 **Wins:** 100x+ faster, compiled, type safe at compile time, no runtime needed.
 **Loses:** No libraries, no REPL, less forgiving, early stage.
 
@@ -285,7 +285,7 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 - [ ] Operator overloading
 - [ ] Compile-time evaluation
 - [ ] Built-in tooling (fmt, test, build)
-- [ ] Self-hosting (compiler written in Erbos)
+- [ ] Self-hosting (compiler written in Potato)
 
 ---
 

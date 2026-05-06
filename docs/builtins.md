@@ -1,4 +1,4 @@
-# Erbos Built-in Functions 🥔
+# Potato Built-in Functions 🥔
 
 ## Output
 

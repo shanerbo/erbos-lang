@@ -1,7 +1,7 @@
 {
   "name": "erbos-lang",
-  "displayName": "Erbos Language",
-  "description": "Syntax highlighting and file icons for the Erbos programming language",
+  "displayName": "Potato Language",
+  "description": "Syntax highlighting and file icons for the Potato programming language",
   "version": "0.1.0",
   "publisher": "shanerbo",
   "engines": {
@@ -12,7 +12,7 @@
     "languages": [
       {
         "id": "erbos",
-        "aliases": ["Erbos", "erbos"],
+        "aliases": ["Potato", "potato", "ptt"],
         "extensions": [".ptt"],
         "icon": {
           "light": "./icons/erbos.svg",
@@ -31,7 +31,7 @@
     "iconThemes": [
       {
         "id": "erbos-icons",
-        "label": "Erbos Icons",
+        "label": "Potato Icons",
         "path": "./erbos-icon-theme.json"
       }
     ]

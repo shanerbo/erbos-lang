@@ -1,4 +1,4 @@
-# Erbos Language Guide 🥔
+# Potato Language Guide 🥔
 
 ## Entry Point
 
