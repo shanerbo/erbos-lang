@@ -281,15 +281,41 @@ static Type check_expr(Checker *c, Node *n) {
             return make_type(TYPE_UNKNOWN);
         }
         case NODE_LIST_LIT: {
-            for (int i = 0; i < n->list_lit.count; i++)
-                check_expr(c, n->list_lit.items[i]);
+            Type elem_t = make_type(TYPE_UNKNOWN);
+            for (int i = 0; i < n->list_lit.count; i++) {
+                Type t = check_expr(c, n->list_lit.items[i]);
+                if (i == 0) { elem_t = t; }
+                else if (t.kind != TYPE_UNKNOWN && elem_t.kind != TYPE_UNKNOWN && !types_equal(t, elem_t)) {
+                    fprintf(stderr, "error:%d: list element type mismatch: expected '%s', got '%s'\n",
+                        n->line, type_name(elem_t), type_name(t));
+                    exit(1);
+                }
+            }
+            if (elem_t.kind != TYPE_UNKNOWN) return make_list_of(elem_t);
             return make_type(TYPE_LIST);
         }
         case NODE_MAP_LIT: {
+            Type key_t = make_type(TYPE_UNKNOWN);
+            Type val_t = make_type(TYPE_UNKNOWN);
             for (int i = 0; i < n->map_lit.count; i++) {
-                check_expr(c, n->map_lit.keys[i]);
-                check_expr(c, n->map_lit.values[i]);
+                Type kt = check_expr(c, n->map_lit.keys[i]);
+                Type vt = check_expr(c, n->map_lit.values[i]);
+                if (i == 0) { key_t = kt; val_t = vt; }
+                else {
+                    if (kt.kind != TYPE_UNKNOWN && key_t.kind != TYPE_UNKNOWN && !types_equal(kt, key_t)) {
+                        fprintf(stderr, "error:%d: map key type mismatch: expected '%s', got '%s'\n",
+                            n->line, type_name(key_t), type_name(kt));
+                        exit(1);
+                    }
+                    if (vt.kind != TYPE_UNKNOWN && val_t.kind != TYPE_UNKNOWN && !types_equal(vt, val_t)) {
+                        fprintf(stderr, "error:%d: map value type mismatch: expected '%s', got '%s'\n",
+                            n->line, type_name(val_t), type_name(vt));
+                        exit(1);
+                    }
+                }
             }
+            if (key_t.kind != TYPE_UNKNOWN && val_t.kind != TYPE_UNKNOWN)
+                return make_map_of(key_t, val_t);
             return make_type(TYPE_MAP);
         }
         default: return make_type(TYPE_UNKNOWN);
