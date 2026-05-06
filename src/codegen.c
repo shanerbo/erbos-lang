@@ -43,13 +43,13 @@ static int add_string(Gen *g, const char *s) {
 }
 
 static int find_local(Gen *g, const char *name) {
-    for (int i = 0; i < g->local_count; i++)
+    for (int i = g->local_count - 1; i >= 0; i--)
         if (!strcmp(g->locals[i], name)) return g->offsets[i];
     return -1;
 }
 
 static int is_nomut(Gen *g, const char *name) {
-    for (int i = 0; i < g->local_count; i++)
+    for (int i = g->local_count - 1; i >= 0; i--)
         if (!strcmp(g->locals[i], name)) return g->nomut_flags[i];
     return 0;
 }
@@ -113,7 +113,7 @@ static void mark_moved(Gen *g, const char *name) {
 }
 
 static int check_moved(Gen *g, const char *name) {
-    for (int i = 0; i < g->local_count; i++)
+    for (int i = g->local_count - 1; i >= 0; i--)
         if (!strcmp(g->locals[i], name)) return g->is_moved[i];
     return 0;
 }
@@ -407,12 +407,13 @@ static void emit_expr(Gen *g, Node *n) {
             break;
         }
         case NODE_LIST_LIT: {
-            // Allocate on stack: store count + elements
-            // For MVP: alloc space, store elements sequentially
+            // Allocate on heap so pointer survives stack manipulation
             int count = n->list_lit.count;
-            // We'll use a simple heap-like approach: sub sp, store there
-            fprintf(g->out, "    sub sp, sp, #%d\n", (count + 1) * 8);
-            fprintf(g->out, "    mov x0, sp\n");
+            int size = (count + 1) * 8;
+            fprintf(g->out, "    mov x0, #%d\n", size);
+            fprintf(g->out, "    str x0, [sp, #-16]!\n");
+            fprintf(g->out, "    bl _heap_alloc\n");
+            fprintf(g->out, "    ldr x1, [sp], #16\n"); // discard saved size
             fprintf(g->out, "    mov x1, #%d\n", count);
             fprintf(g->out, "    str x1, [x0]\n"); // store count at [0]
             for (int i = 0; i < count; i++) {

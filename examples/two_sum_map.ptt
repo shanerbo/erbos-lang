@@ -1,0 +1,38 @@
+// Two Sum — O(n) using map for complement lookup
+// Map uses string keys, so we convert ints to strings
+
+spark {
+  // Test 1: [2, 7, 11, 15], target 9 → [0, 1]
+  nums is [2, 7, 11, 15]
+  target is 9
+  seen is map()
+
+  through (i from 0 to 4 by 1) {
+    complement is target - nums[i]
+    key is int_to_str(complement)
+    found is seen.get(key)
+    found ne 0 ?{
+      yell(found - 1)
+      yell(i)
+    }
+    val_key is int_to_str(nums[i])
+    seen.set(val_key, i + 1)
+  }
+
+  // Test 2: [3, 2, 4], target 6 → [1, 2]
+  nums2 is [3, 2, 4]
+  target2 is 6
+  seen2 is map()
+
+  through (i from 0 to 3 by 1) {
+    complement2 is target2 - nums2[i]
+    key2 is int_to_str(complement2)
+    found2 is seen2.get(key2)
+    found2 ne 0 ?{
+      yell(found2 - 1)
+      yell(i)
+    }
+    val_key2 is int_to_str(nums2[i])
+    seen2.set(val_key2, i + 1)
+  }
+}

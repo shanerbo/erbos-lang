@@ -1,13 +1,9 @@
-// Two Sum: find two indices where nums[i] + nums[j] == target
-// O(n^2) brute force
+// Two Sum — O(n^2) brute force
+// Uses list literals and reused loop variable names
 
 spark {
-  // Test 1: [2, 7, 11, 15], target 9 → indices 0, 1
-  nums is list()
-  nums.push(2)
-  nums.push(7)
-  nums.push(11)
-  nums.push(15)
+  // Test 1: [2, 7, 11, 15], target 9 → [0, 1]
+  nums is [2, 7, 11, 15]
   target is 9
 
   through (i from 0 to 4 by 1) {
@@ -19,18 +15,15 @@ spark {
     }
   }
 
-  // Test 2: [3, 2, 4], target 6 → indices 1, 2
-  nums2 is list()
-  nums2.push(3)
-  nums2.push(2)
-  nums2.push(4)
+  // Test 2: [3, 2, 4], target 6 → [1, 2]
+  nums2 is [3, 2, 4]
   target2 is 6
 
-  through (a from 0 to 3 by 1) {
-    through (b from a + 1 to 3 by 1) {
-      nums2[a] + nums2[b] eq target2 ?{
-        yell(a)
-        yell(b)
+  through (i from 0 to 3 by 1) {
+    through (j from i + 1 to 3 by 1) {
+      nums2[i] + nums2[j] eq target2 ?{
+        yell(i)
+        yell(j)
       }
     }
   }
