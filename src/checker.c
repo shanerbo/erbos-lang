@@ -126,6 +126,15 @@ static Type check_expr(Checker *c, Node *n) {
                         n->resolved_type = 2;
                         return make_type(TYPE_STR);
                     }
+                    if ((left.kind == TYPE_STR && right.kind == TYPE_UNKNOWN) ||
+                        (left.kind == TYPE_UNKNOWN && right.kind == TYPE_STR)) {
+                        n->resolved_type = 2;
+                        return make_type(TYPE_STR);
+                    }
+                    if (left.kind == TYPE_UNKNOWN || right.kind == TYPE_UNKNOWN) {
+                        n->resolved_type = 1;
+                        return make_type(TYPE_INT);
+                    }
                     if (left.kind != TYPE_INT || right.kind != TYPE_INT) {
                         fprintf(stderr, "error:%d: cannot use '%s' + '%s'\n", n->line, type_name(left), type_name(right));
                         exit(1);
@@ -133,6 +142,10 @@ static Type check_expr(Checker *c, Node *n) {
                     n->resolved_type = 1;
                     return make_type(TYPE_INT);
                 case TOK_MINUS: case TOK_STAR: case TOK_SLASH: case TOK_PERCENT: case TOK_MOD_WORD:
+                    if (left.kind == TYPE_UNKNOWN || right.kind == TYPE_UNKNOWN) {
+                        n->resolved_type = 1;
+                        return make_type(TYPE_INT);
+                    }
                     if (left.kind != TYPE_INT || right.kind != TYPE_INT) {
                         fprintf(stderr, "error:%d: arithmetic requires int, got '%s' and '%s'\n", n->line, type_name(left), type_name(right));
                         exit(1);
@@ -224,7 +237,7 @@ static Type check_expr(Checker *c, Node *n) {
         case NODE_INDEX: {
             check_expr(c, n->index_access.object);
             check_expr(c, n->index_access.index);
-            return make_type(TYPE_INT);
+            return make_type(TYPE_UNKNOWN); // element type unknown without generics
         }
         case NODE_LIST_LIT: {
             for (int i = 0; i < n->list_lit.count; i++)

@@ -483,11 +483,11 @@ static void emit_stmt(Gen *g, Node *n) {
                     if (is_struct_alloc) {
                         mark_heap_size(g, n->var_decl.name, struct_size);
                     } else if (!strcmp(fn, "list")) {
-                        mark_heap_size(g, n->var_decl.name, 72); // 8 count + 8*8 slots
+                        mark_heap_size(g, n->var_decl.name, 520); // 8 count + 8*64 slots
                     } else if (!strcmp(fn, "map")) {
                         mark_heap_size(g, n->var_decl.name, 272); // 16 header + 16*16 entries
                     } else if (strncmp(fn, "alloc_", 6) == 0 || !strcmp(fn, "list_new") || !strcmp(fn, "map_new")) {
-                        mark_heap_size(g, n->var_decl.name, 72);
+                        mark_heap_size(g, n->var_decl.name, 520);
                     }
                 }
             }
@@ -1090,20 +1090,20 @@ static void emit_list_builtins(Gen *g) {
     // Dynamic lists: [capacity(8) | count(8) | elem0(8) | ...]
     // For simplicity, we use: [count | e0 | e1 | ...] with realloc on push
 
-    // _list_new() -> empty heap list (capacity 8)
+    // _list_new() -> empty heap list (capacity 64)
     fprintf(g->out, "// built-in: _list_new() -> list ptr\n");
     fprintf(g->out, ".globl _list_new\n.p2align 2\n_list_new:\n");
     fprintf(g->out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
-    // Alloc: 8 (count) + 8*8 (8 slots) = 72 bytes
-    fprintf(g->out, "    mov x0, #72\n    bl _heap_alloc\n");
+    // Alloc: 8 (count) + 8*64 (64 slots) = 520 bytes
+    fprintf(g->out, "    mov x0, #520\n    bl _heap_alloc\n");
     fprintf(g->out, "    str xzr, [x0]\n"); // count = 0
     fprintf(g->out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 
-    // _list_push(list, value) -> appends value (max 8 elements)
+    // _list_push(list, value) -> appends value (max 64 elements)
     fprintf(g->out, "// built-in: _list_push(x0=list, x1=value)\n");
     fprintf(g->out, ".globl _list_push\n.p2align 2\n_list_push:\n");
     fprintf(g->out, "    ldr x2, [x0]\n");          // count
-    fprintf(g->out, "    cmp x2, #8\n");            // capacity check
+    fprintf(g->out, "    cmp x2, #64\n");            // capacity check
     fprintf(g->out, "    b.ge _panic_capacity\n");
     fprintf(g->out, "    add x3, x2, #1\n");        // new slot index (count+1 because [0]=count)
     fprintf(g->out, "    str x1, [x0, x3, lsl #3]\n"); // store at [count+1]

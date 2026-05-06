@@ -1,0 +1,52 @@
+// Leetcode 17: Letter Combinations of a Phone Number
+// Iterative BFS approach
+//
+// Start with [""], for each digit, expand each existing combo
+// by appending each letter for that digit.
+
+get_letters(digit str) str {
+  digit eq "2" ?{ give "abc" }
+  digit eq "3" ?{ give "def" }
+  digit eq "4" ?{ give "ghi" }
+  digit eq "5" ?{ give "jkl" }
+  digit eq "6" ?{ give "mno" }
+  digit eq "7" ?{ give "pqrs" }
+  digit eq "8" ?{ give "tuv" }
+  digit eq "9" ?{ give "wxyz" }
+  give ""
+}
+
+spark {
+  // Test: "23" → ad, ae, af, bd, be, bf, cd, ce, cf
+  digits is "23"
+  n is len(digits)
+
+  // Start with one empty string
+  results is list()
+  results.push("")
+
+  through (i from 0 to n by 1) {
+    digit is char_at(digits, i)
+    letters is get_letters(digit)
+    num_letters is len(letters)
+
+    // Build next set of results
+    next is list()
+    cur_len is len(results)
+    through (r from 0 to cur_len by 1) {
+      combo is results[r]
+      through (l from 0 to num_letters by 1) {
+        ch is char_at(letters, l)
+        new_combo is combo + ch
+        next.push(new_combo)
+      }
+    }
+    results be next
+  }
+
+  // Print results
+  result_len is len(results)
+  through (i from 0 to result_len by 1) {
+    yell(results[i])
+  }
+}
