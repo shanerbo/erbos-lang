@@ -182,7 +182,7 @@ spark {
   yell("---")
 
   // === 16. Nested collections: list of lists ===
-  grid is list()
+  grid is list of list
   grid.push([1, 2, 3])
   grid.push([4, 5, 6])
   grid.push([7, 8, 9])
@@ -193,7 +193,7 @@ spark {
 
   // === 17. Nested: map + list combo ===
   registry is map of str to int
-  people is list()
+  people is list of Person
   p1 is Person()
   p1.age be 25
   p1.score be 100

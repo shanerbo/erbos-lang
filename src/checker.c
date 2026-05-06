@@ -315,6 +315,19 @@ static void check_stmt(Checker *c, Node *n) {
     switch (n->type) {
         case NODE_VAR_DECL: {
             Type t = check_expr(c, n->var_decl.value);
+            // Enforce: bare list()/map() constructors must have type annotations
+            if (t.kind == TYPE_LIST && !n->var_decl.elem_type_name &&
+                n->var_decl.value->type == NODE_CALL &&
+                (!strcmp(n->var_decl.value->call.name, "list") || !strcmp(n->var_decl.value->call.name, "list_new"))) {
+                fprintf(stderr, "error:%d: list must specify element type: 'list of <type>'\n", n->line);
+                exit(1);
+            }
+            if (t.kind == TYPE_MAP && !n->var_decl.key_type_name &&
+                n->var_decl.value->type == NODE_CALL &&
+                (!strcmp(n->var_decl.value->call.name, "map") || !strcmp(n->var_decl.value->call.name, "map_new"))) {
+                fprintf(stderr, "error:%d: map must specify key and value types: 'map of <key> to <value>'\n", n->line);
+                exit(1);
+            }
             // If declaration has explicit generic type, use it
             if (n->var_decl.elem_type_name && t.kind == TYPE_LIST) {
                 t = make_list_of(parse_type_str(c, n->var_decl.elem_type_name));
