@@ -1,0 +1,43 @@
+// Leetcode 3: Longest Substring Without Repeating Characters
+// Brute force approach - O(n^2)
+//
+// For each starting position, extend the window until a duplicate is found.
+// Track max length seen.
+
+has_dup(s str, start int, end int) int {
+  through (i from start to end by 1) {
+    through (j from i + 1 to end by 1) {
+      char_at(s, i) eq char_at(s, j) ?{
+        give 1
+      }
+    }
+  }
+  give 0
+}
+
+longest_brute(s str, n int) int {
+  max_len is 0
+  through (i from 0 to n by 1) {
+    through (j from i + 1 to n + 1 by 1) {
+      dup is has_dup(s, i, j)
+      dup eq 0 ?{
+        cur is j - i
+        cur gt max_len ?{
+          max_len be cur
+        }
+      }
+    }
+  }
+  give max_len
+}
+
+spark {
+  // Test 1: "abcabcbb" → 3
+  yell(longest_brute("abcabcbb", 8))
+
+  // Test 2: "bbbbb" → 1
+  yell(longest_brute("bbbbb", 5))
+
+  // Test 3: "pwwkew" → 3
+  yell(longest_brute("pwwkew", 6))
+}

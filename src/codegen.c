@@ -293,15 +293,27 @@ static void emit_expr(Gen *g, Node *n) {
                 fprintf(g->out, "    mov x0, #0\n");
                 break;
             } else if (!strcmp(call_name, "len")) {
-                // Universal len(): reads count from list (offset 0) or map (offset 8)
+                // Universal len(): reads count from list (offset 0) or map (offset 8) or strlen
                 emit_expr(g, n->call.args[0]);
                 if (n->call.args[0]->resolved_type == 4) {
-                    // map: count at offset 8
-                    fprintf(g->out, "    ldr x0, [x0, #8]\n");
+                    fprintf(g->out, "    ldr x0, [x0, #8]\n"); // map
+                } else if (n->call.args[0]->resolved_type == 5) {
+                    fprintf(g->out, "    bl _str_len\n"); // string
                 } else {
-                    // list: count at offset 0
-                    fprintf(g->out, "    ldr x0, [x0]\n");
+                    fprintf(g->out, "    ldr x0, [x0]\n"); // list
                 }
+                break;
+            } else if (!strcmp(call_name, "str_len")) {
+                emit_expr(g, n->call.args[0]);
+                fprintf(g->out, "    bl _str_len\n");
+                break;
+            } else if (!strcmp(call_name, "char_at")) {
+                // char_at(str, index) → 1-char string on heap
+                emit_expr(g, n->call.args[1]); // index
+                fprintf(g->out, "    str x0, [sp, #-16]!\n");
+                emit_expr(g, n->call.args[0]); // string
+                fprintf(g->out, "    ldr x1, [sp], #16\n"); // x1 = index
+                fprintf(g->out, "    bl _char_at\n");
                 break;
             } else {
                 snprintf(actual_name, sizeof(actual_name), "_%s", call_name);
@@ -521,8 +533,12 @@ static void emit_stmt(Gen *g, Node *n) {
             } else {
                 fprintf(g->out, "    mov x0, #0\n");
             }
+            // Save return value before cleanup
+            fprintf(g->out, "    str x0, [sp, #-16]!\n");
             // Emit RAII cleanup for everything NOT moved
             emit_scope_cleanup(g, 0);
+            // Restore return value
+            fprintf(g->out, "    ldr x0, [sp], #16\n");
             fprintf(g->out, "    mov sp, x29\n");
             fprintf(g->out, "    ldp x29, x30, [sp], #16\n");
             fprintf(g->out, "    ret\n");
@@ -916,6 +932,32 @@ static void emit_int_to_str(Gen *g) {
     fprintf(g->out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 }
 
+static void emit_str_builtins(Gen *g) {
+    // _str_len(x0=str) -> length in x0
+    fprintf(g->out, "// built-in: _str_len(x0=str) -> int\n");
+    fprintf(g->out, ".globl _str_len\n.p2align 2\n_str_len:\n");
+    fprintf(g->out, "    mov x1, #0\n");
+    fprintf(g->out, "_sl_loop:\n");
+    fprintf(g->out, "    ldrb w2, [x0, x1]\n");
+    fprintf(g->out, "    cbz w2, _sl_done\n");
+    fprintf(g->out, "    add x1, x1, #1\n");
+    fprintf(g->out, "    b _sl_loop\n");
+    fprintf(g->out, "_sl_done:\n    mov x0, x1\n    ret\n\n");
+
+    // _char_at(x0=str, x1=index) -> 1-char string on heap
+    fprintf(g->out, "// built-in: _char_at(x0=str, x1=index) -> str\n");
+    fprintf(g->out, ".globl _char_at\n.p2align 2\n_char_at:\n");
+    fprintf(g->out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
+    fprintf(g->out, "    ldrb w2, [x0, x1]\n");   // load char
+    fprintf(g->out, "    str x2, [sp, #-16]!\n"); // save char
+    fprintf(g->out, "    mov x0, #16\n");          // alloc 2 bytes (aligned to 16)
+    fprintf(g->out, "    bl _heap_alloc\n");
+    fprintf(g->out, "    ldr x2, [sp], #16\n");   // restore char
+    fprintf(g->out, "    strb w2, [x0]\n");       // store char
+    fprintf(g->out, "    strb wzr, [x0, #1]\n");  // null terminate
+    fprintf(g->out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
+}
+
 static void emit_map_builtins(Gen *g) {
     // Map layout: [capacity(8) | count(8) | key0(8) | val0(8) | key1(8) | val1(8) | ...]
     // _map_new() -> ptr to map (initial capacity 16 entries)
@@ -1116,6 +1158,7 @@ void codegen(Node *program, const char *output_path) {
     emit_str_eq(&g);
     emit_str_concat(&g);
     emit_int_to_str(&g);
+    emit_str_builtins(&g);
     emit_map_builtins(&g);
     emit_list_builtins(&g);
 
