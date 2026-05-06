@@ -1,0 +1,37 @@
+// Two Sum: find two indices where nums[i] + nums[j] == target
+// O(n^2) brute force
+
+spark {
+  // Test 1: [2, 7, 11, 15], target 9 → indices 0, 1
+  nums is list()
+  nums.push(2)
+  nums.push(7)
+  nums.push(11)
+  nums.push(15)
+  target is 9
+
+  through (i from 0 to 4 by 1) {
+    through (j from i + 1 to 4 by 1) {
+      nums[i] + nums[j] eq target ?{
+        yell(i)
+        yell(j)
+      }
+    }
+  }
+
+  // Test 2: [3, 2, 4], target 6 → indices 1, 2
+  nums2 is list()
+  nums2.push(3)
+  nums2.push(2)
+  nums2.push(4)
+  target2 is 6
+
+  through (a from 0 to 3 by 1) {
+    through (b from a + 1 to 3 by 1) {
+      nums2[a] + nums2[b] eq target2 ?{
+        yell(a)
+        yell(b)
+      }
+    }
+  }
+}
