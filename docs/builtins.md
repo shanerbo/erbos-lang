@@ -31,7 +31,7 @@ yell("hello {name}")    // prints: hello erbos
 
 | Method | Description | Example |
 |--------|-------------|---------|
-| `list()` | Create empty dynamic list | `nums is list()` |
+| `list of T` | Create typed list | `nums is list of int` |
 | `.push(val)` | Append value | `nums.push(10)` |
 | `.pop()` | Remove and return last element | `last is nums.pop()` |
 | `.len()` | Get number of elements | `yell(nums.len())` |
@@ -46,7 +46,7 @@ yell(nums[0])           // bounds-checked
 
 | Method | Description | Example |
 |--------|-------------|---------|
-| `map()` | Create empty ordered map | `m is map()` |
+| `map of K to V` | Create typed map | `m is map of str to int` |
 | `.set(key, val)` | Insert or update entry | `m.set("age", 25)` |
 | `.get(key)` | Get value by key (0 if missing) | `m.get("age")` |
 | `.len()` | Get number of entries | `m.len()` |

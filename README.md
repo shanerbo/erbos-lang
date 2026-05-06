@@ -104,11 +104,11 @@ p.x be 10
 ### Collections
 ```
 nums is [1, 2, 3]         // list literal
-nums is list()             // dynamic list
+nums is list of int          // typed dynamic list
 nums.push(4)
 yell(nums.pop())
 
-m is map()                 // ordered map
+m is map of str to int       // typed ordered map
 m.set("key", 42)
 yell(m.get("key"))
 ```

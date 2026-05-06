@@ -1,5 +1,5 @@
 spark {
-  m is map()
+  m is map of str to int
   m.set("alice", 100)
   m.set("bob", 85)
   m.set("charlie", 92)

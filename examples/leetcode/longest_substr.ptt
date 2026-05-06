@@ -3,7 +3,7 @@
 // Time: O(n)  Space: O(min(n, alphabet))
 
 longest(s str, n int) int {
-  seen is map()
+  seen is map of str to int
   start is 0
   max_len is 0
   through (i from 0 to n by 1) {

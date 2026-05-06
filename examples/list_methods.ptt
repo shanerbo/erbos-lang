@@ -1,5 +1,5 @@
 spark {
-  nums is list()
+  nums is list of int
   nums.push(10)
   nums.push(20)
   nums.push(30)

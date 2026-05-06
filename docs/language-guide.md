@@ -136,7 +136,7 @@ spark {
 nums is [10, 20, 30]          // literal
 yell(nums[0])                 // indexing (bounds-checked)
 
-nums is list()                // dynamic list
+nums is list of int           // typed, auto-constructed
 nums.push(10)
 nums.push(20)
 last is nums.pop()
@@ -150,7 +150,7 @@ through (n in nums) {         // iteration
 ## Maps
 
 ```
-m is map()
+m is map of str to int
 m.set("alice", 100)
 m.set("bob", 85)
 

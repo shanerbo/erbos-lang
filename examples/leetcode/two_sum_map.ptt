@@ -4,7 +4,7 @@
 // Output: i*100+j encoding
 
 solve(nums list, size int, target int) int {
-  seen is map()
+  seen is map of str to int
   through (i from 0 to size by 1) {
     complement is target - nums[i]
     key is int_to_str(complement)

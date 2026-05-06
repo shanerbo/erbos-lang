@@ -1,5 +1,5 @@
 spark {
-  m is map()
+  m is map of str to int
   m.set("score", 50)
   yell(m.get("score"))
   m.set("score", 99)

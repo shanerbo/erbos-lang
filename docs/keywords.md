@@ -30,8 +30,8 @@
 | `le` | less or equal | `x le 100` |
 | `mod` | modulo | `x mod 3` |
 | `true` / `false` | booleans | `x is true` |
-| `list` | list constructor | `nums is list()` |
-| `map` | map constructor | `m is map()` |
+| `list` | list type/constructor | `nums is list of int` |
+| `map` | map type/constructor | `m is map of str to int` |
 | `of` | type parameter | `list of int` |
 | `task` | concurrency handle | `t is task()` |
 

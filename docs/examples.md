@@ -62,7 +62,7 @@ spark {
 ## Map Usage
 ```
 spark {
-  scores is map()
+  scores is map of str to int
   scores.set("alice", 95)
   scores.set("bob", 87)
   scores.set("charlie", 92)
@@ -78,7 +78,7 @@ spark {
 ## Dynamic List
 ```
 spark {
-  nums is list()
+  nums is list of int
   nums.push(10)
   nums.push(20)
   nums.push(30)

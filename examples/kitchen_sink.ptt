@@ -83,7 +83,7 @@ spark {
   yell(nums[2])
 
   // Dynamic list
-  dyn is list()
+  dyn is list of int
   dyn.push(1)
   dyn.push(2)
   dyn.push(3)
@@ -96,7 +96,7 @@ spark {
   }
 
   // Maps
-  m is map()
+  m is map of str to int
   m.set("a", 10)
   m.set("b", 20)
   yell(m.get("a"))
