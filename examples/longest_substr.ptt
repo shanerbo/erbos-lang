@@ -7,7 +7,7 @@
 spark {
   // Test 1: "abcabcbb" → 3 ("abc")
   s is "abcabcbb"
-  yell(longest(s, str_len(s)))
+  yell(longest(s, len(s)))
 
   // Test 2: "bbbbb" → 1 ("b")
   s2 is "bbbbb"
