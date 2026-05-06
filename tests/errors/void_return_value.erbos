@@ -1,0 +1,2 @@
+foo() { give 42 }
+spark { foo() }

@@ -11,7 +11,7 @@ $(OUT): $(SRC) src/*.h
 clean:
 	rm -f $(OUT) *.o *.s examples/*.s examples/*.o
 
-test: $(OUT) test-pass test-fail
+test: $(OUT) test-pass test-fail test-runtime
 	@echo ""
 	@echo "All tests passed."
 
@@ -34,6 +34,7 @@ test-fail: $(OUT)
 	@fail=0; \
 	for f in tests/errors/*.erbos; do \
 		b=$$(basename $$f); \
+		case $$b in negative_index.erbos) continue;; esac; \
 		if ./$(OUT) "$$f" > /dev/null 2>&1; then \
 			echo "  FAIL (should error): $$b"; fail=1; \
 		else \
@@ -49,7 +50,7 @@ test-fail: $(OUT)
 		fi; \
 	done; \
 	echo "=== Expected runtime panics ==="; \
-	for f in examples/oob_test.erbos; do \
+	for f in examples/oob_test.erbos tests/errors/negative_index.erbos; do \
 		b=$$(basename $$f); \
 		if ./$(OUT) run "$$f" > /dev/null 2>&1; then \
 			echo "  FAIL (should panic): $$b"; fail=1; \
@@ -59,4 +60,12 @@ test-fail: $(OUT)
 	done; \
 	[ $$fail -eq 0 ] || (echo "Some failure tests did not error"; exit 1)
 
-.PHONY: all clean test test-pass test-fail
+.PHONY: all clean test test-pass test-fail test-runtime
+
+test-runtime:
+	@echo "=== Runtime C tests ==="
+	@$(CC) $(CFLAGS) -Isrc -pthread -o tests/test_runtime tests/test_runtime.c src/runtime.c src/runtime_asm.s
+	@./tests/test_runtime > /dev/null && echo "  OK:   test_runtime" || echo "  FAIL: test_runtime"
+	@$(CC) $(CFLAGS) -Isrc -o tests/test_channel tests/test_channel.c src/runtime.c src/channel.c src/runtime_asm.s
+	@./tests/test_channel > /dev/null && echo "  OK:   test_channel" || echo "  FAIL: test_channel"
+	@rm -f tests/test_runtime tests/test_channel

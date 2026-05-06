@@ -1,0 +1,2 @@
+foo() int { give "hello" }
+spark { yell(foo()) }

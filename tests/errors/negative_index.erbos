@@ -1,0 +1,4 @@
+spark {
+  nums is [10, 20, 30]
+  yell(nums[-1])
+}

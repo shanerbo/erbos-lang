@@ -1,0 +1,2 @@
+foo() int { yell(1) }
+spark { yell(foo()) }

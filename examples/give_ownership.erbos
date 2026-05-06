@@ -3,7 +3,7 @@ Point is {
   y int
 }
 
-make_point(val int) int {
+make_point(val int) Point {
   p is Point()
   p.x be val
   give p
