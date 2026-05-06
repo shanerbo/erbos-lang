@@ -1,6 +1,6 @@
 # Erbos VS Code Extension
 
-Syntax highlighting for `.erbos` files.
+Syntax highlighting for `.ptt` files.
 
 ## Install
 

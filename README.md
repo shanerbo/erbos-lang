@@ -39,10 +39,10 @@ spark {
 make
 
 # Compile and run in one shot
-./erbos run hello.erbos
+./erbos run hello.ptt
 
 # Or compile to binary
-./erbos hello.erbos
+./erbos hello.ptt
 ./hello
 ```
 
@@ -211,7 +211,7 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 | Clone (`is rep`) | Shallow copy (pointer copy). Deep clone not implemented. |
 | `ref` params | Parsed and stored. Borrow/mutation rules not enforced by checker or codegen. |
 | Struct field access | Resolves field by name across all structs, not per-type. Works if field names are unique. |
-| Green thread runtime | Separate C library (`src/runtime.c`). Not integrated into compiled `.erbos` output. |
+| Green thread runtime | Separate C library (`src/runtime.c`). Not integrated into compiled `.ptt` output. |
 | Channels | Separate C library (`src/channel.c`). Not integrated into compiled output. |
 | String comparison (eq/ne) | Uses `_str_eq` when checker detects both operands are str. |
 
@@ -290,7 +290,7 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 ## Architecture
 
 ```
-source.erbos → [Lexer] → [Parser] → [Type Checker] → [Codegen] → ARM64 .s → [as + ld] → binary
+source.ptt → [Lexer] → [Parser] → [Type Checker] → [Codegen] → ARM64 .s → [as + ld] → binary
 ```
 
 Written in C. ~2500 lines. No dependencies.

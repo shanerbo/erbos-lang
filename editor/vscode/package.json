@@ -13,7 +13,7 @@
       {
         "id": "erbos",
         "aliases": ["Erbos", "erbos"],
-        "extensions": [".erbos"],
+        "extensions": [".ptt"],
         "icon": {
           "light": "./icons/erbos.svg",
           "dark": "./icons/erbos.svg"
@@ -24,7 +24,7 @@
     "grammars": [
       {
         "language": "erbos",
-        "scopeName": "source.erbos",
+        "scopeName": "source.ptt",
         "path": "./syntaxes/erbos.tmLanguage.json"
       }
     ],

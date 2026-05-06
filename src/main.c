@@ -22,11 +22,11 @@ static char *read_file(const char *path) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: erbos <file.erbos>\n       erbos run <file.erbos>\n");
+        fprintf(stderr, "usage: erbos <file.ptt>\n       erbos run <file.ptt>\n");
         return 1;
     }
 
-    // Check for "erbos run file.erbos"
+    // Check for "erbos run file.ptt"
     int run_mode = 0;
     const char *input;
     if (argc >= 3 && strcmp(argv[1], "run") == 0) {
@@ -38,12 +38,12 @@ int main(int argc, char **argv) {
 
     // Check file extension
     const char *ext = strrchr(input, '.');
-    if (!ext || strcmp(ext, ".erbos") != 0) {
-        fprintf(stderr, "error: expected .erbos file, got '%s'\n", input);
+    if (!ext || strcmp(ext, ".ptt") != 0) {
+        fprintf(stderr, "error: expected .ptt file, got '%s'\n", input);
         return 1;
     }
 
-    // Derive output name: replace .erbos with nothing
+    // Derive output name: replace .ptt with nothing
     char out_name[256];
     strncpy(out_name, input, sizeof(out_name) - 1);
     char *dot = strrchr(out_name, '.');

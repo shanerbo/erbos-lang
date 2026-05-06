@@ -18,9 +18,9 @@ test: $(OUT) test-pass test-fail test-runtime
 test-pass: $(OUT)
 	@echo "=== Passing examples ==="
 	@fail=0; \
-	for f in examples/*.erbos; do \
+	for f in examples/*.ptt; do \
 		b=$$(basename $$f); \
-		case $$b in nomut_test.erbos|oob_test.erbos|move_test.erbos) continue;; esac; \
+		case $$b in nomut_test.ptt|oob_test.ptt|move_test.ptt) continue;; esac; \
 		if ! ./$(OUT) run "$$f" > /dev/null 2>&1; then \
 			echo "  FAIL: $$b"; fail=1; \
 		else \
@@ -32,16 +32,16 @@ test-pass: $(OUT)
 test-fail: $(OUT)
 	@echo "=== Expected compile failures ==="
 	@fail=0; \
-	for f in tests/errors/*.erbos; do \
+	for f in tests/errors/*.ptt; do \
 		b=$$(basename $$f); \
-		case $$b in negative_index.erbos) continue;; esac; \
+		case $$b in negative_index.ptt) continue;; esac; \
 		if ./$(OUT) "$$f" > /dev/null 2>&1; then \
 			echo "  FAIL (should error): $$b"; fail=1; \
 		else \
 			echo "  OK (errored):        $$b"; \
 		fi; \
 	done; \
-	for f in examples/nomut_test.erbos examples/move_test.erbos; do \
+	for f in examples/nomut_test.ptt examples/move_test.ptt; do \
 		b=$$(basename $$f); \
 		if ./$(OUT) "$$f" > /dev/null 2>&1; then \
 			echo "  FAIL (should error): $$b"; fail=1; \
@@ -50,7 +50,7 @@ test-fail: $(OUT)
 		fi; \
 	done; \
 	echo "=== Expected runtime panics ==="; \
-	for f in examples/oob_test.erbos tests/errors/negative_index.erbos; do \
+	for f in examples/oob_test.ptt tests/errors/negative_index.ptt; do \
 		b=$$(basename $$f); \
 		if ./$(OUT) run "$$f" > /dev/null 2>&1; then \
 			echo "  FAIL (should panic): $$b"; fail=1; \
