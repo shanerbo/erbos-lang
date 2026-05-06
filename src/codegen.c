@@ -293,14 +293,12 @@ static void emit_expr(Gen *g, Node *n) {
                 fprintf(g->out, "    mov x0, #0\n");
                 break;
             } else if (!strcmp(call_name, "len")) {
-                // Universal len(): reads count from list (offset 0) or map (offset 8) or strlen
+                // Universal len(): list count at [8], map count at [8], string via _str_len
                 emit_expr(g, n->call.args[0]);
-                if (n->call.args[0]->resolved_type == 4) {
-                    fprintf(g->out, "    ldr x0, [x0, #8]\n"); // map
-                } else if (n->call.args[0]->resolved_type == 5) {
+                if (n->call.args[0]->resolved_type == 5) {
                     fprintf(g->out, "    bl _str_len\n"); // string
                 } else {
-                    fprintf(g->out, "    ldr x0, [x0]\n"); // list
+                    fprintf(g->out, "    ldr x0, [x0, #8]\n"); // list or map (both at offset 8)
                 }
                 break;
             } else if (!strcmp(call_name, "str_len")) {
@@ -404,36 +402,46 @@ static void emit_expr(Gen *g, Node *n) {
         }
         case NODE_INDEX: {
             emit_expr(g, n->index_access.index);
-            fprintf(g->out, "    add x0, x0, #1\n"); // skip count slot
-            fprintf(g->out, "    str x0, [sp, #-16]!\n");
+            fprintf(g->out, "    str x0, [sp, #-16]!\n"); // save index
             emit_expr(g, n->index_access.object);
-            fprintf(g->out, "    ldr x1, [sp], #16\n");
-            // Bounds check: original index must be >= 0 and < count
-            fprintf(g->out, "    ldr x2, [x0]\n");       // x2 = count
-            fprintf(g->out, "    sub x3, x1, #1\n");     // x3 = original index
-            fprintf(g->out, "    cmp x3, #0\n");
-            fprintf(g->out, "    b.lt _panic_oob\n");    // negative index
-            fprintf(g->out, "    cmp x3, x2\n");
-            fprintf(g->out, "    b.ge _panic_oob\n");    // index >= count
+            fprintf(g->out, "    ldr x1, [sp], #16\n");   // x1 = index
+            // Header format: [cap | count | data_ptr]
+            // Bounds check
+            fprintf(g->out, "    cmp x1, #0\n");
+            fprintf(g->out, "    b.lt _panic_oob\n");
+            fprintf(g->out, "    ldr x2, [x0, #8]\n");    // count
+            fprintf(g->out, "    cmp x1, x2\n");
+            fprintf(g->out, "    b.ge _panic_oob\n");
+            fprintf(g->out, "    ldr x0, [x0, #16]\n");   // data_ptr
             fprintf(g->out, "    ldr x0, [x0, x1, lsl #3]\n");
             break;
         }
         case NODE_LIST_LIT: {
-            // Allocate on heap so pointer survives stack manipulation
+            // Allocate as header format (same as list()) for consistency
             int count = n->list_lit.count;
-            int size = (count + 1) * 8;
-            fprintf(g->out, "    mov x0, #%d\n", size);
-            fprintf(g->out, "    str x0, [sp, #-16]!\n");
+            // Alloc header
+            fprintf(g->out, "    mov x0, #24\n");
             fprintf(g->out, "    bl _heap_alloc\n");
-            fprintf(g->out, "    ldr x1, [sp], #16\n"); // discard saved size
-            fprintf(g->out, "    mov x1, #%d\n", count);
-            fprintf(g->out, "    str x1, [x0]\n"); // store count at [0]
+            fprintf(g->out, "    str x0, [sp, #-16]!\n"); // save header
+            // Alloc data
+            fprintf(g->out, "    mov x0, #%d\n", count * 8 > 64 ? count * 8 : 64);
+            fprintf(g->out, "    bl _heap_alloc\n");
+            fprintf(g->out, "    mov x1, x0\n");          // x1 = data
+            fprintf(g->out, "    ldr x0, [sp], #16\n");   // x0 = header
+            fprintf(g->out, "    mov x2, #%d\n", count > 8 ? count : 8);
+            fprintf(g->out, "    str x2, [x0]\n");        // capacity
+            fprintf(g->out, "    mov x2, #%d\n", count);
+            fprintf(g->out, "    str x2, [x0, #8]\n");    // count
+            fprintf(g->out, "    str x1, [x0, #16]\n");   // data_ptr
+            // Fill elements
             for (int i = 0; i < count; i++) {
                 fprintf(g->out, "    str x0, [sp, #-16]!\n");
+                fprintf(g->out, "    str x1, [sp, #-16]!\n");
                 emit_expr(g, n->list_lit.items[i]);
-                fprintf(g->out, "    mov x1, x0\n");
+                fprintf(g->out, "    mov x2, x0\n");
+                fprintf(g->out, "    ldr x1, [sp], #16\n");
                 fprintf(g->out, "    ldr x0, [sp], #16\n");
-                fprintf(g->out, "    str x1, [x0, #%d]\n", (i + 1) * 8);
+                fprintf(g->out, "    str x2, [x1, #%d]\n", i * 8);
             }
             break;
         }
@@ -625,13 +633,15 @@ static void emit_stmt(Gen *g, Node *n) {
             g->loop_end_label = loop_end;
             g->loop_continue_label = loop_cont;
             fprintf(g->out, "_L%d:\n", loop_start);
+            // Header format: [cap | count | data_ptr]
             emit_load_local(g, 0, list_off);
-            fprintf(g->out, "    ldr x1, [x0]\n");
+            fprintf(g->out, "    ldr x1, [x0, #8]\n");    // count
             emit_load_local(g, 2, idx_off);
             fprintf(g->out, "    cmp x2, x1\n");
             fprintf(g->out, "    b.ge _L%d\n", loop_end);
-            fprintf(g->out, "    add x3, x2, #1\n");
-            fprintf(g->out, "    ldr x0, [x0, x3, lsl #3]\n");
+            // Load element: data_ptr[idx]
+            fprintf(g->out, "    ldr x3, [x0, #16]\n");   // data_ptr
+            fprintf(g->out, "    ldr x0, [x3, x2, lsl #3]\n");
             emit_store_local(g, 0, var_off);
             Node *body2 = n->through_in.body;
             for (int j = 0; j < body2->block.stmts.count; j++)
@@ -1057,30 +1067,42 @@ static void emit_map_builtins(Gen *g) {
     fprintf(g->out, ".globl _map_len\n.p2align 2\n_map_len:\n");
     fprintf(g->out, "    ldr x0, [x0, #8]\n    ret\n\n");
 
-    // _map_keys(map) -> list of keys (heap allocated, same layout as list literal)
+    // _map_keys(map) -> list of keys (header format)
     fprintf(g->out, "// built-in: _map_keys(x0=map) -> list ptr\n");
     fprintf(g->out, ".globl _map_keys\n.p2align 2\n_map_keys:\n");
     fprintf(g->out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
     fprintf(g->out, "    stp x19, x20, [sp, #-16]!\n");
+    fprintf(g->out, "    stp x21, x22, [sp, #-16]!\n");
     fprintf(g->out, "    mov x19, x0\n");           // map
     fprintf(g->out, "    ldr x20, [x19, #8]\n");    // count
-    // Alloc list: (count+1) * 8 bytes
-    fprintf(g->out, "    add x0, x20, #1\n");
-    fprintf(g->out, "    lsl x0, x0, #3\n");
+    // Alloc header (24 bytes)
+    fprintf(g->out, "    mov x0, #24\n    bl _heap_alloc\n");
+    fprintf(g->out, "    mov x21, x0\n");           // header
+    // Alloc data (count * 8)
+    fprintf(g->out, "    lsl x0, x20, #3\n");
+    fprintf(g->out, "    cmp x0, #16\n    b.ge _mk_alloc\n");
+    fprintf(g->out, "    mov x0, #16\n");           // minimum 16 bytes
+    fprintf(g->out, "_mk_alloc:\n");
     fprintf(g->out, "    bl _heap_alloc\n");
-    fprintf(g->out, "    str x20, [x0]\n");         // store count at [0]
-    fprintf(g->out, "    mov x3, #0\n");            // i
+    fprintf(g->out, "    mov x22, x0\n");           // data
+    // Fill header
+    fprintf(g->out, "    str x20, [x21]\n");        // capacity = count
+    fprintf(g->out, "    str x20, [x21, #8]\n");    // count
+    fprintf(g->out, "    str x22, [x21, #16]\n");   // data_ptr
+    // Copy keys
+    fprintf(g->out, "    mov x3, #0\n");
     fprintf(g->out, "_mk_loop:\n");
     fprintf(g->out, "    cmp x3, x20\n");
     fprintf(g->out, "    b.ge _mk_done\n");
     fprintf(g->out, "    lsl x4, x3, #4\n");
     fprintf(g->out, "    add x4, x4, #16\n");
-    fprintf(g->out, "    ldr x5, [x19, x4]\n");    // key
-    fprintf(g->out, "    add x6, x3, #1\n");
-    fprintf(g->out, "    str x5, [x0, x6, lsl #3]\n"); // store in list
+    fprintf(g->out, "    ldr x5, [x19, x4]\n");    // key from map
+    fprintf(g->out, "    str x5, [x22, x3, lsl #3]\n"); // store in data
     fprintf(g->out, "    add x3, x3, #1\n");
     fprintf(g->out, "    b _mk_loop\n");
     fprintf(g->out, "_mk_done:\n");
+    fprintf(g->out, "    mov x0, x21\n");           // return header
+    fprintf(g->out, "    ldp x21, x22, [sp], #16\n");
     fprintf(g->out, "    ldp x19, x20, [sp], #16\n");
     fprintf(g->out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 }
@@ -1090,43 +1112,94 @@ static void emit_list_builtins(Gen *g) {
     // Dynamic lists: [capacity(8) | count(8) | elem0(8) | ...]
     // For simplicity, we use: [count | e0 | e1 | ...] with realloc on push
 
-    // _list_new() -> empty heap list (capacity 64)
-    fprintf(g->out, "// built-in: _list_new() -> list ptr\n");
+    // List layout (indirection for growable):
+    //   Header (fixed, 24 bytes): [capacity | count | data_ptr]
+    //   Data (growable): [elem0 | elem1 | ...]
+    // On push when full: alloc 2x, copy, free old, update data_ptr
+
+    // _list_new() -> heap list header (initial capacity 8)
+    fprintf(g->out, "// built-in: _list_new() -> list header ptr\n");
     fprintf(g->out, ".globl _list_new\n.p2align 2\n_list_new:\n");
     fprintf(g->out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
-    // Alloc: 8 (count) + 8*64 (64 slots) = 520 bytes
-    fprintf(g->out, "    mov x0, #520\n    bl _heap_alloc\n");
-    fprintf(g->out, "    str xzr, [x0]\n"); // count = 0
+    // Alloc header (24 bytes)
+    fprintf(g->out, "    mov x0, #24\n    bl _heap_alloc\n");
+    fprintf(g->out, "    mov x19, x0\n"); // save header ptr
+    fprintf(g->out, "    str x19, [sp, #-16]!\n");
+    // Alloc initial data (8 slots * 8 bytes = 64)
+    fprintf(g->out, "    mov x0, #64\n    bl _heap_alloc\n");
+    fprintf(g->out, "    ldr x19, [sp], #16\n");
+    fprintf(g->out, "    mov x1, #8\n");
+    fprintf(g->out, "    str x1, [x19]\n");       // capacity = 8
+    fprintf(g->out, "    str xzr, [x19, #8]\n");  // count = 0
+    fprintf(g->out, "    str x0, [x19, #16]\n");  // data_ptr
+    fprintf(g->out, "    mov x0, x19\n");
     fprintf(g->out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 
-    // _list_push(list, value) -> appends value (max 64 elements)
+    // _list_push(x0=list, x1=value) -> grows if needed
     fprintf(g->out, "// built-in: _list_push(x0=list, x1=value)\n");
     fprintf(g->out, ".globl _list_push\n.p2align 2\n_list_push:\n");
-    fprintf(g->out, "    ldr x2, [x0]\n");          // count
-    fprintf(g->out, "    cmp x2, #64\n");            // capacity check
-    fprintf(g->out, "    b.ge _panic_capacity\n");
-    fprintf(g->out, "    add x3, x2, #1\n");        // new slot index (count+1 because [0]=count)
-    fprintf(g->out, "    str x1, [x0, x3, lsl #3]\n"); // store at [count+1]
-    fprintf(g->out, "    add x2, x2, #1\n");
-    fprintf(g->out, "    str x2, [x0]\n");          // update count
-    fprintf(g->out, "    ret\n\n");
+    fprintf(g->out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
+    fprintf(g->out, "    stp x19, x20, [sp, #-16]!\n");
+    fprintf(g->out, "    mov x19, x0\n");          // header
+    fprintf(g->out, "    mov x20, x1\n");          // value
+    fprintf(g->out, "    ldr x2, [x19]\n");        // capacity
+    fprintf(g->out, "    ldr x3, [x19, #8]\n");    // count
+    fprintf(g->out, "    cmp x3, x2\n");
+    fprintf(g->out, "    b.lt _lp_store\n");
+    // Grow: alloc 2x capacity
+    fprintf(g->out, "    lsl x4, x2, #1\n");      // new_cap = cap * 2
+    fprintf(g->out, "    str x4, [x19]\n");        // update capacity
+    fprintf(g->out, "    lsl x0, x4, #3\n");       // new_cap * 8 bytes
+    fprintf(g->out, "    str x3, [sp, #-16]!\n");  // save count
+    fprintf(g->out, "    bl _heap_alloc\n");        // new data
+    fprintf(g->out, "    ldr x3, [sp], #16\n");    // restore count
+    fprintf(g->out, "    mov x5, x0\n");           // x5 = new data
+    fprintf(g->out, "    ldr x6, [x19, #16]\n");   // x6 = old data
+    // Copy old elements
+    fprintf(g->out, "    mov x7, #0\n");
+    fprintf(g->out, "_lp_copy:\n");
+    fprintf(g->out, "    cmp x7, x3\n");
+    fprintf(g->out, "    b.ge _lp_copied\n");
+    fprintf(g->out, "    ldr x8, [x6, x7, lsl #3]\n");
+    fprintf(g->out, "    str x8, [x5, x7, lsl #3]\n");
+    fprintf(g->out, "    add x7, x7, #1\n");
+    fprintf(g->out, "    b _lp_copy\n");
+    fprintf(g->out, "_lp_copied:\n");
+    // Free old data
+    fprintf(g->out, "    mov x0, x6\n");
+    fprintf(g->out, "    lsr x1, x3, #0\n");      // old size (count*8 approx)
+    fprintf(g->out, "    lsl x1, x3, #3\n");
+    fprintf(g->out, "    bl _heap_free\n");
+    // Update data_ptr
+    fprintf(g->out, "    str x5, [x19, #16]\n");
+    fprintf(g->out, "    ldr x3, [x19, #8]\n");   // reload count
+    fprintf(g->out, "    mov x0, x5\n");           // data = new
+    fprintf(g->out, "    b _lp_do_store\n");
+    fprintf(g->out, "_lp_store:\n");
+    fprintf(g->out, "    ldr x0, [x19, #16]\n");  // data_ptr
+    fprintf(g->out, "_lp_do_store:\n");
+    fprintf(g->out, "    str x20, [x0, x3, lsl #3]\n"); // data[count] = value
+    fprintf(g->out, "    add x3, x3, #1\n");
+    fprintf(g->out, "    str x3, [x19, #8]\n");    // count++
+    fprintf(g->out, "    ldp x19, x20, [sp], #16\n");
+    fprintf(g->out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 
-    // _list_pop(list) -> removes and returns last element
+    // _list_pop(x0=list) -> removes and returns last element
     fprintf(g->out, "// built-in: _list_pop(x0=list) -> value\n");
     fprintf(g->out, ".globl _list_pop\n.p2align 2\n_list_pop:\n");
-    fprintf(g->out, "    ldr x1, [x0]\n");          // count
-    fprintf(g->out, "    cbz x1, _lp_empty\n");
-    fprintf(g->out, "    ldr x2, [x0, x1, lsl #3]\n"); // load last element at [count]
+    fprintf(g->out, "    ldr x1, [x0, #8]\n");     // count
+    fprintf(g->out, "    cbz x1, _lpop_empty\n");
     fprintf(g->out, "    sub x1, x1, #1\n");
-    fprintf(g->out, "    str x1, [x0]\n");          // decrement count
-    fprintf(g->out, "    mov x0, x2\n");
+    fprintf(g->out, "    str x1, [x0, #8]\n");     // count--
+    fprintf(g->out, "    ldr x2, [x0, #16]\n");    // data_ptr
+    fprintf(g->out, "    ldr x0, [x2, x1, lsl #3]\n"); // data[count-1]
     fprintf(g->out, "    ret\n");
-    fprintf(g->out, "_lp_empty:\n    mov x0, #0\n    ret\n\n");
+    fprintf(g->out, "_lpop_empty:\n    mov x0, #0\n    ret\n\n");
 
-    // _list_len(list) -> count
+    // _list_len(x0=list) -> count
     fprintf(g->out, "// built-in: _list_len(x0=list) -> count\n");
     fprintf(g->out, ".globl _list_len\n.p2align 2\n_list_len:\n");
-    fprintf(g->out, "    ldr x0, [x0]\n    ret\n\n");
+    fprintf(g->out, "    ldr x0, [x0, #8]\n    ret\n\n");
 }
 
 void codegen(Node *program, const char *output_path) {
