@@ -123,11 +123,10 @@ c is rep b          // clone — shallow copy (pointer copy)
 
 {
   temp is Point()
-}                   // scope tracked (real free requires v0.2 allocator)
+}                   // temp freed here (RAII)
 ```
 
-> **Note:** RAII scope tracking is implemented (the compiler knows what to free and when) but the
-> bump allocator does not reclaim memory. Real deallocation is planned for v0.2.
+> **Note:** RAII is real — heap allocations are freed when their scope ends.
 > `rep` performs a shallow copy (pointer copy), not a deep clone.
 > `ref` is parsed but borrow rules are not enforced by the checker yet.
 
@@ -191,7 +190,7 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 | Function arg count validation | ✅ |
 | Unknown function/type detection | ✅ |
 | Structs (heap-allocated) | ✅ |
-| Dynamic lists (push/pop/len, max 8) | ✅ |
+| Dynamic lists (push/pop/len, growable) | ✅ |
 | Ordered maps (set/get/keys/len, max 16) | ✅ |
 | Conditionals (?{ / nah) | ✅ |
 | Loops (through range, through in, infi) | ✅ |
@@ -204,12 +203,12 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 | Negative numbers | ✅ |
 | Method syntax (obj.method()) | ✅ |
 | Scoped blocks ({} for lifetimes) | ✅ |
+| RAII (heap freed at scope end) | ✅ |
 | `erbos run` (compile + execute + cleanup) | ✅ |
 
 ### Partial / Experimental
 | Feature | Status |
 |---------|--------|
-| RAII scope tracking | Compiler tracks allocations per scope; emits cleanup markers. Bump allocator does not actually free. |
 | Clone (`is rep`) | Shallow copy (pointer copy). Deep clone not implemented. |
 | `ref` params | Parsed and stored. Borrow/mutation rules not enforced by checker or codegen. |
 | Struct field access | Resolves field by name across all structs, not per-type. Works if field names are unique. |
@@ -220,7 +219,6 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 ### Planned (v0.2+)
 | Feature | Status |
 |---------|--------|
-| Real deallocation (free at scope end) | Requires replacing bump allocator |
 | Deep clone for `rep` | Requires type-aware copy |
 | Borrow checker (`ref` enforcement) | Requires full type propagation in codegen |
 | Per-struct field resolution | Requires type tracking through variables |
@@ -230,7 +228,6 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 | Traits / interfaces | — |
 | Generics (monomorphization) | — |
 | Multi-file imports | — |
-| Growable lists/maps | — |
 | Operator overloading | — |
 | Self-hosting | — |
 
@@ -253,15 +250,15 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 
 ### Potato vs Rust
 **Wins:** Simpler syntax, no lifetime annotations, faster to learn, instant compilation.
-**Loses:** No borrow checker, no real deallocation yet, no ecosystem.
+**Loses:** No borrow checker, no ecosystem.
 
 ### Potato vs C++
 **Wins:** No headers, no UB, no preprocessor, readable syntax, compile-time move checking.
-**Loses:** No templates, no operator overloading, no real RAII deallocation yet, less control.
+**Loses:** No templates, no operator overloading, less control.
 
 ### Potato vs Go
 **Wins:** No GC, move semantics prevent some leaks, word-based syntax.
-**Loses:** No goroutine integration in compiled output, single-file only, bump allocator leaks.
+**Loses:** No goroutine integration in compiled output, single-file only.
 
 ### Potato vs Python
 **Wins:** 100x+ faster, compiled, type safe at compile time, no runtime needed.
@@ -271,11 +268,9 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 
 ## Roadmap
 
-- [ ] Real deallocation (replace bump allocator with free-list)
 - [ ] Deep clone for `rep`
 - [ ] Borrow checker (`ref` enforcement)
 - [ ] Per-struct type-aware field resolution
-- [ ] Growable lists and maps (beyond 8/16 capacity)
 - [ ] Enums with data (algebraic types)
 - [ ] Pattern matching
 - [ ] Result/Option types
@@ -286,6 +281,12 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 - [ ] Compile-time evaluation
 - [ ] Built-in tooling (fmt, test, build)
 - [ ] Self-hosting (compiler written in Potato)
+
+---
+
+## Testing
+
+`make test` runs: passing examples, compile error tests, runtime panic tests, C runtime tests, and output-validated leetcode tests.
 
 ---
 

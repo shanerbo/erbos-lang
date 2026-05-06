@@ -8,7 +8,7 @@
 | `nomut` | immutable variable | `nomut x is 10` |
 | `give` | return value from function | `give x + y` |
 | `now` | move ownership | `b is now a` |
-| `rep` | clone (deep copy) | `b is rep a` |
+| `rep` | clone (shallow copy) | `b is rep a` |
 | `ref` | mutable borrow (param) | `func(p ref int) { }` |
 | `through` | range/collection loop | `through (i from 0 to 10 by 1) { }` |
 | `from` | loop range start | see `through` |

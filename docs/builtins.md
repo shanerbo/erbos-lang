@@ -6,11 +6,20 @@
 |----------|-------------|---------|
 | `yell(value)` | Print int or string to stdout with newline | `yell(42)`, `yell("hi")` |
 
+## Universal
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `len(value)` | Get length of list, map, or string | `len(nums)`, `len(m)`, `len("hi")` |
+
 ## Strings
 
 | Function | Description | Example |
 |----------|-------------|---------|
 | `str_concat(a, b)` | Concatenate two strings | `str_concat("hello", " world")` |
+| `str_len(s)` | Get string length | `str_len("hello")` → 5 |
+| `char_at(s, i)` | Get character at index | `char_at("hello", 0)` → "h" |
+| `int_to_str(n)` | Convert int to string | `int_to_str(42)` → "42" |
 
 String interpolation is built into the language:
 ```
@@ -64,4 +73,4 @@ p.x be 10
 
 All allocations are heap-backed via `mmap` syscall. No libc dependency.
 
-RAII is implemented — heap allocations are automatically freed when their scope ends. Move semantics (`is now`) transfer ownership. Clone (`is rep`) creates deep copies.
+RAII is implemented — heap allocations are automatically freed when their scope ends. Move semantics (`is now`) transfer ownership. Clone (`is rep`) creates shallow copies (pointer copy). Deep clone is not yet implemented.

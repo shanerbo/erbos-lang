@@ -28,6 +28,9 @@ All variables must be initialized. `x is int` without a value is a compile error
 | `int` | 64-bit signed integer |
 | `str` | string |
 | `bool` | `true` or `false` |
+| `list` | dynamic list |
+| `map` | ordered map |
+| *StructName* | any user-defined struct (e.g. `Point`) |
 
 ## Functions
 
@@ -226,7 +229,7 @@ b is now a          // a is dead, b owns it
 ```
 
 ### Clone
-Deep copy — both live:
+Shallow copy (pointer copy) — both point to same data:
 ```
 a is Point()
 b is rep a          // b is a copy, both live
@@ -257,6 +260,8 @@ spark {
   reset(ref p)     // caller acknowledges mutation
 }
 ```
+
+> **Note:** `ref` is parsed but borrow rules are not yet enforced by the compiler. Mutation of non-ref params is not blocked.
 
 ## Immutability
 
@@ -300,6 +305,8 @@ worker() {
   yell("working")
 }
 ```
+
+> **Note:** Concurrency (`task`) compiles but runs synchronously in compiled .ptt output. The full green thread runtime is a separate C library not yet integrated.
 
 ## Comments
 
