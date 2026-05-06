@@ -27,6 +27,7 @@ typedef enum {
     NODE_FIELD_ACCESS,
     NODE_INDEX,
     NODE_LIST_LIT,
+    NODE_MAP_LIT,
     NODE_STOP,
     NODE_SKIP,
 } NodeType;
@@ -170,6 +171,9 @@ struct Node {
 
         // NODE_LIST_LIT
         struct { Node **items; int count; } list_lit;
+
+        // NODE_MAP_LIT
+        struct { Node **keys; Node **values; int count; } map_lit;
     };
 };
 

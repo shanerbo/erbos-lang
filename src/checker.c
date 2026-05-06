@@ -285,6 +285,13 @@ static Type check_expr(Checker *c, Node *n) {
                 check_expr(c, n->list_lit.items[i]);
             return make_type(TYPE_LIST);
         }
+        case NODE_MAP_LIT: {
+            for (int i = 0; i < n->map_lit.count; i++) {
+                check_expr(c, n->map_lit.keys[i]);
+                check_expr(c, n->map_lit.values[i]);
+            }
+            return make_type(TYPE_MAP);
+        }
         default: return make_type(TYPE_UNKNOWN);
     }
 }

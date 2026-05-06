@@ -445,6 +445,23 @@ static void emit_expr(Gen *g, Node *n) {
             }
             break;
         }
+        case NODE_MAP_LIT: {
+            // Create map then set each entry
+            fprintf(g->out, "    bl _map_new\n");
+            for (int i = 0; i < n->map_lit.count; i++) {
+                fprintf(g->out, "    str x0, [sp, #-16]!\n"); // save map
+                emit_expr(g, n->map_lit.values[i]);
+                fprintf(g->out, "    str x0, [sp, #-16]!\n"); // save value
+                emit_expr(g, n->map_lit.keys[i]);
+                fprintf(g->out, "    mov x1, x0\n");          // key in x1
+                fprintf(g->out, "    ldr x2, [sp], #16\n");   // value in x2
+                fprintf(g->out, "    ldr x0, [sp], #16\n");   // map in x0
+                fprintf(g->out, "    str x0, [sp, #-16]!\n"); // save map again
+                fprintf(g->out, "    bl _map_set\n");
+                fprintf(g->out, "    ldr x0, [sp], #16\n");   // restore map
+            }
+            break;
+        }
         default:
             fprintf(stderr, "error: cannot emit expression node type %d\n", n->type);
             exit(1);

@@ -95,22 +95,48 @@ static Node *parse_primary(Parser *p) {
         n->call.arg_count = 0;
         return n;
     }
-    // List literal [1, 2, 3]
+    // List literal [1, 2, 3] or Map literal ["a" to 1, "b" to 2]
     if (at(p, TOK_LBRACKET)) {        p->pos++;
-        Node *n = alloc_node(NODE_LIST_LIT, line);
-        int cap = 8;
-        n->list_lit.items = malloc(cap * sizeof(Node *));
-        n->list_lit.count = 0;
-        if (!at(p, TOK_RBRACKET)) {
-            n->list_lit.items[n->list_lit.count++] = parse_expr(p);
+        if (at(p, TOK_RBRACKET)) {
+            p->pos++;
+            Node *n = alloc_node(NODE_LIST_LIT, line);
+            n->list_lit.items = NULL;
+            n->list_lit.count = 0;
+            return n;
+        }
+        Node *first = parse_expr(p);
+        if (at(p, TOK_TO)) {
+            // Map literal: ["a" to 1, "b" to 2]
+            p->pos++;
+            Node *first_val = parse_expr(p);
+            int cap = 8;
+            Node *n = alloc_node(NODE_MAP_LIT, line);
+            n->map_lit.keys = malloc(cap * sizeof(Node *));
+            n->map_lit.values = malloc(cap * sizeof(Node *));
+            n->map_lit.keys[0] = first;
+            n->map_lit.values[0] = first_val;
+            n->map_lit.count = 1;
             while (at(p, TOK_COMMA)) {
                 p->pos++;
-                if (n->list_lit.count >= cap) {
-                    cap *= 2;
-                    n->list_lit.items = realloc(n->list_lit.items, cap * sizeof(Node *));
-                }
-                n->list_lit.items[n->list_lit.count++] = parse_expr(p);
+                if (n->map_lit.count >= cap) { cap *= 2; n->map_lit.keys = realloc(n->map_lit.keys, cap * sizeof(Node *)); n->map_lit.values = realloc(n->map_lit.values, cap * sizeof(Node *)); }
+                n->map_lit.keys[n->map_lit.count] = parse_expr(p);
+                eat(p, TOK_TO);
+                n->map_lit.values[n->map_lit.count] = parse_expr(p);
+                n->map_lit.count++;
             }
+            eat(p, TOK_RBRACKET);
+            return n;
+        }
+        // List literal
+        int cap = 8;
+        Node *n = alloc_node(NODE_LIST_LIT, line);
+        n->list_lit.items = malloc(cap * sizeof(Node *));
+        n->list_lit.items[0] = first;
+        n->list_lit.count = 1;
+        while (at(p, TOK_COMMA)) {
+            p->pos++;
+            if (n->list_lit.count >= cap) { cap *= 2; n->list_lit.items = realloc(n->list_lit.items, cap * sizeof(Node *)); }
+            n->list_lit.items[n->list_lit.count++] = parse_expr(p);
         }
         eat(p, TOK_RBRACKET);
         return n;
