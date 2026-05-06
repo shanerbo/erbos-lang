@@ -58,3 +58,21 @@ spark {
 3. Both brute force and optimal solutions when possible
 4. All test cases must pass via `make test` (output validated against .expected)
 5. Do not modify solution code to work around compiler issues
+
+## Validating Output
+
+Run all leetcode tests with output validation:
+```bash
+make test
+```
+
+Run a single solution and compare manually:
+```bash
+./erbos run examples/leetcode/two_sum.ptt > /tmp/actual.txt
+diff /tmp/actual.txt examples/leetcode/two_sum.ptt.expected
+```
+
+Regenerate `.expected` after confirming correctness:
+```bash
+./erbos run examples/leetcode/two_sum.ptt > examples/leetcode/two_sum.ptt.expected
+```
