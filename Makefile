@@ -21,10 +21,20 @@ test-pass: $(OUT)
 	for f in examples/*.ptt examples/leetcode/*.ptt; do \
 		b=$$(basename $$f); \
 		case $$b in nomut_test.ptt|oob_test.ptt|move_test.ptt) continue;; esac; \
-		if ! ./$(OUT) run "$$f" > /dev/null 2>&1; then \
-			echo "  FAIL: $$b"; fail=1; \
+		if [ -f "$$f.expected" ]; then \
+			actual=$$(./$(OUT) run "$$f" 2>/dev/null); \
+			expected=$$(cat "$$f.expected"); \
+			if [ "$$actual" = "$$expected" ]; then \
+				echo "  OK:   $$f (output verified)"; \
+			else \
+				echo "  FAIL: $$f (output mismatch)"; fail=1; \
+			fi; \
 		else \
-			echo "  OK:   $$b"; \
+			if ! ./$(OUT) run "$$f" > /dev/null 2>&1; then \
+				echo "  FAIL: $$b"; fail=1; \
+			else \
+				echo "  OK:   $$b"; \
+			fi; \
 		fi; \
 	done; \
 	[ $$fail -eq 0 ] || (echo "Some passing tests failed"; exit 1)
