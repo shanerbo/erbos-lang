@@ -383,17 +383,41 @@ static Node *parse_stmt(Parser *p) {
                         n->var_decl.elem_type_name = cur(p)->value;
                         p->pos++; // skip type
                     }
+                } else if (at(p, TOK_MAP)) {
+                    n->var_decl.type_name = "map";
+                    p->pos++;
+                    if (at(p, TOK_OF)) {
+                        p->pos++; // skip 'of'
+                        n->var_decl.key_type_name = cur(p)->value;
+                        p->pos++; // skip key type
+                        if (at(p, TOK_TO)) {
+                            p->pos++; // skip 'to'
+                            n->var_decl.val_type_name = cur(p)->value;
+                            p->pos++; // skip val type
+                        }
+                    }
                 } else {
                     n->var_decl.type_name = cur(p)->value;
                     p->pos++;
                 }
             }
-            // If no value expression — compile error
+            // If no value expression — auto-construct for list/map/task, error for others
             if (at(p, TOK_NEWLINE) || at(p, TOK_EOF)) {
-                fprintf(stderr, "%s:%d: error: variable '%s' must be initialized with a value\n", p->filename, line, name);
-                exit(1);
+                if (n->var_decl.type_name && (!strcmp(n->var_decl.type_name, "list") ||
+                    !strcmp(n->var_decl.type_name, "map") || !strcmp(n->var_decl.type_name, "task"))) {
+                    // Auto-create constructor: list() / map() / task()
+                    Node *call = alloc_node(NODE_CALL, line);
+                    call->call.name = n->var_decl.type_name;
+                    call->call.args = NULL;
+                    call->call.arg_count = 0;
+                    n->var_decl.value = call;
+                } else {
+                    fprintf(stderr, "%s:%d: error: variable '%s' must be initialized with a value\n", p->filename, line, name);
+                    exit(1);
+                }
+            } else {
+                n->var_decl.value = parse_expr(p);
             }
-            n->var_decl.value = parse_expr(p);
             return n;
         }
         // assignment: IDENT be ...
