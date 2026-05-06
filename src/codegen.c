@@ -334,7 +334,7 @@ static void emit_expr(Gen *g, Node *n) {
             // List methods: push, pop, len
             if (!strcmp(method, "push") || !strcmp(method, "pop") || !strcmp(method, "len")) {
                 emit_expr(g, n->method_call.object);
-                if (n->method_call.arg_count > 0) {
+                if (n->method_call.arg_count == 1) {
                     fprintf(g->out, "    str x0, [sp, #-16]!\n");
                     emit_expr(g, n->method_call.args[0]);
                     fprintf(g->out, "    mov x1, x0\n");
@@ -1200,6 +1200,13 @@ static void emit_list_builtins(Gen *g) {
     fprintf(g->out, "// built-in: _list_len(x0=list) -> count\n");
     fprintf(g->out, ".globl _list_len\n.p2align 2\n_list_len:\n");
     fprintf(g->out, "    ldr x0, [x0, #8]\n    ret\n\n");
+
+    // _list_set(x0=list, x1=index, x2=value) -> sets element at index
+    fprintf(g->out, "// built-in: _list_set(x0=list, x1=index, x2=value)\n");
+    fprintf(g->out, ".globl _list_set\n.p2align 2\n_list_set:\n");
+    fprintf(g->out, "    ldr x3, [x0, #16]\n");    // data_ptr
+    fprintf(g->out, "    str x2, [x3, x1, lsl #3]\n"); // data[index] = value
+    fprintf(g->out, "    ret\n\n");
 }
 
 void codegen(Node *program, const char *output_path) {
