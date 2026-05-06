@@ -37,8 +37,24 @@ typedef struct {
     int found_give;
 } Checker;
 
-static Type make_type(TypeKind k) { return (Type){k, NULL}; }
-static Type make_struct(const char *name) { return (Type){TYPE_STRUCT, (char *)name}; }
+static Type make_type(TypeKind k) { return (Type){k, NULL, NULL, NULL, NULL}; }
+static Type make_struct(const char *name) { return (Type){TYPE_STRUCT, (char *)name, NULL, NULL, NULL}; }
+
+static Type *alloc_type(Type t) {
+    Type *p = malloc(sizeof(Type));
+    *p = t;
+    return p;
+}
+
+static Type make_list_of(Type elem) {
+    Type t = {TYPE_LIST, NULL, alloc_type(elem), NULL, NULL};
+    return t;
+}
+
+static Type make_map_of(Type key, Type val) {
+    Type t = {TYPE_MAP, NULL, NULL, alloc_type(key), alloc_type(val)};
+    return t;
+}
 
 static int types_equal(Type a, Type b) {
     if (a.kind != b.kind) return 0;
@@ -215,12 +231,32 @@ static Type check_expr(Checker *c, Node *n) {
         }
         case NODE_METHOD_CALL: {
             const char *m = n->method_call.method;
-            check_expr(c, n->method_call.object);
+            Type obj_t = check_expr(c, n->method_call.object);
+            if (!strcmp(m, "push")) {
+                if (n->method_call.arg_count > 0) {
+                    Type arg_t = check_expr(c, n->method_call.args[0]);
+                    // Validate element type if list has generic info
+                    if (obj_t.elem_type && arg_t.kind != TYPE_UNKNOWN && obj_t.elem_type->kind != TYPE_UNKNOWN) {
+                        if (!types_equal(arg_t, *obj_t.elem_type)) {
+                            fprintf(stderr, "error:%d: cannot push '%s' into list of '%s'\n",
+                                n->line, type_name(arg_t), type_name(*obj_t.elem_type));
+                            exit(1);
+                        }
+                    }
+                }
+                return make_type(TYPE_VOID);
+            }
             if (!strcmp(m, "len")) return make_type(TYPE_INT);
-            if (!strcmp(m, "pop")) return make_type(TYPE_INT);
-            if (!strcmp(m, "get")) return make_type(TYPE_INT);
+            if (!strcmp(m, "pop")) {
+                if (obj_t.elem_type) return *obj_t.elem_type;
+                return make_type(TYPE_UNKNOWN);
+            }
+            if (!strcmp(m, "get")) {
+                if (obj_t.val_type) return *obj_t.val_type;
+                return make_type(TYPE_UNKNOWN);
+            }
             if (!strcmp(m, "keys")) return make_type(TYPE_LIST);
-            if (!strcmp(m, "push") || !strcmp(m, "set") || !strcmp(m, "fire") || !strcmp(m, "collapse")) return make_type(TYPE_VOID);
+            if (!strcmp(m, "set") || !strcmp(m, "fire") || !strcmp(m, "collapse")) return make_type(TYPE_VOID);
             // User method
             FuncInfo *fi = find_func(c, m);
             if (fi) return fi->return_type;
@@ -238,9 +274,11 @@ static Type check_expr(Checker *c, Node *n) {
             return make_type(TYPE_INT); // all fields are int for now
         }
         case NODE_INDEX: {
-            check_expr(c, n->index_access.object);
+            Type obj_t = check_expr(c, n->index_access.object);
             check_expr(c, n->index_access.index);
-            return make_type(TYPE_UNKNOWN); // element type unknown without generics
+            // Return element type if known
+            if (obj_t.elem_type) return *obj_t.elem_type;
+            return make_type(TYPE_UNKNOWN);
         }
         case NODE_LIST_LIT: {
             for (int i = 0; i < n->list_lit.count; i++)
@@ -277,6 +315,14 @@ static void check_stmt(Checker *c, Node *n) {
     switch (n->type) {
         case NODE_VAR_DECL: {
             Type t = check_expr(c, n->var_decl.value);
+            // If declaration has explicit generic type, use it
+            if (n->var_decl.elem_type_name && t.kind == TYPE_LIST) {
+                t = make_list_of(parse_type_str(c, n->var_decl.elem_type_name));
+            }
+            if (n->var_decl.key_type_name && n->var_decl.val_type_name && t.kind == TYPE_MAP) {
+                t = make_map_of(parse_type_str(c, n->var_decl.key_type_name),
+                                parse_type_str(c, n->var_decl.val_type_name));
+            }
             set_sym(c, n->var_decl.name, t);
             break;
         }

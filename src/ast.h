@@ -74,9 +74,12 @@ struct Node {
         struct {
             char *name;
             char *type_name;
+            char *elem_type_name;  // for list of X
+            char *key_type_name;   // for map of X to Y
+            char *val_type_name;   // for map of X to Y
             int is_nomut;
-            int is_move;    // b is now a
-            int is_rep;     // b is rep a
+            int is_move;
+            int is_rep;
             Node *value;
         } var_decl;
 

@@ -13,9 +13,12 @@ typedef enum {
     TYPE_UNKNOWN,
 } TypeKind;
 
-typedef struct {
+typedef struct Type {
     TypeKind kind;
-    char *struct_name;  // for TYPE_STRUCT
+    char *struct_name;       // for TYPE_STRUCT
+    struct Type *elem_type;  // for TYPE_LIST: element type
+    struct Type *key_type;   // for TYPE_MAP: key type
+    struct Type *val_type;   // for TYPE_MAP: value type
 } Type;
 
 #endif

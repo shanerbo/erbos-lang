@@ -378,7 +378,11 @@ static Node *parse_stmt(Parser *p) {
                 } else if (at(p, TOK_LIST)) {
                     n->var_decl.type_name = "list";
                     p->pos++;
-                    if (at(p, TOK_OF)) { p->pos++; p->pos++; }
+                    if (at(p, TOK_OF)) {
+                        p->pos++; // skip 'of'
+                        n->var_decl.elem_type_name = cur(p)->value;
+                        p->pos++; // skip type
+                    }
                 } else {
                     n->var_decl.type_name = cur(p)->value;
                     p->pos++;
