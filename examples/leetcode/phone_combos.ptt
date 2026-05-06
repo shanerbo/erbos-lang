@@ -1,8 +1,6 @@
 // Leetcode 17: Letter Combinations of a Phone Number
-// Iterative BFS approach
-//
-// Start with [""], for each digit, expand each existing combo
-// by appending each letter for that digit.
+// Approach: Recursive backtracking
+// Time: O(4^n)  Space: O(n)
 
 get_letters(digit str) str {
   digit eq "2" ?{ give "abc" }
@@ -16,37 +14,42 @@ get_letters(digit str) str {
   give ""
 }
 
-spark {
-  // Test: "23" → ad, ae, af, bd, be, bf, cd, ce, cf
-  digits is "23"
+backtrack(digits str, index int, current str, n int) {
+  index eq n ?{
+    yell(current)
+    give
+  }
+  digit is char_at(digits, index)
+  letters is get_letters(digit)
+  num_letters is len(letters)
+  through (i from 0 to num_letters by 1) {
+    ch is char_at(letters, i)
+    next is current + ch
+    backtrack(digits, index + 1, next, n)
+  }
+}
+
+solve(digits str) {
   n is len(digits)
+  n eq 0 ?{ give }
+  backtrack(digits, 0, "", n)
+}
 
-  // Start with one empty string
-  results is list()
-  results.push("")
+spark {
+  // Easy: single digit
+  solve("2")
+  yell("---")
+  solve("9")
+  yell("---")
 
-  through (i from 0 to n by 1) {
-    digit is char_at(digits, i)
-    letters is get_letters(digit)
-    num_letters is len(letters)
+  // Medium: two digits
+  solve("23")
+  yell("---")
+  solve("79")
+  yell("---")
+  solve("45")
+  yell("---")
 
-    // Build next set of results
-    next is list()
-    cur_len is len(results)
-    through (r from 0 to cur_len by 1) {
-      combo is results[r]
-      through (l from 0 to num_letters by 1) {
-        ch is char_at(letters, l)
-        new_combo is combo + ch
-        next.push(new_combo)
-      }
-    }
-    results be next
-  }
-
-  // Print results
-  result_len is len(results)
-  through (i from 0 to result_len by 1) {
-    yell(results[i])
-  }
+  // Hard: three digits
+  solve("234")
 }

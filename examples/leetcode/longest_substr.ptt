@@ -1,38 +1,19 @@
 // Leetcode 3: Longest Substring Without Repeating Characters
-// Sliding window approach - O(n)
-//
-// For each character, if we've seen it and its last position >= window start,
-// move window start past it. Track max window size.
-
-spark {
-  // Test 1: "abcabcbb" → 3 ("abc")
-  s is "abcabcbb"
-  yell(longest(s, len(s)))
-
-  // Test 2: "bbbbb" → 1 ("b")
-  s2 is "bbbbb"
-  yell(longest(s2, str_len(s2)))
-
-  // Test 3: "pwwkew" → 3 ("wke")
-  s3 is "pwwkew"
-  yell(longest(s3, str_len(s3)))
-}
+// Approach: O(n) sliding window with map
+// Time: O(n)  Space: O(min(n, alphabet))
 
 longest(s str, n int) int {
   seen is map()
   start is 0
   max_len is 0
-
   through (i from 0 to n by 1) {
     ch is char_at(s, i)
     prev is seen.get(ch)
-    // prev is index+1 (0 means not seen)
     prev ne 0 ?{
       prev - 1 ge start ?{
         start be prev
       }
     }
-    // Current window length
     cur is i - start + 1
     cur gt max_len ?{
       max_len be cur
@@ -40,4 +21,32 @@ longest(s str, n int) int {
     seen.set(ch, i + 1)
   }
   give max_len
+}
+
+spark {
+  // Easy (5 cases)
+  yell(longest("a", 1))
+  yell(longest("ab", 2))
+  yell(longest("aa", 2))
+  yell(longest("", 0))
+  yell(longest("abc", 3))
+
+  // Medium (10 cases)
+  yell(longest("abcabcbb", 8))
+  yell(longest("bbbbb", 5))
+  yell(longest("pwwkew", 6))
+  yell(longest("abcdef", 6))
+  yell(longest("aab", 3))
+  yell(longest("dvdf", 4))
+  yell(longest("anviaj", 6))
+  yell(longest("tmmzuxt", 7))
+  yell(longest("abba", 4))
+  yell(longest("abcb", 4))
+
+  // Hard (5 cases)
+  yell(longest("abcdefghij", 10))
+  yell(longest("abcdeafghij", 11))
+  yell(longest("aaaaaaaaa", 9))
+  yell(longest("abcdabcde", 9))
+  yell(longest("wobgrovw", 8))
 }

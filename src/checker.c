@@ -90,8 +90,10 @@ static Type parse_type_str(Checker *c, const char *t) {
     if (!strcmp(t, "str")) return make_type(TYPE_STR);
     if (!strcmp(t, "bool")) return make_type(TYPE_BOOL);
     if (!strcmp(t, "void")) return make_type(TYPE_VOID);
+    if (!strcmp(t, "list")) return make_type(TYPE_LIST);
+    if (!strcmp(t, "map")) return make_type(TYPE_MAP);
     if (is_struct(c, t)) return make_struct(t);
-    return make_type(TYPE_INT); // fallback for unrecognized
+    return make_type(TYPE_INT);
 }
 
 static const char *type_name(Type t) {
