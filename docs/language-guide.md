@@ -1,4 +1,4 @@
-# Erbos Language Guide
+# Erbos Language Guide 🥔
 
 ## Entry Point
 
@@ -312,11 +312,11 @@ worker() {
 
 ## File Extension
 
-All source files use `.ptt` extension.
+All source files use `.ptt` 🥔 extension.
 
 ## Build & Run
 
 ```bash
 ./erbos program.ptt    # compile to binary
-./erbos run program.ptt # compile + run + cleanup
+./erbos run program.ptt # compile + run + cleanup 🥔
 ```

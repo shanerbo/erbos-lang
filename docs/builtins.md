@@ -1,4 +1,4 @@
-# Erbos Built-in Functions
+# Erbos Built-in Functions 🥔
 
 ## Output
 

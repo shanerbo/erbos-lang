@@ -1,4 +1,4 @@
-# Erbos Keywords
+# Erbos Keywords 🥔
 
 | Keyword | Purpose | Example |
 |---------|---------|---------|

@@ -1,4 +1,4 @@
-# Erbos Examples
+# Erbos Examples 🥔
 
 ## Hello World
 ```

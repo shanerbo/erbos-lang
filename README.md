@@ -1,8 +1,10 @@
-# Erbos
+# Erbos 🥔
 
 A systems programming language that reads like English, compiles to native code, and doesn't need a runtime.
 
 **No garbage collector. No libc. No exceptions. Just raw performance with words you can actually read.**
+
+Files use the `.ptt` extension — short for potato. 🥔
 
 ```
 spark {
@@ -38,7 +40,7 @@ spark {
 # Build the compiler
 make
 
-# Compile and run in one shot
+# Compile and run in one shot 🥔
 ./erbos run hello.ptt
 
 # Or compile to binary
@@ -290,7 +292,7 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 ## Architecture
 
 ```
-source.ptt → [Lexer] → [Parser] → [Type Checker] → [Codegen] → ARM64 .s → [as + ld] → binary
+source.ptt 🥔 → [Lexer] → [Parser] → [Type Checker] → [Codegen] → ARM64 .s → [as + ld] → binary
 ```
 
 Written in C. ~2500 lines. No dependencies.
