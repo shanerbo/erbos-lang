@@ -28,7 +28,7 @@ spark {
 - **Reads like English** — `is`, `be`, `give`, `nah`, `through`, `infi`, `stop`, `skip`
 - **Compiles to native ARM64** — no VM, no interpreter, no runtime
 - **Zero dependencies** — no libc, just syscalls
-- **Memory safe** — use-after-move detection, bounds checking, capacity panics
+- **Memory safe** — use-after-move detection, bounds checking
 - **Type checked** — catches mismatches at compile time
 - **Fast compilation** — instant builds, single-pass compiler
 
@@ -104,6 +104,7 @@ p.x be 10
 ### Collections
 ```
 nums is [1, 2, 3]         // list literal
+m is ["name" to "alice", "score" to 100]
 nums is list of int          // typed dynamic list
 nums.push(4)
 yell(nums.pop())
@@ -197,8 +198,7 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 | Move semantics (`is now`) | ✅ |
 | Use-after-move detection (heap vars) | ✅ |
 | Type inference + type mismatch errors | ✅ |
-| Bounds checking (panic on OOB) | ✅ |
-| Capacity checking (panic on overflow) | ✅ |
+| Bounds checking (panic on OOB index) | ✅ |
 | nomut enforcement | ✅ |
 | Negative numbers | ✅ |
 | Method syntax (obj.method()) | ✅ |

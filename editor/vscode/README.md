@@ -28,7 +28,7 @@ Then reload VS Code (`Cmd+Shift+P` → "Reload Window").
 | `and`, `or`, `not` | Logical operators |
 | `eq`, `ne`, `gt`, `lt`, `ge`, `le`, `mod` | Comparison operators |
 | `int`, `str`, `bool`, `void`, `list`, `map`, `task` | Types |
-| `yell`, `len`, `str_concat` | Built-in functions |
+| `yell`, `len`, `str_concat`, `str_len`, `char_at`, `int_to_str`, `list_set` | Built-in functions |
 | `Point`, `Node` (PascalCase) | Struct/type names |
 | `"hello {name}"` | Strings with interpolation |
 | `true`, `false` | Boolean constants |

@@ -146,3 +146,15 @@ spark {
   yell(max)
 }
 ```
+
+## Map Literal
+```
+spark {
+  colors is ["red" to 1, "green" to 2, "blue" to 3]
+  keys is colors.keys()
+  through (k in keys) {
+    yell(k)
+    yell(colors.get(k))
+  }
+}
+```

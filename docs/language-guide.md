@@ -28,8 +28,8 @@ All variables must be initialized. `x is int` without a value is a compile error
 | `int` | 64-bit signed integer |
 | `str` | string |
 | `bool` | `true` or `false` |
-| `list` | dynamic list |
-| `map` | ordered map |
+| `list of T` | typed dynamic list |
+| `map of K to V` | typed ordered map |
 | *StructName* | any user-defined struct (e.g. `Point`) |
 
 ## Functions
@@ -145,6 +145,15 @@ yell(nums.len())
 through (n in nums) {         // iteration
   yell(n)
 }
+
+// Chained indexing
+grid is list of list
+grid.push([1, 2, 3])
+grid.push([4, 5, 6])
+yell(grid[0][1])          // 2
+
+// Nested generics
+matrix is list of list of int
 ```
 
 ## Maps
@@ -163,6 +172,10 @@ through (k in keys) {
   yell(k)
   yell(m.get(k))
 }
+
+// Map literal
+scores is ["alice" to 95, "bob" to 87]
+yell(scores.get("alice"))
 ```
 
 ## Operators

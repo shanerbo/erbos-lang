@@ -35,6 +35,7 @@ yell("hello {name}")    // prints: hello erbos
 | `.push(val)` | Append value | `nums.push(10)` |
 | `.pop()` | Remove and return last element | `last is nums.pop()` |
 | `.len()` | Get number of elements | `yell(nums.len())` |
+| `list_set(list, i, val)` | Set element at index | `list_set(nums, 0, 99)` |
 
 List literals also work:
 ```
