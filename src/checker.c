@@ -467,6 +467,17 @@ void checker_run(Node *program) {
         c.structs[i].field_count = s->struct_def.field_count;
     }
 
+    // Register enum names as known types (treat like structs for type resolution)
+    for (int i = 0; i < program->program.enums.count; i++) {
+        // Add enum names to struct list so is_struct/parse_type_str recognizes them
+        c.struct_count++;
+        c.structs = realloc(c.structs, c.struct_count * sizeof(StructInfo));
+        c.structs[c.struct_count - 1].name = program->program.enums.items[i]->enum_def.name;
+        c.structs[c.struct_count - 1].field_names = NULL;
+        c.structs[c.struct_count - 1].field_types = NULL;
+        c.structs[c.struct_count - 1].field_count = 0;
+    }
+
     // Register functions
     c.func_count = program->program.funcs.count;
     for (int i = 0; i < c.func_count && i < MAX_FUNCS; i++) {

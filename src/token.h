@@ -24,6 +24,7 @@ typedef enum {
     TOK_REP,
     TOK_REF,
     TOK_BE,
+    TOK_MATCH,
     TOK_AND,
     TOK_OR,
     TOK_NOT,
@@ -62,6 +63,8 @@ typedef enum {
     TOK_DOT,
     TOK_QUESTION,
     TOK_ASSIGN,     // =
+    TOK_ARROW,      // =>
+    TOK_PIPE,       // |
 
     // Operators
     TOK_PLUS,

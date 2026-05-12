@@ -29,6 +29,11 @@ typedef struct {
     char ***struct_field_names;
     int *struct_field_counts;
     int struct_count;
+    // Enum info
+    char **enum_names;
+    char ***enum_variant_names;
+    int *enum_variant_counts;
+    int enum_count;
 } Gen;
 
 static int new_label(Gen *g) { return g->label_count++; }
@@ -327,8 +332,43 @@ static void emit_expr(Gen *g, Node *n) {
             break;
         }
         case NODE_METHOD_CALL: {
-            // obj.method(args) → _method(obj, args)
-            // Special cases for built-in types
+            // Check if this is an enum constructor: EnumName.Variant(args)
+            if (n->method_call.object->type == NODE_IDENT) {
+                const char *obj_name = n->method_call.object->ident.name;
+                // Check if obj_name is an enum
+                int enum_idx = -1;
+                int variant_idx = -1;
+                for (int ei = 0; ei < g->enum_count; ei++) {
+                    if (!strcmp(g->enum_names[ei], obj_name)) {
+                        enum_idx = ei;
+                        for (int vi = 0; vi < g->enum_variant_counts[ei]; vi++) {
+                            if (!strcmp(g->enum_variant_names[ei][vi], n->method_call.method)) {
+                                variant_idx = vi;
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                }
+                if (enum_idx >= 0 && variant_idx >= 0) {
+                    // Emit enum construction: alloc [tag | field0 | field1 | ...]
+                    int nfields = n->method_call.arg_count;
+                    int size = (nfields + 1) * 8;
+                    fprintf(g->out, "    mov x0, #%d\n", size > 16 ? size : 16);
+                    fprintf(g->out, "    bl _heap_alloc\n");
+                    fprintf(g->out, "    mov x1, #%d\n", variant_idx); // tag
+                    fprintf(g->out, "    str x1, [x0]\n");
+                    for (int fi = 0; fi < nfields; fi++) {
+                        fprintf(g->out, "    str x0, [sp, #-16]!\n");
+                        emit_expr(g, n->method_call.args[fi]);
+                        fprintf(g->out, "    mov x1, x0\n");
+                        fprintf(g->out, "    ldr x0, [sp], #16\n");
+                        fprintf(g->out, "    str x1, [x0, #%d]\n", (fi + 1) * 8);
+                    }
+                    break;
+                }
+            }
+            // Regular method call (existing code)
             const char *method = n->method_call.method;
 
             // List methods: push, pop, len
@@ -685,6 +725,36 @@ static void emit_stmt(Gen *g, Node *n) {
             for (int j = 0; j < n->block.stmts.count; j++)
                 emit_stmt(g, n->block.stmts.items[j]);
             emit_scope_cleanup(g, scope_start);
+            break;
+        }
+        case NODE_MATCH: {
+            // Emit the expression (result in x0 = pointer to [tag | fields...])
+            emit_expr(g, n->match_expr.expr);
+            fprintf(g->out, "    str x0, [sp, #-16]!\n"); // save enum ptr
+            fprintf(g->out, "    ldr x1, [x0]\n");        // load tag
+            int end_label = new_label(g);
+            for (int i = 0; i < n->match_expr.arm_count; i++) {
+                int next_label = new_label(g);
+                fprintf(g->out, "    ldr x0, [sp]\n");    // reload enum ptr
+                fprintf(g->out, "    ldr x1, [x0]\n");    // reload tag
+                fprintf(g->out, "    cmp x1, #%d\n", i);
+                fprintf(g->out, "    b.ne _L%d\n", next_label);
+                // Bind fields
+                for (int b = 0; b < n->match_expr.arm_binding_counts[i]; b++) {
+                    int off = add_local(g, n->match_expr.arm_bindings[i][b], 0);
+                    fprintf(g->out, "    ldr x0, [sp]\n");
+                    fprintf(g->out, "    ldr x0, [x0, #%d]\n", (b + 1) * 8); // field at offset 8*(b+1)
+                    emit_store_local(g, 0, off);
+                }
+                // Emit body
+                Node *body = n->match_expr.arm_bodies[i];
+                for (int j = 0; j < body->block.stmts.count; j++)
+                    emit_stmt(g, body->block.stmts.items[j]);
+                fprintf(g->out, "    b _L%d\n", end_label);
+                fprintf(g->out, "_L%d:\n", next_label);
+            }
+            fprintf(g->out, "_L%d:\n", end_label);
+            fprintf(g->out, "    add sp, sp, #16\n"); // pop enum ptr
             break;
         }
         case NODE_INFI: {
@@ -1279,6 +1349,20 @@ void codegen(Node *program, const char *output_path) {
             g.struct_names[i] = s->struct_def.name;
             g.struct_field_names[i] = s->struct_def.field_names;
             g.struct_field_counts[i] = s->struct_def.field_count;
+        }
+    }
+
+    // Register enums
+    g.enum_count = program->program.enums.count;
+    if (g.enum_count > 0) {
+        g.enum_names = malloc(g.enum_count * sizeof(char *));
+        g.enum_variant_names = malloc(g.enum_count * sizeof(char **));
+        g.enum_variant_counts = malloc(g.enum_count * sizeof(int));
+        for (int i = 0; i < g.enum_count; i++) {
+            Node *e = program->program.enums.items[i];
+            g.enum_names[i] = e->enum_def.name;
+            g.enum_variant_names[i] = e->enum_def.variant_names;
+            g.enum_variant_counts[i] = e->enum_def.variant_count;
         }
     }
 

@@ -322,6 +322,59 @@ static Node *parse_stmt(Parser *p) {
     if (at(p, TOK_SKIP)) { p->pos++; return alloc_node(NODE_SKIP, line); }
     if (at(p, TOK_THROUGH)) { return parse_through(p); }
 
+    // Match expression
+    if (at(p, TOK_MATCH)) {
+        p->pos++;
+        Node *expr = parse_expr(p);
+        eat(p, TOK_LBRACE);
+        skip_newlines(p);
+
+        Node *n = alloc_node(NODE_MATCH, line);
+        n->match_expr.expr = expr;
+        int cap = 8;
+        n->match_expr.arm_variant_names = malloc(cap * sizeof(char *));
+        n->match_expr.arm_bindings = malloc(cap * sizeof(char **));
+        n->match_expr.arm_binding_counts = malloc(cap * sizeof(int));
+        n->match_expr.arm_bodies = malloc(cap * sizeof(Node *));
+        n->match_expr.arm_count = 0;
+
+        while (!at(p, TOK_RBRACE) && !at(p, TOK_EOF)) {
+            skip_newlines(p);
+            if (at(p, TOK_RBRACE)) break;
+            int ai = n->match_expr.arm_count;
+            if (ai >= cap) { cap *= 2; n->match_expr.arm_variant_names = realloc(n->match_expr.arm_variant_names, cap * sizeof(char *)); n->match_expr.arm_bindings = realloc(n->match_expr.arm_bindings, cap * sizeof(char **)); n->match_expr.arm_binding_counts = realloc(n->match_expr.arm_binding_counts, cap * sizeof(int)); n->match_expr.arm_bodies = realloc(n->match_expr.arm_bodies, cap * sizeof(Node *)); }
+            n->match_expr.arm_variant_names[ai] = eat(p, TOK_IDENT)->value;
+            n->match_expr.arm_bindings[ai] = NULL;
+            n->match_expr.arm_binding_counts[ai] = 0;
+            if (at(p, TOK_LPAREN)) {
+                p->pos++;
+                int bcap = 4;
+                n->match_expr.arm_bindings[ai] = malloc(bcap * sizeof(char *));
+                int bc = 0;
+                while (!at(p, TOK_RPAREN)) {
+                    if (bc >= bcap) { bcap *= 2; n->match_expr.arm_bindings[ai] = realloc(n->match_expr.arm_bindings[ai], bcap * sizeof(char *)); }
+                    n->match_expr.arm_bindings[ai][bc++] = eat(p, TOK_IDENT)->value;
+                    if (at(p, TOK_COMMA)) p->pos++;
+                }
+                eat(p, TOK_RPAREN);
+                n->match_expr.arm_binding_counts[ai] = bc;
+            }
+            eat(p, TOK_ARROW);
+            if (at(p, TOK_LBRACE)) {
+                n->match_expr.arm_bodies[ai] = parse_block(p);
+            } else {
+                Node *body = alloc_node(NODE_BLOCK, cur(p)->line);
+                body->block.stmts = (NodeList){0};
+                list_push(&body->block.stmts, parse_stmt(p));
+                n->match_expr.arm_bodies[ai] = body;
+            }
+            n->match_expr.arm_count++;
+            skip_newlines(p);
+        }
+        eat(p, TOK_RBRACE);
+        return n;
+    }
+
     // Bare block: { ... } for scoped lifetimes
     if (at(p, TOK_LBRACE)) {
         return parse_block(p);
@@ -597,6 +650,68 @@ static int is_type_token(Parser *p) {
     return at(p, TOK_INT) || at(p, TOK_STR_TYPE) || at(p, TOK_BOOL) || at(p, TOK_VOID) || at(p, TOK_IDENT);
 }
 
+static Node *parse_enum_def(Parser *p) {
+    int line = cur(p)->line;
+    char *name = eat(p, TOK_IDENT)->value;
+    eat(p, TOK_IS);
+    skip_newlines(p);
+
+    Node *n = alloc_node(NODE_ENUM_DEF, line);
+    n->enum_def.name = name;
+    int cap = 8;
+    n->enum_def.variant_names = malloc(cap * sizeof(char *));
+    n->enum_def.variant_field_names = malloc(cap * sizeof(char **));
+    n->enum_def.variant_field_types = malloc(cap * sizeof(char **));
+    n->enum_def.variant_field_counts = malloc(cap * sizeof(int));
+    n->enum_def.variant_count = 0;
+
+    // Parse first variant (no leading |)
+    while (1) {
+        skip_newlines(p);
+        if (at(p, TOK_PIPE)) p->pos++; // skip optional |
+        skip_newlines(p);
+        if (!at(p, TOK_IDENT)) break;
+
+        int vi = n->enum_def.variant_count;
+        if (vi >= cap) {
+            cap *= 2;
+            n->enum_def.variant_names = realloc(n->enum_def.variant_names, cap * sizeof(char *));
+            n->enum_def.variant_field_names = realloc(n->enum_def.variant_field_names, cap * sizeof(char **));
+            n->enum_def.variant_field_types = realloc(n->enum_def.variant_field_types, cap * sizeof(char **));
+            n->enum_def.variant_field_counts = realloc(n->enum_def.variant_field_counts, cap * sizeof(int));
+        }
+        n->enum_def.variant_names[vi] = eat(p, TOK_IDENT)->value;
+        n->enum_def.variant_field_names[vi] = NULL;
+        n->enum_def.variant_field_types[vi] = NULL;
+        n->enum_def.variant_field_counts[vi] = 0;
+
+        // Optional fields: Variant(name type, name type)
+        if (at(p, TOK_LPAREN)) {
+            p->pos++;
+            int fcap = 4;
+            n->enum_def.variant_field_names[vi] = malloc(fcap * sizeof(char *));
+            n->enum_def.variant_field_types[vi] = malloc(fcap * sizeof(char *));
+            int fc = 0;
+            while (!at(p, TOK_RPAREN)) {
+                if (fc >= fcap) { fcap *= 2; n->enum_def.variant_field_names[vi] = realloc(n->enum_def.variant_field_names[vi], fcap * sizeof(char *)); n->enum_def.variant_field_types[vi] = realloc(n->enum_def.variant_field_types[vi], fcap * sizeof(char *)); }
+                n->enum_def.variant_field_names[vi][fc] = eat(p, TOK_IDENT)->value;
+                n->enum_def.variant_field_types[vi][fc] = cur(p)->value;
+                p->pos++;
+                fc++;
+                if (at(p, TOK_COMMA)) p->pos++;
+            }
+            eat(p, TOK_RPAREN);
+            n->enum_def.variant_field_counts[vi] = fc;
+        }
+        n->enum_def.variant_count++;
+
+        // Check if next line has | for another variant
+        skip_newlines(p);
+        if (!at(p, TOK_PIPE)) break;
+    }
+    return n;
+}
+
 static Node *parse_struct_def(Parser *p) {
     int line = cur(p)->line;
     char *name = eat(p, TOK_IDENT)->value;
@@ -691,12 +806,35 @@ Node *parser_parse(Parser *p) {
     Node *program = alloc_node(NODE_PROGRAM, 1);
     program->program.funcs = (NodeList){0};
     program->program.structs = (NodeList){0};
+    program->program.enums = (NodeList){0};
 
     skip_newlines(p);
     while (!at(p, TOK_EOF)) {
         // Struct: IDENT IS {
         if (at(p, TOK_IDENT) && peek_at(p, 1)->type == TOK_IS && peek_at(p, 2)->type == TOK_LBRACE) {
             list_push(&program->program.structs, parse_struct_def(p));
+        }
+        // Enum: IDENT IS NEWLINE IDENT or IDENT IS IDENT( — not followed by {
+        else if (at(p, TOK_IDENT) && peek_at(p, 1)->type == TOK_IS &&
+                 peek_at(p, 2)->type != TOK_LBRACE &&
+                 (peek_at(p, 2)->type == TOK_NEWLINE || peek_at(p, 2)->type == TOK_IDENT)) {
+            // Could be enum or could be var decl in a function — only at top level it's enum
+            // Check: if peek(2) is NEWLINE and peek(3) is IDENT, or peek(2) is IDENT and peek(3) is ( or NEWLINE
+            int is_enum = 0;
+            if (peek_at(p, 2)->type == TOK_NEWLINE) {
+                // Skip newlines to find first variant
+                int look = 3;
+                while (p->tokens[p->pos + look].type == TOK_NEWLINE) look++;
+                if (p->tokens[p->pos + look].type == TOK_IDENT) is_enum = 1;
+            } else if (peek_at(p, 2)->type == TOK_IDENT &&
+                       (peek_at(p, 3)->type == TOK_LPAREN || peek_at(p, 3)->type == TOK_NEWLINE || peek_at(p, 3)->type == TOK_PIPE)) {
+                is_enum = 1;
+            }
+            if (is_enum) {
+                list_push(&program->program.enums, parse_enum_def(p));
+            } else {
+                list_push(&program->program.funcs, parse_func_def(p));
+            }
         } else {
             list_push(&program->program.funcs, parse_func_def(p));
         }

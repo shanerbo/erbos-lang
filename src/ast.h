@@ -30,6 +30,9 @@ typedef enum {
     NODE_MAP_LIT,
     NODE_STOP,
     NODE_SKIP,
+    NODE_ENUM_DEF,
+    NODE_MATCH,
+    NODE_ENUM_CTOR,
 } NodeType;
 
 typedef struct Node Node;
@@ -47,7 +50,7 @@ struct Node {
 
     union {
         // NODE_PROGRAM
-        struct { NodeList funcs; NodeList structs; } program;
+        struct { NodeList funcs; NodeList structs; NodeList enums; } program;
 
         // NODE_FUNC_DEF
         struct {
@@ -174,6 +177,34 @@ struct Node {
 
         // NODE_MAP_LIT
         struct { Node **keys; Node **values; int count; } map_lit;
+
+        // NODE_ENUM_DEF
+        struct {
+            char *name;
+            char **variant_names;
+            char ***variant_field_names;
+            char ***variant_field_types;
+            int *variant_field_counts;
+            int variant_count;
+        } enum_def;
+
+        // NODE_MATCH
+        struct {
+            Node *expr;
+            char **arm_variant_names;
+            char ***arm_bindings;
+            int *arm_binding_counts;
+            Node **arm_bodies;
+            int arm_count;
+        } match_expr;
+
+        // NODE_ENUM_CTOR (EnumName.Variant(args))
+        struct {
+            char *enum_name;
+            char *variant_name;
+            Node **args;
+            int arg_count;
+        } enum_ctor;
     };
 };
 

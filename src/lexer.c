@@ -43,7 +43,8 @@ static TokenType keyword_type(const char *word) {
     if (!strcmp(word, "now"))     return TOK_NOW;
     if (!strcmp(word, "rep"))     return TOK_REP;
     if (!strcmp(word, "ref"))     return TOK_REF;
-    if (!strcmp(word, "be"))      return TOK_BE;    if (!strcmp(word, "and"))     return TOK_AND;
+    if (!strcmp(word, "be"))      return TOK_BE;
+    if (!strcmp(word, "match"))   return TOK_MATCH;    if (!strcmp(word, "and"))     return TOK_AND;
     if (!strcmp(word, "or"))      return TOK_OR;
     if (!strcmp(word, "not"))     return TOK_NOT;
     if (!strcmp(word, "eq"))      return TOK_EQ_WORD;
@@ -150,6 +151,7 @@ void lexer_tokenize(Lexer *l) {
 
         // Two-char operators
         if (c == '=' && l->src[l->pos+1] == '=') { advance(l); advance(l); emit(l, TOK_EQ, NULL); continue; }
+        if (c == '=' && l->src[l->pos+1] == '>') { advance(l); advance(l); emit(l, TOK_ARROW, NULL); continue; }
         if (c == '!' && l->src[l->pos+1] == '=') { advance(l); advance(l); emit(l, TOK_NEQ, NULL); continue; }
         if (c == '<' && l->src[l->pos+1] == '=') { advance(l); advance(l); emit(l, TOK_LTE, NULL); continue; }
         if (c == '>' && l->src[l->pos+1] == '=') { advance(l); advance(l); emit(l, TOK_GTE, NULL); continue; }
@@ -165,6 +167,7 @@ void lexer_tokenize(Lexer *l) {
             case ']': emit(l, TOK_RBRACKET, NULL); break;
             case ',': emit(l, TOK_COMMA, NULL); break;
             case '.': emit(l, TOK_DOT, NULL); break;
+            case '|': emit(l, TOK_PIPE, NULL); break;
             case '?': emit(l, TOK_QUESTION, NULL); break;
             case '=': emit(l, TOK_ASSIGN, NULL); break;
             case '+': emit(l, TOK_PLUS, NULL); break;

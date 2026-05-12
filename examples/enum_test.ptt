@@ -1,0 +1,24 @@
+Result is
+  Ok(value int)
+  | Err(message str)
+
+divide(a int, b int) Result {
+  b eq 0 ?{
+    give Result.Err("division by zero")
+  }
+  give Result.Ok(a / b)
+}
+
+spark {
+  r is divide(10, 2)
+  match r {
+    Ok(v) => yell(v)
+    Err(msg) => yell(msg)
+  }
+
+  r2 is divide(10, 0)
+  match r2 {
+    Ok(v) => yell(v)
+    Err(msg) => yell(msg)
+  }
+}
