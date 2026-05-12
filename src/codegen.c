@@ -176,11 +176,17 @@ static void emit_expr(Gen *g, Node *n) {
                         if (s[i] == '}') i++;
                         // Save accumulator
                         fprintf(g->out, "    str x0, [sp, #-16]!\n");
-                        // Load variable and convert to string
+                        // Load variable and convert to string if needed
                         int off = find_local(g, varname);
                         if (off < 0) { fprintf(stderr, "error line %d: undefined variable '%s' in interpolation\n", n->line, varname); exit(1); }
                         emit_load_local(g, 0, off);
+                        // If value > 0x100000, it's already a string pointer — skip conversion
+                        fprintf(g->out, "    mov x1, #0x100000\n");
+                        int skip = new_label(g);
+                        fprintf(g->out, "    cmp x0, x1\n");
+                        fprintf(g->out, "    b.ge _L%d\n", skip);
                         fprintf(g->out, "    bl _int_to_str\n");
+                        fprintf(g->out, "_L%d:\n", skip);
                         // Concat: accumulator + var_str
                         fprintf(g->out, "    mov x1, x0\n");
                         fprintf(g->out, "    ldr x0, [sp], #16\n");
