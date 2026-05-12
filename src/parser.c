@@ -84,8 +84,8 @@ static Node *parse_primary(Parser *p) {
         return n;
     }
     // list(), map(), task() constructors
-    if ((at(p, TOK_LIST) || at(p, TOK_MAP) || at(p, TOK_TASK)) && peek_at(p, 1)->type == TOK_LPAREN) {
-        char *name = at(p, TOK_LIST) ? "list" : at(p, TOK_MAP) ? "map" : "task";
+    if ((at(p, TOK_LIST) || at(p, TOK_MAP) || at(p, TOK_IMAP) || at(p, TOK_TASK)) && peek_at(p, 1)->type == TOK_LPAREN) {
+        char *name = at(p, TOK_LIST) ? "list" : at(p, TOK_IMAP) ? "imap" : at(p, TOK_MAP) ? "map" : "task";
         p->pos++;
         p->pos++; // skip (
         eat(p, TOK_RPAREN);
@@ -450,7 +450,7 @@ static Node *parse_stmt(Parser *p) {
 
             // Explicit type: check for type keywords or list/map (but NOT if followed by '(' — that's a constructor)
             if (at(p, TOK_INT) || at(p, TOK_STR_TYPE) || at(p, TOK_BOOL) ||
-                ((at(p, TOK_LIST) || at(p, TOK_MAP) || at(p, TOK_TASK)) && peek_at(p, 1)->type != TOK_LPAREN)) {
+                ((at(p, TOK_LIST) || at(p, TOK_MAP) || at(p, TOK_IMAP) || at(p, TOK_TASK)) && peek_at(p, 1)->type != TOK_LPAREN)) {
                 if (at(p, TOK_TASK)) {
                     n->var_decl.type_name = "task";
                     p->pos++;
@@ -462,8 +462,8 @@ static Node *parse_stmt(Parser *p) {
                         n->var_decl.elem_type_name = cur(p)->value;
                         p->pos++; // skip type
                     }
-                } else if (at(p, TOK_MAP)) {
-                    n->var_decl.type_name = "map";
+                } else if (at(p, TOK_MAP) || at(p, TOK_IMAP)) {
+                    n->var_decl.type_name = at(p, TOK_IMAP) ? "imap" : "map";
                     p->pos++;
                     if (at(p, TOK_OF)) {
                         p->pos++; // skip 'of'
@@ -483,7 +483,7 @@ static Node *parse_stmt(Parser *p) {
             // If no value expression — auto-construct for list/map/task, error for others
             if (at(p, TOK_NEWLINE) || at(p, TOK_EOF)) {
                 if (n->var_decl.type_name && (!strcmp(n->var_decl.type_name, "list") ||
-                    !strcmp(n->var_decl.type_name, "map") || !strcmp(n->var_decl.type_name, "task"))) {
+                    !strcmp(n->var_decl.type_name, "map") || !strcmp(n->var_decl.type_name, "imap") || !strcmp(n->var_decl.type_name, "task"))) {
                     // Auto-create constructor: list() / map() / task()
                     Node *call = alloc_node(NODE_CALL, line);
                     call->call.name = n->var_decl.type_name;

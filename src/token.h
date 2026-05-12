@@ -43,6 +43,7 @@ typedef enum {
     TOK_FALSE,
     TOK_LIST,
     TOK_MAP,
+    TOK_IMAP,
     TOK_OF,
     TOK_TASK,
 

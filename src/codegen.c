@@ -299,6 +299,8 @@ static void emit_expr(Gen *g, Node *n) {
                 snprintf(actual_name, sizeof(actual_name), "_list_new");
             } else if (!strcmp(call_name, "map")) {
                 snprintf(actual_name, sizeof(actual_name), "_map_new");
+            } else if (!strcmp(call_name, "imap")) {
+                snprintf(actual_name, sizeof(actual_name), "_imap_new");
             } else if (!strcmp(call_name, "task")) {
                 // task() just returns 0 — placeholder handle
                 fprintf(g->out, "    mov x0, #0\n");
@@ -554,9 +556,9 @@ static void emit_stmt(Gen *g, Node *n) {
                     if (is_struct_alloc) {
                         mark_heap_size(g, n->var_decl.name, struct_size);
                     } else if (!strcmp(fn, "list")) {
-                        mark_heap_size(g, n->var_decl.name, 520); // 8 count + 8*64 slots
-                    } else if (!strcmp(fn, "map")) {
-                        mark_heap_size(g, n->var_decl.name, 272); // 16 header + 16*16 entries
+                        mark_heap_size(g, n->var_decl.name, 520);
+                    } else if (!strcmp(fn, "map") || !strcmp(fn, "imap")) {
+                        mark_heap_size(g, n->var_decl.name, 152); // 24 header + 128 data
                     } else if (strncmp(fn, "alloc_", 6) == 0 || !strcmp(fn, "list_new") || !strcmp(fn, "map_new")) {
                         mark_heap_size(g, n->var_decl.name, 520);
                     }
@@ -1239,6 +1241,70 @@ static void emit_map_builtins(Gen *g) {
     fprintf(g->out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 }
 
+static void emit_imap_builtins(Gen *g) {
+    // imap: same layout as map [cap|count|data_ptr], data=[key0|val0|key1|val1|...]
+    // but uses integer comparison (cmp) instead of _str_eq
+
+    // _imap_new() -> imap header (initial capacity 8)
+    fprintf(g->out, ".globl _imap_new\n.p2align 2\n_imap_new:\n");
+    fprintf(g->out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
+    fprintf(g->out, "    mov x0, #24\n    bl _heap_alloc\n");
+    fprintf(g->out, "    mov x19, x0\n    str x19, [sp, #-16]!\n");
+    fprintf(g->out, "    mov x0, #128\n    bl _heap_alloc\n");
+    fprintf(g->out, "    ldr x19, [sp], #16\n");
+    fprintf(g->out, "    mov x1, #8\n    str x1, [x19]\n");
+    fprintf(g->out, "    str xzr, [x19, #8]\n    str x0, [x19, #16]\n");
+    fprintf(g->out, "    mov x0, x19\n");
+    fprintf(g->out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
+
+    // _imap_set(x0=imap, x1=key, x2=value)
+    fprintf(g->out, ".globl _imap_set\n.p2align 2\n_imap_set:\n");
+    fprintf(g->out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
+    fprintf(g->out, "    stp x19, x20, [sp, #-16]!\n");
+    fprintf(g->out, "    stp x21, x22, [sp, #-16]!\n");
+    fprintf(g->out, "    stp x23, x24, [sp, #-16]!\n");
+    fprintf(g->out, "    mov x19, x0\n    mov x20, x1\n    mov x21, x2\n");
+    fprintf(g->out, "    ldr x22, [x19, #8]\n    ldr x23, [x19, #16]\n");
+    // Scan for existing key (integer comparison)
+    fprintf(g->out, "    mov x3, #0\n");
+    fprintf(g->out, "_ims_scan:\n    cmp x3, x22\n    b.ge _ims_insert\n");
+    fprintf(g->out, "    lsl x4, x3, #4\n    ldr x5, [x23, x4]\n");
+    fprintf(g->out, "    cmp x5, x20\n    b.eq _ims_update\n");
+    fprintf(g->out, "    add x3, x3, #1\n    b _ims_scan\n");
+    // Update
+    fprintf(g->out, "_ims_update:\n    lsl x4, x3, #4\n    add x4, x4, #8\n");
+    fprintf(g->out, "    str x21, [x23, x4]\n    b _ims_done\n");
+    // Insert (grow if needed)
+    fprintf(g->out, "_ims_insert:\n    ldr x24, [x19]\n    cmp x22, x24\n    b.lt _ims_do_ins\n");
+    fprintf(g->out, "    lsl x24, x24, #1\n    str x24, [x19]\n");
+    fprintf(g->out, "    lsl x0, x24, #4\n    bl _heap_alloc\n    mov x5, x0\n");
+    fprintf(g->out, "    mov x6, #0\n    lsl x7, x22, #4\n");
+    fprintf(g->out, "_ims_cp:\n    cmp x6, x7\n    b.ge _ims_cpd\n");
+    fprintf(g->out, "    ldr x8, [x23, x6]\n    str x8, [x5, x6]\n    add x6, x6, #8\n    b _ims_cp\n");
+    fprintf(g->out, "_ims_cpd:\n    mov x0, x23\n    lsl x1, x22, #4\n    bl _heap_free\n");
+    fprintf(g->out, "    mov x23, x5\n    str x23, [x19, #16]\n");
+    fprintf(g->out, "_ims_do_ins:\n    lsl x4, x22, #4\n");
+    fprintf(g->out, "    str x20, [x23, x4]\n    add x4, x4, #8\n    str x21, [x23, x4]\n");
+    fprintf(g->out, "    add x22, x22, #1\n    str x22, [x19, #8]\n");
+    fprintf(g->out, "_ims_done:\n    ldp x23, x24, [sp], #16\n    ldp x21, x22, [sp], #16\n");
+    fprintf(g->out, "    ldp x19, x20, [sp], #16\n");
+    fprintf(g->out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
+
+    // _imap_get(x0=imap, x1=key) -> value (0 if not found)
+    fprintf(g->out, ".globl _imap_get\n.p2align 2\n_imap_get:\n");
+    fprintf(g->out, "    ldr x2, [x0, #8]\n    ldr x3, [x0, #16]\n    mov x4, #0\n");
+    fprintf(g->out, "_img_scan:\n    cmp x4, x2\n    b.ge _img_nf\n");
+    fprintf(g->out, "    lsl x5, x4, #4\n    ldr x6, [x3, x5]\n");
+    fprintf(g->out, "    cmp x6, x1\n    b.eq _img_found\n");
+    fprintf(g->out, "    add x4, x4, #1\n    b _img_scan\n");
+    fprintf(g->out, "_img_found:\n    lsl x5, x4, #4\n    add x5, x5, #8\n    ldr x0, [x3, x5]\n    ret\n");
+    fprintf(g->out, "_img_nf:\n    mov x0, #0\n    ret\n\n");
+
+    // _imap_len(x0=imap) -> count
+    fprintf(g->out, ".globl _imap_len\n.p2align 2\n_imap_len:\n");
+    fprintf(g->out, "    ldr x0, [x0, #8]\n    ret\n\n");
+}
+
 static void emit_list_builtins(Gen *g) {
     // List layout (indirection for growable):
 
@@ -1384,6 +1450,7 @@ void codegen(Node *program, const char *output_path) {
     emit_int_to_str(&g);
     emit_str_builtins(&g);
     emit_map_builtins(&g);
+    emit_imap_builtins(&g);
     emit_list_builtins(&g);
 
     // Panic handler for out-of-bounds
