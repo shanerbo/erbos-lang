@@ -34,10 +34,10 @@ typedef enum {
     TOK_LT_WORD,    // lt
     TOK_GE_WORD,    // ge
     TOK_LE_WORD,    // le
-    TOK_ADD_WORD,   // add
-    TOK_SUB_WORD,   // sub
-    TOK_MUL_WORD,   // mul
-    TOK_DIV_WORD,   // div
+    TOK_ADD_WORD,   // unused - reserved
+    TOK_SUB_WORD,   // unused - reserved
+    TOK_MUL_WORD,   // unused - reserved
+    TOK_DIV_WORD,   // unused - reserved
     TOK_MOD_WORD,   // mod
     TOK_TRUE,
     TOK_FALSE,

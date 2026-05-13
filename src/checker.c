@@ -67,6 +67,7 @@ static int types_equal(Type a, Type b) {
 static void set_sym(Checker *c, const char *name, Type t) {
     for (int i = 0; i < c->count; i++)
         if (!strcmp(c->syms[i].name, name)) { c->syms[i].type = t; return; }
+    if (c->count >= MAX_SYMS) { fprintf(stderr, "error: too many variables (max %d)\n", MAX_SYMS); exit(1); }
     c->syms[c->count++] = (Symbol){(char *)name, t, -1}; // -1 = local (always mutable)
 }
 
@@ -283,13 +284,16 @@ static Type check_expr(Checker *c, Node *n) {
         case NODE_FIELD_ACCESS: {
             Type obj_t = check_expr(c, n->field_access.object);
             if (obj_t.kind == TYPE_STRUCT && obj_t.struct_name) {
+                n->field_access.struct_name = obj_t.struct_name;
                 if (!struct_has_field(c, obj_t.struct_name, n->field_access.field)) {
                     fprintf(stderr, "error:%d: struct '%s' has no field '%s'\n",
                         n->line, obj_t.struct_name, n->field_access.field);
                     exit(1);
                 }
+            } else {
+                n->field_access.struct_name = NULL;
             }
-            return make_type(TYPE_INT); // all fields are int for now
+            return make_type(TYPE_INT);
         }
         case NODE_INDEX: {
             Type obj_t = check_expr(c, n->index_access.object);

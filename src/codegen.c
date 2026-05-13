@@ -171,7 +171,7 @@ static void emit_expr(Gen *g, Node *n) {
                         i++;
                         char varname[64];
                         int vi = 0;
-                        while (s[i] && s[i] != '}') { varname[vi++] = s[i++]; }
+                        while (s[i] && s[i] != '}' && vi < 63) { varname[vi++] = s[i++]; }
                         varname[vi] = '\0';
                         if (s[i] == '}') i++;
                         // Save accumulator
@@ -195,7 +195,7 @@ static void emit_expr(Gen *g, Node *n) {
                         // Extract literal segment
                         char seg[256];
                         int si = 0;
-                        while (s[i] && s[i] != '{') { seg[si++] = s[i++]; }
+                        while (s[i] && s[i] != '{' && si < 255) { seg[si++] = s[i++]; }
                         seg[si] = '\0';
                         // Save accumulator, concat segment
                         fprintf(g->out, "    str x0, [sp, #-16]!\n");
@@ -272,8 +272,22 @@ static void emit_expr(Gen *g, Node *n) {
                     fprintf(g->out, "    cmp x0, x1\n    cset x0, le\n"); break;
                 case TOK_GTE: case TOK_GE_WORD:
                     fprintf(g->out, "    cmp x0, x1\n    cset x0, ge\n"); break;
-                case TOK_AND: fprintf(g->out, "    and x0, x0, x1\n"); break;
-                case TOK_OR:  fprintf(g->out, "    orr x0, x0, x1\n"); break;
+                case TOK_AND: {
+                    // Short-circuit: if left is 0, skip right
+                    int skip_lbl = new_label(g);
+                    fprintf(g->out, "    cbz x0, _L%d\n", skip_lbl); // left false → result 0
+                    fprintf(g->out, "    mov x0, x1\n"); // left true → result = right
+                    fprintf(g->out, "_L%d:\n", skip_lbl);
+                    break;
+                }
+                case TOK_OR: {
+                    // Short-circuit: if left is 1, skip right
+                    int skip_lbl = new_label(g);
+                    fprintf(g->out, "    cbnz x0, _L%d\n", skip_lbl); // left true → result = left (1)
+                    fprintf(g->out, "    mov x0, x1\n"); // left false → result = right
+                    fprintf(g->out, "_L%d:\n", skip_lbl);
+                    break;
+                }
                 default: break;
             }
             break;
@@ -429,19 +443,31 @@ static void emit_expr(Gen *g, Node *n) {
         }
         case NODE_FIELD_ACCESS: {
             emit_expr(g, n->field_access.object);
-            // x0 = pointer to struct, load field at offset
-            // For simplicity, fields are 8 bytes each, sequential
-            // We need to know the struct type — for MVP just use field name lookup
             fprintf(g->out, "    // field access .%s\n", n->field_access.field);
-            // We'll encode field offset as comment; real impl needs type info
-            // For now: search all structs for this field
+            // Type-aware: use struct_name if available
             int found = 0;
-            for (int i = 0; i < g->struct_count && !found; i++) {
-                for (int j = 0; j < g->struct_field_counts[i]; j++) {
-                    if (!strcmp(g->struct_field_names[i][j], n->field_access.field)) {
-                        fprintf(g->out, "    ldr x0, [x0, #%d]\n", j * 8);
-                        found = 1;
-                        break;
+            if (n->field_access.struct_name) {
+                for (int i = 0; i < g->struct_count && !found; i++) {
+                    if (!strcmp(g->struct_names[i], n->field_access.struct_name)) {
+                        for (int j = 0; j < g->struct_field_counts[i]; j++) {
+                            if (!strcmp(g->struct_field_names[i][j], n->field_access.field)) {
+                                fprintf(g->out, "    ldr x0, [x0, #%d]\n", j * 8);
+                                found = 1;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if (!found) {
+                // Fallback: global search (for untyped/int params)
+                for (int i = 0; i < g->struct_count && !found; i++) {
+                    for (int j = 0; j < g->struct_field_counts[i]; j++) {
+                        if (!strcmp(g->struct_field_names[i][j], n->field_access.field)) {
+                            fprintf(g->out, "    ldr x0, [x0, #%d]\n", j * 8);
+                            found = 1;
+                            break;
+                        }
                     }
                 }
             }
@@ -723,9 +749,11 @@ static void emit_stmt(Gen *g, Node *n) {
             break;
         }
         case NODE_STOP:
+            if (g->loop_end_label < 0) { fprintf(stderr, "error:%d: 'stop' used outside of a loop\n", n->line); exit(1); }
             fprintf(g->out, "    b _L%d\n", g->loop_end_label);
             break;
         case NODE_SKIP:
+            if (g->loop_continue_label < 0) { fprintf(stderr, "error:%d: 'skip' used outside of a loop\n", n->line); exit(1); }
             fprintf(g->out, "    b _L%d\n", g->loop_continue_label);
             break;
         case NODE_BLOCK: {
@@ -736,25 +764,33 @@ static void emit_stmt(Gen *g, Node *n) {
             break;
         }
         case NODE_MATCH: {
-            // Emit the expression (result in x0 = pointer to [tag | fields...])
             emit_expr(g, n->match_expr.expr);
-            fprintf(g->out, "    str x0, [sp, #-16]!\n"); // save enum ptr
-            fprintf(g->out, "    ldr x1, [x0]\n");        // load tag
+            fprintf(g->out, "    str x0, [sp, #-16]!\n");
             int end_label = new_label(g);
             for (int i = 0; i < n->match_expr.arm_count; i++) {
                 int next_label = new_label(g);
-                fprintf(g->out, "    ldr x0, [sp]\n");    // reload enum ptr
-                fprintf(g->out, "    ldr x1, [x0]\n");    // reload tag
-                fprintf(g->out, "    cmp x1, #%d\n", i);
+                fprintf(g->out, "    ldr x0, [sp]\n");
+                fprintf(g->out, "    ldr x1, [x0]\n"); // tag
+                // Look up actual tag index by variant name
+                int tag = i; // default: use arm order
+                const char *vname = n->match_expr.arm_variant_names[i];
+                for (int ei = 0; ei < g->enum_count; ei++) {
+                    for (int vi = 0; vi < g->enum_variant_counts[ei]; vi++) {
+                        if (!strcmp(g->enum_variant_names[ei][vi], vname)) {
+                            tag = vi;
+                            goto found_tag;
+                        }
+                    }
+                }
+                found_tag:
+                fprintf(g->out, "    cmp x1, #%d\n", tag);
                 fprintf(g->out, "    b.ne _L%d\n", next_label);
-                // Bind fields
                 for (int b = 0; b < n->match_expr.arm_binding_counts[i]; b++) {
                     int off = add_local(g, n->match_expr.arm_bindings[i][b], 0);
                     fprintf(g->out, "    ldr x0, [sp]\n");
-                    fprintf(g->out, "    ldr x0, [x0, #%d]\n", (b + 1) * 8); // field at offset 8*(b+1)
+                    fprintf(g->out, "    ldr x0, [x0, #%d]\n", (b + 1) * 8);
                     emit_store_local(g, 0, off);
                 }
-                // Emit body
                 Node *body = n->match_expr.arm_bodies[i];
                 for (int j = 0; j < body->block.stmts.count; j++)
                     emit_stmt(g, body->block.stmts.items[j]);
@@ -762,7 +798,7 @@ static void emit_stmt(Gen *g, Node *n) {
                 fprintf(g->out, "_L%d:\n", next_label);
             }
             fprintf(g->out, "_L%d:\n", end_label);
-            fprintf(g->out, "    add sp, sp, #16\n"); // pop enum ptr
+            fprintf(g->out, "    add sp, sp, #16\n");
             break;
         }
         case NODE_INFI: {
@@ -1397,11 +1433,16 @@ static void emit_list_builtins(Gen *g) {
     fprintf(g->out, ".globl _list_len\n.p2align 2\n_list_len:\n");
     fprintf(g->out, "    ldr x0, [x0, #8]\n    ret\n\n");
 
-    // _list_set(x0=list, x1=index, x2=value) -> sets element at index
+    // _list_set(x0=list, x1=index, x2=value) -> sets element at index (bounds checked)
     fprintf(g->out, "// built-in: _list_set(x0=list, x1=index, x2=value)\n");
     fprintf(g->out, ".globl _list_set\n.p2align 2\n_list_set:\n");
+    fprintf(g->out, "    ldr x4, [x0, #8]\n");     // count
+    fprintf(g->out, "    cmp x1, x4\n");
+    fprintf(g->out, "    b.ge _panic_oob\n");
+    fprintf(g->out, "    cmp x1, #0\n");
+    fprintf(g->out, "    b.lt _panic_oob\n");
     fprintf(g->out, "    ldr x3, [x0, #16]\n");    // data_ptr
-    fprintf(g->out, "    str x2, [x3, x1, lsl #3]\n"); // data[index] = value
+    fprintf(g->out, "    str x2, [x3, x1, lsl #3]\n");
     fprintf(g->out, "    ret\n\n");
 }
 

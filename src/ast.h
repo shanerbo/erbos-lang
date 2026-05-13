@@ -32,7 +32,6 @@ typedef enum {
     NODE_SKIP,
     NODE_ENUM_DEF,
     NODE_MATCH,
-    NODE_ENUM_CTOR,
 } NodeType;
 
 typedef struct Node Node;
@@ -167,7 +166,7 @@ struct Node {
         struct { char *name; } ident;
 
         // NODE_FIELD_ACCESS (obj.field)
-        struct { Node *object; char *field; } field_access;
+        struct { Node *object; char *field; char *struct_name; } field_access;
 
         // NODE_INDEX (arr[idx])
         struct { Node *object; Node *index; } index_access;
@@ -197,14 +196,6 @@ struct Node {
             Node **arm_bodies;
             int arm_count;
         } match_expr;
-
-        // NODE_ENUM_CTOR (EnumName.Variant(args))
-        struct {
-            char *enum_name;
-            char *variant_name;
-            Node **args;
-            int arg_count;
-        } enum_ctor;
     };
 };
 

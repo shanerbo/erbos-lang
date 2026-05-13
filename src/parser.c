@@ -523,7 +523,11 @@ static Node *parse_stmt(Parser *p) {
             // Parse as expression first
             Node *expr = parse_expr(p);
             if (at(p, TOK_ASSIGN) || at(p, TOK_BE)) {
-                // field assignment
+                // field assignment — verify expr is actually a field access
+                if (expr->type != NODE_FIELD_ACCESS) {
+                    fprintf(stderr, "%s:%d: error: invalid assignment target\n", p->filename, line);
+                    exit(1);
+                }
                 p->pos++; // skip = or be
                 Node *n = alloc_node(NODE_FIELD_ASSIGN, line);
                 n->field_assign.object = expr->field_access.object;
