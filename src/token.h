@@ -41,6 +41,7 @@ typedef enum {
     TOK_MOD_WORD,   // mod
     TOK_TRUE,
     TOK_FALSE,
+    TOK_NIL,
     TOK_LIST,
     TOK_MAP,
     TOK_IMAP,

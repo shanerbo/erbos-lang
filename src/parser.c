@@ -63,6 +63,12 @@ static Node *parse_primary(Parser *p) {
         p->pos++;
         return n;
     }
+    if (at(p, TOK_NIL)) {
+        Node *n = alloc_node(NODE_INT_LIT, line);
+        n->int_lit.value = 0;
+        p->pos++;
+        return n;
+    }
     if (at(p, TOK_NOT)) {
         p->pos++;
         Node *n = alloc_node(NODE_UNARY, line);
