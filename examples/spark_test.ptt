@@ -1,4 +1,0 @@
-spark {
-  yell("erbos lives")
-  yell(1 + 2 + 3)
-}
