@@ -52,3 +52,9 @@
 
 | `match` | pattern match on enum | `match r { Ok(v) => ... }` |
 | `imap` | int-key map type | `m is imap of int to int` |
+
+| `use` | import module | `use std/math` |
+| `as` | import alias | `use path as name` |
+| `test` | define test block | `test "name" { }` |
+| `assert` | test assertion | `assert(x eq 5)` |
+| `nil` | null/empty pointer | `root eq nil` |

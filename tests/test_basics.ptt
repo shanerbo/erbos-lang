@@ -1,0 +1,39 @@
+test "arithmetic" {
+  assert(1 + 2 eq 3)
+  assert(10 - 3 eq 7)
+  assert(4 * 5 eq 20)
+  assert(10 / 3 eq 3)
+  assert(10 mod 3 eq 1)
+  assert(0 - 42 eq -42)
+}
+
+test "comparisons word form" {
+  assert(10 gt 5)
+  assert(5 lt 10)
+  assert(5 eq 5)
+  assert(5 ne 4)
+  assert(5 ge 5)
+  assert(5 le 5)
+}
+
+test "comparisons symbol form" {
+  assert(10 > 5)
+  assert(5 < 10)
+  assert(5 == 5)
+  assert(5 != 4)
+  assert(5 >= 5)
+  assert(5 <= 5)
+}
+
+test "logical operators" {
+  assert(true and true)
+  assert(not false)
+  assert(true or false)
+  assert(not (true and false))
+}
+
+test "negative numbers" {
+  x is -10
+  assert(x eq -10)
+  assert(x + 15 eq 5)
+}

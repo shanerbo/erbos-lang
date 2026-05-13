@@ -1,0 +1,42 @@
+add(a int, b int) int { give a + b }
+
+fib(n int) int {
+  n le 1 ?{ give n }
+  give fib(n - 1) + fib(n - 2)
+}
+
+test "function call" {
+  assert(add(1, 2) eq 3)
+  assert(add(100, 200) eq 300)
+}
+
+test "recursion" {
+  assert(fib(0) eq 0)
+  assert(fib(1) eq 1)
+  assert(fib(10) eq 55)
+}
+
+test "through range" {
+  sum is 0
+  through (i from 1 to 11 by 1) {
+    sum be sum + i
+  }
+  assert(sum eq 55)
+}
+
+test "infi while" {
+  count is 10
+  infi (count gt 0) {
+    count be count - 1
+  }
+  assert(count eq 0)
+}
+
+test "stop and skip" {
+  sum is 0
+  through (i from 0 to 10 by 1) {
+    i eq 5 ?{ stop }
+    sum be sum + i
+  }
+  assert(sum eq 10)
+}

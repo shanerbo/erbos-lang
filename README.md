@@ -284,7 +284,32 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 
 ## Testing
 
-`make test` runs: passing examples, compile error tests, runtime panic tests, C runtime tests, and output-validated leetcode tests.
+### Built-in test framework
+```
+test "my feature" {
+  assert(1 + 1 eq 2)
+  assert(add(3, 4) eq 7)
+}
+```
+
+Run: `erbos test file.ptt`
+
+### Compiler test suite
+`make test` runs: passing examples, compile error tests, runtime panic tests, C runtime tests, output-validated leetcode tests, and framework tests.
+
+---
+
+## Imports
+
+```
+use std/math
+
+spark {
+  yell(math.max(10, 20))
+}
+```
+
+Standard library: `std/math`, `std/queue`, `std/stack`
 
 ---
 

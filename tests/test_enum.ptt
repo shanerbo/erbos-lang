@@ -1,0 +1,36 @@
+Result is
+  Ok(value int)
+  | Err(message str)
+
+divide(a int, b int) Result {
+  b eq 0 ?{
+    give Result.Err("div by zero")
+  }
+  give Result.Ok(a / b)
+}
+
+test "enum creation" {
+  r is Result.Ok(42)
+  match r {
+    Ok(v) => assert(v eq 42)
+    Err(msg) => assert(false)
+  }
+}
+
+test "enum error path" {
+  r is divide(10, 0)
+  found_err is 0
+  match r {
+    Ok(v) => assert(false)
+    Err(msg) => found_err be 1
+  }
+  assert(found_err eq 1)
+}
+
+test "enum success path" {
+  r is divide(10, 2)
+  match r {
+    Ok(v) => assert(v eq 5)
+    Err(msg) => assert(false)
+  }
+}

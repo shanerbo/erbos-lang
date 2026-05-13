@@ -1,0 +1,25 @@
+use std/math
+
+test "math.max" {
+  assert(math.max(10, 20) eq 20)
+  assert(math.max(100, 1) eq 100)
+  assert(math.max(-5, -1) eq -1)
+}
+
+test "math.min" {
+  assert(math.min(10, 20) eq 10)
+  assert(math.min(100, 1) eq 1)
+  assert(math.min(-5, -1) eq -5)
+}
+
+test "math.abs" {
+  assert(math.abs(42) eq 42)
+  assert(math.abs(-42) eq 42)
+  assert(math.abs(0) eq 0)
+}
+
+test "math.pow" {
+  assert(math.pow(2, 0) eq 1)
+  assert(math.pow(2, 8) eq 256)
+  assert(math.pow(3, 3) eq 27)
+}

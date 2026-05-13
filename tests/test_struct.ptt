@@ -1,0 +1,42 @@
+Point is {
+  x int
+  y int
+}
+
+make_point(x int, y int) Point {
+  p is Point()
+  p.x be x
+  p.y be y
+  give p
+}
+
+test "struct create and access" {
+  p is Point()
+  p.x be 10
+  p.y be 20
+  assert(p.x eq 10)
+  assert(p.y eq 20)
+}
+
+test "struct from function" {
+  p is make_point(3, 4)
+  assert(p.x eq 3)
+  assert(p.y eq 4)
+}
+
+test "move semantics" {
+  a is Point()
+  a.x be 77
+  b is now a
+  assert(b.x eq 77)
+}
+
+test "RAII in loop" {
+  total is 0
+  through (i from 0 to 100 by 1) {
+    p is Point()
+    p.x be i
+    total be total + p.x
+  }
+  assert(total eq 4950)
+}

@@ -381,3 +381,34 @@ yell(imap_get(memo, 42))    // 100
 yell(imap_get(memo, 99))    // 0 (not found)
 yell(imap_len(memo))        // 1
 ```
+
+## Imports
+
+```
+use std/math
+use utils/helper as h
+
+spark {
+  yell(math.max(10, 20))
+  h.do_thing()
+}
+```
+
+- `use path` imports a module from `./path.ptt` or `std/path.ptt`
+- Access via `module.function()`
+- `as alias` for renaming
+
+## Testing
+
+```
+test "addition" {
+  assert(1 + 1 eq 2)
+  assert(add(3, 4) eq 7)
+}
+```
+
+Run: `erbos test file.ptt`
+
+- `test "name" { }` defines a test block
+- `assert(condition)` passes if true, fails with line number
+- Files with test blocks auto-run tests (no spark needed)

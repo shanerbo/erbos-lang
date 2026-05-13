@@ -1,0 +1,41 @@
+test "list push and index" {
+  nums is list of int
+  nums.push(10)
+  nums.push(20)
+  nums.push(30)
+  assert(nums[0] eq 10)
+  assert(nums[1] eq 20)
+  assert(nums[2] eq 30)
+  assert(len(nums) eq 3)
+}
+
+test "list pop" {
+  nums is list of int
+  nums.push(1)
+  nums.push(2)
+  nums.push(3)
+  last is nums.pop()
+  assert(last eq 3)
+  assert(len(nums) eq 2)
+}
+
+test "list literal" {
+  nums is [10, 20, 30]
+  assert(nums[0] eq 10)
+  assert(nums[2] eq 30)
+}
+
+test "list growable" {
+  big is list of int
+  through (i from 0 to 50 by 1) {
+    big.push(i)
+  }
+  assert(len(big) eq 50)
+  assert(big[49] eq 49)
+}
+
+test "list_set" {
+  nums is [1, 2, 3]
+  list_set(nums, 1, 99)
+  assert(nums[1] eq 99)
+}

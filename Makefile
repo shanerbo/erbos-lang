@@ -11,7 +11,7 @@ $(OUT): $(SRC) src/*.h
 clean:
 	rm -f $(OUT) *.o *.s examples/*.s examples/*.o
 
-test: $(OUT) test-pass test-fail test-runtime
+test: $(OUT) test-pass test-fail test-runtime test-framework
 	@echo ""
 	@echo "All tests passed."
 
@@ -70,7 +70,7 @@ test-fail: $(OUT)
 	done; \
 	[ $$fail -eq 0 ] || (echo "Some failure tests did not error"; exit 1)
 
-.PHONY: all clean test test-pass test-fail test-runtime
+.PHONY: all clean test test-pass test-fail test-runtime test-framework
 
 test-runtime:
 	@echo "=== Runtime C tests ==="
@@ -79,3 +79,16 @@ test-runtime:
 	@$(CC) $(CFLAGS) -Isrc -o tests/test_channel tests/test_channel.c src/runtime.c src/channel.c src/runtime_asm.s
 	@./tests/test_channel > /dev/null && echo "  OK:   test_channel" || echo "  FAIL: test_channel"
 	@rm -f tests/test_runtime tests/test_channel
+
+test-framework: $(OUT)
+	@echo "=== Framework tests (erbos test) ==="
+	@fail=0; \
+	for f in tests/test_*.ptt; do \
+		b=$$(basename $$f); \
+		if ! ./$(OUT) test "$$f" > /dev/null 2>&1; then \
+			echo "  FAIL: $$b"; fail=1; \
+		else \
+			echo "  OK:   $$b"; \
+		fi; \
+	done; \
+	[ $$fail -eq 0 ] || (echo "Some framework tests failed"; exit 1)

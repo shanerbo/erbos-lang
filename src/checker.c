@@ -485,6 +485,9 @@ static void check_stmt(Checker *c, Node *n) {
         case NODE_METHOD_CALL:
             check_expr(c, n);
             break;
+        case NODE_ASSERT:
+            if (n->assert_stmt.condition) check_expr(c, n->assert_stmt.condition);
+            break;
         default:
             break;
     }
@@ -560,5 +563,16 @@ void checker_run(Node *program) {
                 exit(1);
             }
         }
+    }
+
+    // Check test bodies
+    for (int i = 0; i < program->program.tests.count; i++) {
+        Node *t = program->program.tests.items[i];
+        c.count = 0;
+        c.cur_return_type = make_type(TYPE_VOID);
+        c.found_give = 0;
+        Node *body = t->test_def.body;
+        for (int j = 0; j < body->block.stmts.count; j++)
+            check_stmt(&c, body->block.stmts.items[j]);
     }
 }
