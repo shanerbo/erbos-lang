@@ -2,8 +2,6 @@
 
 ## Entry Point
 
-Every program starts with `spark`:
-
 ```
 spark {
   yell("hello world")
@@ -15,11 +13,11 @@ spark {
 ```
 x is 10              // inferred type
 x is int 10          // explicit type
-nomut pi is 3        // immutable — cannot reassign
-x be 20              // reassignment
+nomut pi is 3        // immutable
+x be 42              // reassignment
 ```
 
-All variables must be initialized. `x is int` without a value is a compile error.
+All variables must be initialized.
 
 ## Types
 
@@ -29,30 +27,23 @@ All variables must be initialized. `x is int` without a value is a compile error
 | `str` | string |
 | `bool` | `true` or `false` |
 | `list of T` | typed dynamic list |
-| `map of K to V` | typed ordered map |
-| *StructName* | any user-defined struct (e.g. `Point`) |
+| `map of K to V` | typed ordered map (string keys) |
+| `imap of K to V` | typed ordered map (int keys) |
+| `nil` | null/empty pointer |
 
 ## Functions
 
 ```
-// No return value
-greet(name str) {
-  yell("hello {name}")
-}
-
-// With return
 add(a int, b int) int {
   give a + b
 }
 
-// Call
-spark {
-  result is add(3, 4)
-  greet("erbos")
+greet(name str) {
+  yell("hello {name}")
 }
 ```
 
-`give` returns a value. Bare `give` returns void (early exit).
+`give` returns a value. Bare `give` returns void.
 
 ## Conditionals
 
@@ -66,52 +57,32 @@ x gt 10 ?{
 }
 ```
 
-- `?{` = if this condition is true
-- Additional conditions after `}` = else-if
-- `nah` = else
-
 ## Loops
 
-### Range loop
 ```
-through (i from 0 to 10 by 2) {
-  yell(i)
-}
+// Range
+through (i from 0 to 10 by 1) { }
+
+// Collection
+through (item in nums) { }
+
+// While
+infi (x gt 0) { x be x - 1 }
+
+// Infinite + break
+infi { stop }
 ```
 
-### Collection loop
-```
-through (item in my_list) {
-  yell(item)
-}
-```
-
-### While loop
-```
-infi (x gt 0) {
-  x be x - 1
-}
-```
-
-### Infinite loop
-```
-infi {
-  x eq 10 ?{
-    stop
-  }
-}
-```
-
-### Loop control
-- `stop` — break out of loop
-- `skip` — skip to next iteration
+`stop` = break, `skip` = continue.
 
 ## Strings
 
 ```
 name is "world"
-yell("hello {name}")          // interpolation
-c is str_concat("a", "b")    // concatenation
+yell("hello {name}")          // interpolation (int and str vars)
+c is "hi" + " there"          // concat
+yell(len("hello"))            // 5
+yell(char_at("abc", 1))       // "b"
 ```
 
 ## Structs
@@ -122,265 +93,86 @@ Point is {
   y int
 }
 
-spark {
-  p is Point()
-  p.x be 10
-  p.y be 20
-  yell(p.x + p.y)
-}
+p is Point()
+p.x be 10
+p.y be 20
 ```
 
 ## Lists
 
 ```
-nums is [10, 20, 30]          // literal
-yell(nums[0])                 // indexing (bounds-checked)
-
 nums is list of int           // typed, auto-constructed
 nums.push(10)
 nums.push(20)
-last is nums.pop()
-yell(nums.len())
+yell(nums[0])                 // 10
+yell(len(nums))               // 2
+last is nums.pop()            // 20
+list_set(nums, 0, 99)         // set by index
 
-through (n in nums) {         // iteration
-  yell(n)
-}
+// Literal (type inferred)
+vals is [1, 2, 3]
 
 // Chained indexing
 grid is list of list
 grid.push([1, 2, 3])
-grid.push([4, 5, 6])
-yell(grid[0][1])          // 2
-
-// Nested generics
-matrix is list of list of int
+yell(grid[0][1])              // 2
 ```
 
 ## Maps
 
 ```
-m is map of str to int
-m.set("alice", 100)
-m.set("bob", 85)
-
-yell(m.get("alice"))          // 100
-yell(m.len())                 // 2
-
-// Iteration (ordered by insertion)
-keys is m.keys()
-through (k in keys) {
-  yell(k)
-  yell(m.get(k))
-}
+// String-key map
+scores is map of str to int
+scores.set("alice", 95)
+yell(scores.get("alice"))     // 95
+yell(len(scores))             // 1
 
 // Map literal
-scores is ["alice" to 95, "bob" to 87]
-yell(scores.get("alice"))
+m is ["name" to 1, "age" to 2]
+
+// Int-key map
+memo is imap of int to int
+imap_set(memo, 42, 100)
+yell(imap_get(memo, 42))      // 100
+
+// Iteration
+keys is scores.keys()
+through (k in keys) { yell(k) }
 ```
 
-## Operators
-
-### Arithmetic (symbols only)
-| Symbol | Meaning |
-|--------|---------|
-| `+` | add |
-| `-` | subtract |
-| `*` | multiply |
-| `/` | divide |
-
-### Modulo (both work)
-| Symbol | Word |
-|--------|------|
-| `%` | `mod` |
-
-### Comparisons (both work)
-| Symbol | Word | Meaning |
-|--------|------|---------|
-| `>` | `gt` | greater than |
-| `<` | `lt` | less than |
-| `>=` | `ge` | greater or equal |
-| `<=` | `le` | less or equal |
-| `==` | `eq` | equal |
-| `!=` | `ne` | not equal |
-
-### Logical (words only)
-| Word | Meaning |
-|------|---------|
-| `and` | logical AND |
-| `or` | logical OR |
-| `not` | negation |
-
-## Ownership & Memory
-
-### RAII — automatic cleanup
-Every heap allocation is freed when its scope ends:
-```
-spark {
-  p is Point()
-  p.x be 42
-}                   // p auto-freed here
-```
-
-### Scoped blocks
-Use bare `{ }` for short-lived allocations:
-```
-spark {
-  {
-    temp is Point()
-    temp.x be 99
-  }                 // temp freed here
-  // temp doesn't exist here
-}
-```
-
-### Move semantics
-Transfer ownership — original is dead:
-```
-a is Point()
-b is now a          // a is dead, b owns it
-// yell(a.x)       // COMPILE ERROR: use of moved variable 'a'
-```
-
-### Clone
-Shallow copy (pointer copy) — both point to same data:
-```
-a is Point()
-b is rep a          // b is a copy, both live
-```
-
-### give transfers ownership
-```
-make_point() int {
-  p is Point()
-  p.x be 42
-  give p            // ownership moves to caller, no free here
-}
-```
-
-### Ref params (mutable borrow)
-```
-reset(p ref int) {
-  p.x be 0         // allowed — p is ref
-}
-
-read(p int) {
-  yell(p.x)
-  // p.x be 5     // COMPILE ERROR: p is not ref
-}
-
-spark {
-  p is Point()
-  reset(ref p)     // caller acknowledges mutation
-}
-```
-
-> `ref` is enforced: mutating a non-ref struct parameter is a compile error. Caller must pass `ref varname` explicitly.
-
-## Immutability
-
-```
-nomut x is 10
-x be 20             // COMPILE ERROR: cannot reassign nomut variable
-```
-
-## Recursion
-
-```
-fib(n int) int {
-  n le 1 ?{
-    give n
-  }
-  give fib(n - 1) + fib(n - 2)
-}
-
-spark {
-  yell(fib(10))     // 55
-}
-```
-
-## Bounds Checking
-
-```
-nums is [10, 20, 30]
-yell(nums[5])       // RUNTIME PANIC: index out of bounds
-```
-
-## Concurrency (runtime)
-
-```
-spark {
-  t is task()
-  t.fire(worker())
-  yell("done")
-}
-
-worker() {
-  yell("working")
-}
-```
-
-> **Note:** Concurrency (`task`) compiles but runs synchronously in compiled .ptt output. The full green thread runtime is a separate C library not yet integrated.
-
-## Comments
-
-```
-// single line
-
-/* multi
-   line */
-```
-
-## File Extension
-
-All source files use `.ptt` 🥔 extension.
-
-## Build & Run
-
-```bash
-./erbos program.ptt    # compile to binary
-./erbos run program.ptt # compile + run + cleanup 🥔
-```
-
-## Enums with Data
+## Enums + Pattern Matching
 
 ```
 Result is
   Ok(value int)
   | Err(message str)
 
-Option is
-  Some(value int)
-  | None
-```
-
-### Creating variants
-```
 r is Result.Ok(42)
-e is Result.Err("something failed")
-n is Option.None()
-```
 
-### Pattern matching
-```
 match r {
   Ok(v) => yell(v)
   Err(msg) => yell(msg)
 }
 ```
 
-Match is exhaustive — you must handle every variant.
-
-## Int-Key Maps (imap)
-
-For integer keys without string conversion:
+## Ownership & Memory
 
 ```
-memo is imap of int to int
-imap_set(memo, 42, 100)
-yell(imap_get(memo, 42))    // 100
-yell(imap_get(memo, 99))    // 0 (not found)
-yell(imap_len(memo))        // 1
+// RAII: auto-free at scope end
+{ p is Point(); p.x be 42 }  // p freed here
+
+// Move
+b is now a                    // a is dead
+
+// Clone (shallow)
+c is rep b
+
+// Ref params (mutable borrow)
+reset(p ref Point) { p.x be 0 }
+reset(ref pt)                 // caller acknowledges
 ```
+
+> `ref` is enforced: mutating a non-ref struct parameter is a compile error.
 
 ## Imports
 
@@ -394,9 +186,7 @@ spark {
 }
 ```
 
-- `use path` imports a module from `./path.ptt` or `std/path.ptt`
-- Access via `module.function()`
-- `as alias` for renaming
+Standard library: `std/math`, `std/queue`, `std/stack`
 
 ## Testing
 
@@ -409,6 +199,24 @@ test "addition" {
 
 Run: `erbos test file.ptt`
 
-- `test "name" { }` defines a test block
-- `assert(condition)` passes if true, fails with line number
-- Files with test blocks auto-run tests (no spark needed)
+## Operators
+
+| Symbol | Word | Meaning |
+|--------|------|---------|
+| `+` `-` `*` `/` | — | arithmetic |
+| `%` | `mod` | modulo |
+| `>` | `gt` | greater than |
+| `<` | `lt` | less than |
+| `>=` | `ge` | greater or equal |
+| `<=` | `le` | less or equal |
+| `==` | `eq` | equal |
+| `!=` | `ne` | not equal |
+| — | `and` `or` `not` | logical (short-circuit) |
+
+## Build & Run
+
+```bash
+./erbos program.ptt          # compile to binary
+./erbos run program.ptt      # compile + run + cleanup
+./erbos test tests.ptt       # run test blocks
+```

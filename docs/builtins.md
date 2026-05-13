@@ -4,83 +4,77 @@
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `yell(value)` | Print int or string to stdout with newline | `yell(42)`, `yell("hi")` |
+| `yell(value)` | Print int or string with newline | `yell(42)`, `yell("hi")` |
 
 ## Universal
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `len(value)` | Get length of list, map, or string | `len(nums)`, `len(m)`, `len("hi")` |
+| `len(value)` | Length of list, map, or string | `len(nums)`, `len("hi")` |
 
 ## Strings
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `str_concat(a, b)` | Concatenate two strings | `str_concat("hello", " world")` |
-| `str_len(s)` | Get string length | `str_len("hello")` → 5 |
-| `char_at(s, i)` | Get character at index | `char_at("hello", 0)` → "h" |
+| `str_len(s)` | String length | `str_len("hello")` → 5 |
+| `char_at(s, i)` | Character at index | `char_at("abc", 1)` → "b" |
+| `str_concat(a, b)` | Concatenate strings | `str_concat("hi", " there")` |
 | `int_to_str(n)` | Convert int to string | `int_to_str(42)` → "42" |
+| `+` operator | String concat (when both str) | `"hi" + " there"` |
 
-String interpolation is built into the language:
-```
-name is "erbos"
-yell("hello {name}")    // prints: hello erbos
-```
+String interpolation: `"hello {name}"` works for both int and str variables.
 
 ## Lists
 
-| Method | Description | Example |
-|--------|-------------|---------|
+| Function/Method | Description | Example |
+|----------|-------------|---------|
 | `list of T` | Create typed list | `nums is list of int` |
-| `.push(val)` | Append value | `nums.push(10)` |
-| `.pop()` | Remove and return last element | `last is nums.pop()` |
-| `.len()` | Get number of elements | `yell(nums.len())` |
+| `.push(val)` | Append element | `nums.push(10)` |
+| `.pop()` | Remove and return last | `nums.pop()` |
 | `list_set(list, i, val)` | Set element at index | `list_set(nums, 0, 99)` |
+| `[a, b, c]` | List literal | `nums is [1, 2, 3]` |
 
-List literals also work:
-```
-nums is [1, 2, 3]
-yell(nums[0])           // bounds-checked
-```
+Lists are growable — no capacity limit.
 
-## Maps
+## Maps (string keys)
 
-| Method | Description | Example |
-|--------|-------------|---------|
+| Function/Method | Description | Example |
+|----------|-------------|---------|
 | `map of K to V` | Create typed map | `m is map of str to int` |
-| `.set(key, val)` | Insert or update entry | `m.set("age", 25)` |
-| `.get(key)` | Get value by key (0 if missing) | `m.get("age")` |
-| `.len()` | Get number of entries | `m.len()` |
-| `.keys()` | Get list of keys (insertion order) | `m.keys()` |
+| `.set(key, val)` | Insert/update entry | `m.set("x", 10)` |
+| `.get(key)` | Get value (0 if missing) | `m.get("x")` |
+| `.keys()` | Get list of keys | `m.keys()` |
+| `["k" to v, ...]` | Map literal | `["a" to 1, "b" to 2]` |
+
+Maps are growable — no capacity limit. Ordered by insertion.
+
+## Maps (int keys)
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `imap of K to V` | Create int-key map | `m is imap of int to int` |
+| `imap_set(m, key, val)` | Set entry | `imap_set(m, 42, 100)` |
+| `imap_get(m, key)` | Get value (0 if missing) | `imap_get(m, 42)` |
+| `imap_len(m)` | Entry count | `imap_len(m)` |
 
 ## Structs
 
 | Syntax | Description | Example |
 |--------|-------------|---------|
-| `StructName()` | Heap-allocate a struct instance | `Point()` |
+| `StructName()` | Heap-allocate struct | `Point()` |
 
-Automatically generated for every struct definition:
-```
-Point is {
-  x int
-  y int
-}
-
-p is Point()
-p.x be 10
-```
-
-## Memory
-
-All allocations are heap-backed via `mmap` syscall. No libc dependency.
-
-RAII is implemented — heap allocations are automatically freed when their scope ends. Move semantics (`is now`) transfer ownership. Clone (`is rep`) creates shallow copies (pointer copy). Deep clone is not yet implemented.
-
-## Int-Key Maps (imap)
+## Testing
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `imap of K to V` | Create typed int-key map | `m is imap of int to int` |
-| `imap_set(m, key, val)` | Set entry (int key) | `imap_set(m, 42, 100)` |
-| `imap_get(m, key)` | Get value (0 if missing) | `imap_get(m, 42)` |
-| `imap_len(m)` | Get entry count | `imap_len(m)` |
+| `assert(cond)` | Pass if true, fail with line | `assert(x eq 5)` |
+
+## Standard Library
+
+Import with `use`:
+
+```
+use std/math    // min, max, abs, pow
+use std/queue   // new, push, pop, size, empty
+use std/stack   // new, push, pop, peek, size, empty
+```

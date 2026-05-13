@@ -7,20 +7,6 @@ spark {
 }
 ```
 
-## Fibonacci
-```
-fib(n int) int {
-  n le 1 ?{
-    give n
-  }
-  give fib(n - 1) + fib(n - 2)
-}
-
-spark {
-  yell(fib(10))
-}
-```
-
 ## FizzBuzz
 ```
 spark {
@@ -38,123 +24,131 @@ spark {
 }
 ```
 
-## Linked List
+## Fibonacci
 ```
-Node is {
-  value int
-  next int
+fib(n int) int {
+  n le 1 ?{ give n }
+  give fib(n - 1) + fib(n - 2)
 }
 
 spark {
-  n1 is Node()
-  n1.value be 10
-  n1.next be 0
-
-  n2 is Node()
-  n2.value be 20
-  n2.next be n1
-
-  yell(n2.value)
-  yell(n1.value)
+  yell(fib(10))
 }
 ```
 
-## Map Usage
-```
-spark {
-  scores is map of str to int
-  scores.set("alice", 95)
-  scores.set("bob", 87)
-  scores.set("charlie", 92)
-
-  keys is scores.keys()
-  through (name in keys) {
-    yell(name)
-    yell(scores.get(name))
-  }
-}
-```
-
-## Dynamic List
-```
-spark {
-  nums is list of int
-  nums.push(10)
-  nums.push(20)
-  nums.push(30)
-
-  yell(nums.len())
-  last is nums.pop()
-  yell(last)
-
-  through (n in nums) {
-    yell(n)
-  }
-}
-```
-
-## Counter with While Loop
-```
-spark {
-  count is 0
-  infi (count lt 5) {
-    yell(count)
-    count be count + 1
-  }
-}
-```
-
-## Ownership & Move
+## Structs
 ```
 Point is {
   x int
   y int
 }
+
+spark {
+  p is Point()
+  p.x be 3
+  p.y be 4
+  yell(p.x + p.y)
+}
+```
+
+## Collections
+```
+spark {
+  // Typed list
+  nums is list of int
+  nums.push(10)
+  nums.push(20)
+  yell(nums[0])
+
+  // Map literal
+  scores is ["alice" to 95, "bob" to 87]
+  yell(scores.get("alice"))
+
+  // Int-key map
+  memo is imap of int to int
+  imap_set(memo, 1, 100)
+  yell(imap_get(memo, 1))
+}
+```
+
+## Enums + Error Handling
+```
+Result is
+  Ok(value int)
+  | Err(message str)
+
+divide(a int, b int) Result {
+  b eq 0 ?{ give Result.Err("division by zero") }
+  give Result.Ok(a / b)
+}
+
+spark {
+  match divide(10, 2) {
+    Ok(v) => yell(v)
+    Err(msg) => yell(msg)
+  }
+}
+```
+
+## BST (Binary Search Tree)
+```
+TreeNode is {
+  value int
+  left int
+  right int
+}
+
+new_node(val int) TreeNode {
+  n is TreeNode()
+  n.value be val
+  n.left be nil
+  n.right be nil
+  give n
+}
+
+insert(root int, val int) int {
+  root eq nil ?{ give new_node(val) }
+  val lt root.value ?{ root.left be insert(root.left, val) }
+  val gt root.value ?{ root.right be insert(root.right, val) }
+  give root
+}
+```
+
+## Imports
+```
+use std/math
+
+spark {
+  yell(math.max(10, 20))
+  yell(math.pow(2, 8))
+}
+```
+
+## Testing
+```
+add(a int, b int) int { give a + b }
+
+test "addition" {
+  assert(add(1, 2) eq 3)
+  assert(add(-1, 1) eq 0)
+}
+```
+
+Run: `erbos test file.ptt`
+
+## Ownership
+```
+Point is { x int, y int }
 
 spark {
   a is Point()
   a.x be 10
-  b is now a          // a is dead
-  yell(b.x)          // 10
-  // yell(a.x)       // COMPILE ERROR: use of moved variable
-}
-```
+  b is now a        // move: a is dead
+  yell(b.x)        // 10
 
-## Scoped Lifetime
-```
-Point is {
-  x int
-  y int
-}
-
-spark {
-  x is 0
   {
-    temp is Point()
-    temp.x be 99
-    x be temp.x
-  }                   // temp freed here
-  yell(x)            // 99
-}
-```
-
-## Immutability
-```
-spark {
-  nomut max is 100
-  // max be 200      // COMPILE ERROR: cannot reassign nomut variable
-  yell(max)
-}
-```
-
-## Map Literal
-```
-spark {
-  colors is ["red" to 1, "green" to 2, "blue" to 3]
-  keys is colors.keys()
-  through (k in keys) {
-    yell(k)
-    yell(colors.get(k))
-  }
+    tmp is Point()  // scoped
+    tmp.x be 42
+  }                 // tmp freed here (RAII)
 }
 ```
