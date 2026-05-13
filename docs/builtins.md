@@ -75,3 +75,12 @@ p.x be 10
 All allocations are heap-backed via `mmap` syscall. No libc dependency.
 
 RAII is implemented — heap allocations are automatically freed when their scope ends. Move semantics (`is now`) transfer ownership. Clone (`is rep`) creates shallow copies (pointer copy). Deep clone is not yet implemented.
+
+## Int-Key Maps (imap)
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `imap of K to V` | Create typed int-key map | `m is imap of int to int` |
+| `imap_set(m, key, val)` | Set entry (int key) | `imap_set(m, 42, 100)` |
+| `imap_get(m, key)` | Get value (0 if missing) | `imap_get(m, 42)` |
+| `imap_len(m)` | Get entry count | `imap_len(m)` |

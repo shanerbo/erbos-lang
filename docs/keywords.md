@@ -49,3 +49,6 @@
 | `>` `<` `>=` `<=` `==` `!=` | comparisons (same as word forms) |
 | `//` | single-line comment |
 | `/* */` | multi-line comment |
+
+| `match` | pattern match on enum | `match r { Ok(v) => ... }` |
+| `imap` | int-key map type | `m is imap of int to int` |

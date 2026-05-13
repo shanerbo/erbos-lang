@@ -129,7 +129,7 @@ c is rep b          // clone — shallow copy (pointer copy)
 
 > **Note:** RAII is real — heap allocations are freed when their scope ends.
 > `rep` performs a shallow copy (pointer copy), not a deep clone.
-> `ref` is parsed but borrow rules are not enforced by the checker yet.
+> `ref` is enforced: non-ref struct params cannot be mutated. Caller must pass `ref` explicitly.
 
 ---
 
@@ -210,7 +210,7 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 | Feature | Status |
 |---------|--------|
 | Clone (`is rep`) | Shallow copy (pointer copy). Deep clone not implemented. |
-| `ref` params | Parsed and stored. Borrow/mutation rules not enforced by checker or codegen. |
+| `ref` enforcement | Non-ref struct params cannot be mutated (compile error). |
 | Struct field access | Resolves field by name across all structs, not per-type. Works if field names are unique. |
 | Green thread runtime | Separate C library (`src/runtime.c`). Not integrated into compiled `.ptt` output. |
 | Channels | Separate C library (`src/channel.c`). Not integrated into compiled output. |
@@ -220,7 +220,6 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 | Feature | Status |
 |---------|--------|
 | Deep clone for `rep` | Requires type-aware copy |
-| Borrow checker (`ref` enforcement) | Requires full type propagation in codegen |
 | Per-struct field resolution | Requires type tracking through variables |
 | Enums with data (algebraic types) | — |
 | Pattern matching | — |
@@ -269,7 +268,6 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 ## Roadmap
 
 - [ ] Deep clone for `rep`
-- [ ] Borrow checker (`ref` enforcement)
 - [ ] Per-struct type-aware field resolution
 - [ ] Enums with data (algebraic types)
 - [ ] Pattern matching

@@ -274,7 +274,7 @@ spark {
 }
 ```
 
-> **Note:** `ref` is parsed but borrow rules are not yet enforced by the compiler. Mutation of non-ref params is not blocked.
+> `ref` is enforced: mutating a non-ref struct parameter is a compile error. Caller must pass `ref varname` explicitly.
 
 ## Immutability
 
@@ -339,4 +339,45 @@ All source files use `.ptt` 🥔 extension.
 ```bash
 ./erbos program.ptt    # compile to binary
 ./erbos run program.ptt # compile + run + cleanup 🥔
+```
+
+## Enums with Data
+
+```
+Result is
+  Ok(value int)
+  | Err(message str)
+
+Option is
+  Some(value int)
+  | None
+```
+
+### Creating variants
+```
+r is Result.Ok(42)
+e is Result.Err("something failed")
+n is Option.None()
+```
+
+### Pattern matching
+```
+match r {
+  Ok(v) => yell(v)
+  Err(msg) => yell(msg)
+}
+```
+
+Match is exhaustive — you must handle every variant.
+
+## Int-Key Maps (imap)
+
+For integer keys without string conversion:
+
+```
+memo is imap of int to int
+imap_set(memo, 42, 100)
+yell(imap_get(memo, 42))    // 100
+yell(imap_get(memo, 99))    // 0 (not found)
+yell(imap_len(memo))        // 1
 ```
