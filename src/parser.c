@@ -328,6 +328,16 @@ static Node *parse_stmt(Parser *p) {
     }
     if (at(p, TOK_STOP)) { p->pos++; return alloc_node(NODE_STOP, line); }
     if (at(p, TOK_SKIP)) { p->pos++; return alloc_node(NODE_SKIP, line); }
+
+    // Assert statement
+    if (at(p, TOK_ASSERT)) {
+        p->pos++;
+        eat(p, TOK_LPAREN);
+        Node *n = alloc_node(NODE_ASSERT, line);
+        n->assert_stmt.condition = parse_expr(p);
+        eat(p, TOK_RPAREN);
+        return n;
+    }
     if (at(p, TOK_THROUGH)) { return parse_through(p); }
 
     // Match expression
@@ -819,11 +829,20 @@ Node *parser_parse(Parser *p) {
     program->program.funcs = (NodeList){0};
     program->program.structs = (NodeList){0};
     program->program.enums = (NodeList){0};
+    program->program.tests = (NodeList){0};
 
     skip_newlines(p);
     while (!at(p, TOK_EOF)) {
+        // Test block: test "name" { }
+        if (at(p, TOK_TEST)) {
+            p->pos++;
+            Node *t = alloc_node(NODE_TEST_DEF, cur(p)->line);
+            t->test_def.name = eat(p, TOK_STR_LIT)->value;
+            t->test_def.body = parse_block(p);
+            list_push(&program->program.tests, t);
+        }
         // Struct: IDENT IS {
-        if (at(p, TOK_IDENT) && peek_at(p, 1)->type == TOK_IS && peek_at(p, 2)->type == TOK_LBRACE) {
+        else if (at(p, TOK_IDENT) && peek_at(p, 1)->type == TOK_IS && peek_at(p, 2)->type == TOK_LBRACE) {
             list_push(&program->program.structs, parse_struct_def(p));
         }
         // Enum: IDENT IS NEWLINE IDENT or IDENT IS IDENT( — not followed by {

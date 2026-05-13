@@ -32,6 +32,8 @@ typedef enum {
     NODE_SKIP,
     NODE_ENUM_DEF,
     NODE_MATCH,
+    NODE_TEST_DEF,
+    NODE_ASSERT,
 } NodeType;
 
 typedef struct Node Node;
@@ -49,7 +51,7 @@ struct Node {
 
     union {
         // NODE_PROGRAM
-        struct { NodeList funcs; NodeList structs; NodeList enums; } program;
+        struct { NodeList funcs; NodeList structs; NodeList enums; NodeList tests; } program;
 
         // NODE_FUNC_DEF
         struct {
@@ -196,6 +198,17 @@ struct Node {
             Node **arm_bodies;
             int arm_count;
         } match_expr;
+
+        // NODE_TEST_DEF
+        struct {
+            char *name;
+            Node *body;
+        } test_def;
+
+        // NODE_ASSERT
+        struct {
+            Node *condition;
+        } assert_stmt;
     };
 };
 

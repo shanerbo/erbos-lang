@@ -22,15 +22,20 @@ static char *read_file(const char *path) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: erbos <file.ptt>\n       erbos run <file.ptt>\n");
+        fprintf(stderr, "usage: erbos <file.ptt>\n       erbos run <file.ptt>\n       erbos test <file.ptt>\n");
         return 1;
     }
 
-    // Check for "erbos run file.ptt"
+    // Check for "erbos run file.ptt" or "erbos test file.ptt"
     int run_mode = 0;
+    int test_mode __attribute__((unused)) = 0;
     const char *input;
     if (argc >= 3 && strcmp(argv[1], "run") == 0) {
         run_mode = 1;
+        input = argv[2];
+    } else if (argc >= 3 && strcmp(argv[1], "test") == 0) {
+        test_mode = 1;
+        run_mode = 1; // test mode also runs
         input = argv[2];
     } else {
         input = argv[1];

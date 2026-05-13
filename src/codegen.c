@@ -756,6 +756,16 @@ static void emit_stmt(Gen *g, Node *n) {
             if (g->loop_continue_label < 0) { fprintf(stderr, "error:%d: 'skip' used outside of a loop\n", n->line); exit(1); }
             fprintf(g->out, "    b _L%d\n", g->loop_continue_label);
             break;
+        case NODE_ASSERT: {
+            emit_expr(g, n->assert_stmt.condition);
+            int ok_label = new_label(g);
+            fprintf(g->out, "    cbnz x0, _L%d\n", ok_label);
+            // Assertion failed: print line number and exit
+            fprintf(g->out, "    mov x0, #%d\n", n->line);
+            fprintf(g->out, "    bl _assert_fail\n");
+            fprintf(g->out, "_L%d:\n", ok_label);
+            break;
+        }
         case NODE_BLOCK: {
             int scope_start = g->local_count;
             for (int j = 0; j < n->block.stmts.count; j++)
@@ -1525,10 +1535,55 @@ void codegen(Node *program, const char *output_path) {
     for (int i = 0; i < program->program.funcs.count; i++)
         emit_func(&g, program->program.funcs.items[i]);
 
-    // Entry point: must be spark
-    fprintf(g.out, ".globl _start\n.p2align 2\n_start:\n");
-    fprintf(g.out, "    bl _spark\n");
-    fprintf(g.out, "    mov x16, #1\n    mov x0, #0\n    svc #0x80\n\n");
+    // Emit test functions
+    int test_count = program->program.tests.count;
+    for (int i = 0; i < test_count; i++) {
+        Node *t = program->program.tests.items[i];
+        // Emit as _test_N function
+        g.local_count = 0;
+        g.stack_size = 0;
+        g.loop_start_label = -1;
+        g.loop_end_label = -1;
+        g.loop_continue_label = -1;
+        fprintf(g.out, ".globl _test_%d\n.p2align 2\n_test_%d:\n", i, i);
+        fprintf(g.out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n    sub sp, sp, #1024\n");
+        Node *body = t->test_def.body;
+        for (int j = 0; j < body->block.stmts.count; j++)
+            emit_stmt(&g, body->block.stmts.items[j]);
+        emit_scope_cleanup(&g, 0);
+        fprintf(g.out, "    mov x0, #0\n    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
+    }
+
+    // _assert_fail(line_number in x0): print failure and exit with code 1
+    fprintf(g.out, ".globl _assert_fail\n.p2align 2\n_assert_fail:\n");
+    fprintf(g.out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
+    fprintf(g.out, "    bl _yell_int\n"); // print line number
+    fprintf(g.out, "    adrp x0, _assert_msg@PAGE\n    add x0, x0, _assert_msg@PAGEOFF\n");
+    fprintf(g.out, "    bl _yell_str\n");
+    fprintf(g.out, "    mov x16, #1\n    mov x0, #1\n    svc #0x80\n\n");
+
+    // Entry point
+    if (test_count > 0) {
+        // Test runner: call each test, print pass/fail
+        fprintf(g.out, ".globl _start\n.p2align 2\n_start:\n");
+        for (int i = 0; i < test_count; i++) {
+            Node *t = program->program.tests.items[i];
+            int name_idx = add_string(&g, t->test_def.name);
+            // Print test name
+            fprintf(g.out, "    adrp x0, _pass_prefix@PAGE\n    add x0, x0, _pass_prefix@PAGEOFF\n");
+            fprintf(g.out, "    bl _yell_str\n");
+            fprintf(g.out, "    adrp x0, _str%d@PAGE\n    add x0, x0, _str%d@PAGEOFF\n", name_idx, name_idx);
+            fprintf(g.out, "    bl _yell_str\n");
+            // Call test (if assert fails, it exits — never returns)
+            fprintf(g.out, "    bl _test_%d\n", i);
+        }
+        fprintf(g.out, "    mov x16, #1\n    mov x0, #0\n    svc #0x80\n\n");
+    } else {
+        // Normal mode: call spark
+        fprintf(g.out, ".globl _start\n.p2align 2\n_start:\n");
+        fprintf(g.out, "    bl _spark\n");
+        fprintf(g.out, "    mov x16, #1\n    mov x0, #0\n    svc #0x80\n\n");
+    }
 
     if (g.string_count > 0) {
         fprintf(g.out, ".section __DATA,__data\n");
@@ -1544,10 +1599,17 @@ void codegen(Node *program, const char *output_path) {
     fprintf(g.out, "_heap_end: .quad 0\n");
     fprintf(g.out, "_heap_free_list: .quad 0\n");
 
-    // Panic messages
+    // Panic/test messages
     fprintf(g.out, ".section __DATA,__data\n");
     fprintf(g.out, "_oob_msg: .asciz \"panic: index out of bounds\"\n");
     fprintf(g.out, "_cap_msg: .asciz \"panic: collection capacity exceeded\"\n");
+    fprintf(g.out, "_assert_msg: .asciz \" assertion failed\"\n");
+    fprintf(g.out, "_pass_prefix: .asciz \"pass: \"\n");
 
     fclose(g.out);
+}
+
+void codegen_tests(Node *program, const char *output_path) {
+    (void)program;
+    (void)output_path;
 }
