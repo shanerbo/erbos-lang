@@ -155,6 +155,7 @@ static Node *parse_primary(Parser *p) {
             n->call.args = malloc(cap * sizeof(Node *));
             n->call.arg_count = 0;
             if (!at(p, TOK_RPAREN)) {
+                if (at(p, TOK_REF)) p->pos++; // skip ref at call site
                 n->call.args[n->call.arg_count++] = parse_expr(p);
                 while (at(p, TOK_COMMA)) {
                     p->pos++;
@@ -162,6 +163,7 @@ static Node *parse_primary(Parser *p) {
                         cap *= 2;
                         n->call.args = realloc(n->call.args, cap * sizeof(Node *));
                     }
+                    if (at(p, TOK_REF)) p->pos++; // skip ref at call site
                     n->call.args[n->call.arg_count++] = parse_expr(p);
                 }
             }

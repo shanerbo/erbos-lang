@@ -9,6 +9,7 @@
 typedef struct {
     char *name;
     Type type;
+    int is_ref;  // 1 if param is ref (mutable borrow)
 } Symbol;
 
 typedef struct {
@@ -23,6 +24,7 @@ typedef struct {
     Type return_type;
     int param_count;
     char **param_types_str;
+    int *param_is_ref;
 } FuncInfo;
 
 typedef struct {
@@ -65,7 +67,19 @@ static int types_equal(Type a, Type b) {
 static void set_sym(Checker *c, const char *name, Type t) {
     for (int i = 0; i < c->count; i++)
         if (!strcmp(c->syms[i].name, name)) { c->syms[i].type = t; return; }
-    c->syms[c->count++] = (Symbol){(char *)name, t};
+    c->syms[c->count++] = (Symbol){(char *)name, t, -1}; // -1 = local (always mutable)
+}
+
+static void set_sym_ref(Checker *c, const char *name, Type t, int is_ref) {
+    for (int i = 0; i < c->count; i++)
+        if (!strcmp(c->syms[i].name, name)) { c->syms[i].type = t; c->syms[i].is_ref = is_ref; return; }
+    c->syms[c->count++] = (Symbol){(char *)name, t, is_ref};
+}
+
+static int get_sym_is_ref(Checker *c, const char *name) {
+    for (int i = c->count - 1; i >= 0; i--)
+        if (!strcmp(c->syms[i].name, name)) return c->syms[i].is_ref;
+    return 0;
 }
 
 static Type get_sym(Checker *c, const char *name) {
@@ -390,9 +404,16 @@ static void check_stmt(Checker *c, Node *n) {
         case NODE_FIELD_ASSIGN: {
             check_expr(c, n->field_assign.object);
             check_expr(c, n->field_assign.value);
-            // Validate field exists if we know the struct type
-            // field_assign.object is the base object before the field
-            // We'd need the object's type — for now skip deep validation here
+            // Enforce ref: if object is a non-ref param, block mutation
+            if (n->field_assign.object->type == NODE_IDENT) {
+                const char *obj_name = n->field_assign.object->ident.name;
+                int ref_status = get_sym_is_ref(c, obj_name);
+                // ref_status: -1=local(ok), 0=param non-ref(error), 1=param ref(ok)
+                if (ref_status == 0) {
+                    fprintf(stderr, "error:%d: cannot mutate '%s' — parameter is not ref\n", n->line, obj_name);
+                    exit(1);
+                }
+            }
             break;
         }
         case NODE_IF:
@@ -490,6 +511,7 @@ void checker_run(Node *program) {
         c.funcs[i].name = f->func_def.name;
         c.funcs[i].param_count = f->func_def.param_count;
         c.funcs[i].param_types_str = f->func_def.param_types;
+        c.funcs[i].param_is_ref = f->func_def.param_is_ref;
         if (!f->func_def.return_type) c.funcs[i].return_type = make_type(TYPE_VOID);
         else if (!strcmp(f->func_def.return_type, "int")) c.funcs[i].return_type = make_type(TYPE_INT);
         else if (!strcmp(f->func_def.return_type, "str")) c.funcs[i].return_type = make_type(TYPE_STR);
@@ -511,7 +533,8 @@ void checker_run(Node *program) {
         // Register params
         for (int j = 0; j < f->func_def.param_count; j++) {
             Type t = parse_type_str(&c, f->func_def.param_types[j]);
-            set_sym(&c, f->func_def.param_names[j], t);
+            int is_ref = f->func_def.param_is_ref ? f->func_def.param_is_ref[j] : 0;
+            set_sym_ref(&c, f->func_def.param_names[j], t, is_ref);
         }
 
         Node *body = f->func_def.body;
