@@ -5,6 +5,7 @@
 #include "lexer.h"
 #include "parser.h"
 #include "checker.h"
+#include "optimizer.h"
 #include "codegen.h"
 
 static char *read_file(const char *path) {
@@ -140,6 +141,9 @@ int main(int argc, char **argv) {
 
     // Type check
     checker_run(program);
+
+    // Optimize
+    optimizer_run(program);
 
     // Codegen
     codegen(program, asm_path);
