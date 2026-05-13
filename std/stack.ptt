@@ -1,0 +1,26 @@
+// Stack: LIFO data structure using a list
+
+new() list of int {
+  give list of int
+}
+
+push(s list, val int) {
+  s.push(val)
+}
+
+pop(s list) int {
+  give s.pop()
+}
+
+peek(s list) int {
+  give s[len(s) - 1]
+}
+
+size(s list) int {
+  give len(s)
+}
+
+empty(s list) int {
+  len(s) eq 0 ?{ give 1 }
+  give 0
+}

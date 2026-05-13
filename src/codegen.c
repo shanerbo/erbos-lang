@@ -34,6 +34,9 @@ typedef struct {
     char ***enum_variant_names;
     int *enum_variant_counts;
     int enum_count;
+    // Import aliases
+    char **import_aliases;
+    int import_count;
 } Gen;
 
 static int new_label(Gen *g) { return g->label_count++; }
@@ -427,6 +430,23 @@ static void emit_expr(Gen *g, Node *n) {
                 fprintf(g->out, "    bl _task_%s\n", method);
                 break;
             }
+            // Check if object is an import alias (module.function() call)
+            if (n->method_call.object->type == NODE_IDENT) {
+                const char *obj_name = n->method_call.object->ident.name;
+                for (int ai = 0; ai < g->import_count; ai++) {
+                    if (!strcmp(g->import_aliases[ai], obj_name)) {
+                        // Module call: alias.func(args) → _alias_func(args)
+                        for (int i = n->method_call.arg_count - 1; i >= 0; i--) {
+                            emit_expr(g, n->method_call.args[i]);
+                            fprintf(g->out, "    str x0, [sp, #-16]!\n");
+                        }
+                        for (int i = 0; i < n->method_call.arg_count && i < 8; i++)
+                            fprintf(g->out, "    ldr x%d, [sp], #16\n", i);
+                        fprintf(g->out, "    bl _%s_%s\n", obj_name, method);
+                        goto method_done;
+                    }
+                }
+            }
             // User-defined method: obj.method(args) → _method(obj, args)
             emit_expr(g, n->method_call.object);
             fprintf(g->out, "    str x0, [sp, #-16]!\n");
@@ -434,11 +454,11 @@ static void emit_expr(Gen *g, Node *n) {
                 emit_expr(g, n->method_call.args[i]);
                 fprintf(g->out, "    str x0, [sp, #-16]!\n");
             }
-            // Load args into x1, x2, ... (object goes in x0)
             for (int i = 0; i < n->method_call.arg_count; i++)
                 fprintf(g->out, "    ldr x%d, [sp], #16\n", i + 1);
-            fprintf(g->out, "    ldr x0, [sp], #16\n"); // object in x0
+            fprintf(g->out, "    ldr x0, [sp], #16\n");
             fprintf(g->out, "    bl _%s\n", method);
+            method_done:
             break;
         }
         case NODE_FIELD_ACCESS: {
@@ -1488,6 +1508,10 @@ void codegen(Node *program, const char *output_path) {
             g.enum_variant_counts[i] = e->enum_def.variant_count;
         }
     }
+
+    // Register import aliases
+    g.import_aliases = program->program.use_aliases;
+    g.import_count = program->program.use_count;
 
     fprintf(g.out, ".section __TEXT,__text\n\n");
 

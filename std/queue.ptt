@@ -1,0 +1,22 @@
+// Queue: FIFO data structure using a list + head pointer
+
+new() list of int {
+  give list of int
+}
+
+push(q list, val int) {
+  q.push(val)
+}
+
+pop(q list, head int) int {
+  give q[head]
+}
+
+size(q list, head int) int {
+  give len(q) - head
+}
+
+empty(q list, head int) int {
+  len(q) - head le 0 ?{ give 1 }
+  give 0
+}

@@ -46,7 +46,9 @@ static TokenType keyword_type(const char *word) {
     if (!strcmp(word, "be"))      return TOK_BE;
     if (!strcmp(word, "match"))   return TOK_MATCH;
     if (!strcmp(word, "test"))    return TOK_TEST;
-    if (!strcmp(word, "assert"))  return TOK_ASSERT;    if (!strcmp(word, "and"))     return TOK_AND;
+    if (!strcmp(word, "assert"))  return TOK_ASSERT;
+    if (!strcmp(word, "use"))     return TOK_USE;
+    if (!strcmp(word, "as"))      return TOK_AS;    if (!strcmp(word, "and"))     return TOK_AND;
     if (!strcmp(word, "or"))      return TOK_OR;
     if (!strcmp(word, "not"))     return TOK_NOT;
     if (!strcmp(word, "eq"))      return TOK_EQ_WORD;

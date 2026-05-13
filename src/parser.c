@@ -830,8 +830,41 @@ Node *parser_parse(Parser *p) {
     program->program.structs = (NodeList){0};
     program->program.enums = (NodeList){0};
     program->program.tests = (NodeList){0};
+    program->program.use_paths = NULL;
+    program->program.use_aliases = NULL;
+    program->program.use_count = 0;
 
     skip_newlines(p);
+
+    // Parse use declarations first
+    while (at(p, TOK_USE)) {
+        p->pos++;
+        // Build path: ident/ident/ident
+        char path[256] = {0};
+        strcat(path, eat(p, TOK_IDENT)->value);
+        while (at(p, TOK_SLASH)) {
+            p->pos++;
+            strcat(path, "/");
+            strcat(path, eat(p, TOK_IDENT)->value);
+        }
+        // Optional alias: as name
+        char *alias = NULL;
+        if (at(p, TOK_AS)) {
+            p->pos++;
+            alias = eat(p, TOK_IDENT)->value;
+        } else {
+            // Default alias = last segment of path
+            alias = strrchr(path, '/');
+            alias = alias ? alias + 1 : path;
+        }
+        int idx = program->program.use_count++;
+        program->program.use_paths = realloc(program->program.use_paths, program->program.use_count * sizeof(char *));
+        program->program.use_aliases = realloc(program->program.use_aliases, program->program.use_count * sizeof(char *));
+        program->program.use_paths[idx] = strdup(path);
+        program->program.use_aliases[idx] = strdup(alias);
+        skip_newlines(p);
+    }
+
     while (!at(p, TOK_EOF)) {
         // Test block: test "name" { }
         if (at(p, TOK_TEST)) {

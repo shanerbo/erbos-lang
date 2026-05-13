@@ -51,7 +51,7 @@ struct Node {
 
     union {
         // NODE_PROGRAM
-        struct { NodeList funcs; NodeList structs; NodeList enums; NodeList tests; } program;
+        struct { NodeList funcs; NodeList structs; NodeList enums; NodeList tests; char **use_paths; char **use_aliases; int use_count; } program;
 
         // NODE_FUNC_DEF
         struct {

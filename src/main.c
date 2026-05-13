@@ -69,6 +69,75 @@ int main(int argc, char **argv) {
     p.filename = input;
     Node *program = parser_parse(&p);
 
+    // Resolve imports
+    for (int ui = 0; ui < program->program.use_count; ui++) {
+        char import_path[512];
+        // Try relative to input file directory
+        char dir[256] = {0};
+        strncpy(dir, input, sizeof(dir) - 1);
+        char *last_slash = strrchr(dir, '/');
+        if (last_slash) *(last_slash + 1) = '\0';
+        else dir[0] = '\0';
+
+        // Try: dir/path.ptt, then std/path.ptt
+        snprintf(import_path, sizeof(import_path), "%s%s.ptt", dir, program->program.use_paths[ui]);
+        FILE *test_f = fopen(import_path, "r");
+        if (!test_f) {
+            // Try std/ relative to compiler location
+            snprintf(import_path, sizeof(import_path), "std/%s.ptt", program->program.use_paths[ui] + (strncmp(program->program.use_paths[ui], "std/", 4) == 0 ? 4 : 0));
+            test_f = fopen(import_path, "r");
+        }
+        if (!test_f) {
+            fprintf(stderr, "error: cannot find module '%s'\n", program->program.use_paths[ui]);
+            return 1;
+        }
+        fclose(test_f);
+
+        // Lex + parse the imported file
+        char *imp_src = read_file(import_path);
+        Lexer imp_l;
+        lexer_init(&imp_l, imp_src);
+        lexer_tokenize(&imp_l);
+        Parser imp_p;
+        parser_init(&imp_p, &imp_l);
+        imp_p.filename = import_path;
+        Node *imp_prog = parser_parse(&imp_p);
+
+        // Merge: prefix function names with alias_
+        const char *alias = program->program.use_aliases[ui];
+        char prefixed[256];
+        for (int fi = 0; fi < imp_prog->program.funcs.count; fi++) {
+            Node *f = imp_prog->program.funcs.items[fi];
+            snprintf(prefixed, sizeof(prefixed), "%s_%s", alias, f->func_def.name);
+            f->func_def.name = strdup(prefixed);
+            // Add to main program
+            if (program->program.funcs.count >= program->program.funcs.cap) {
+                program->program.funcs.cap = program->program.funcs.cap ? program->program.funcs.cap * 2 : 4;
+                program->program.funcs.items = realloc(program->program.funcs.items, program->program.funcs.cap * sizeof(Node *));
+            }
+            program->program.funcs.items[program->program.funcs.count++] = f;
+        }
+        // Merge structs
+        for (int si = 0; si < imp_prog->program.structs.count; si++) {
+            Node *s = imp_prog->program.structs.items[si];
+            if (program->program.structs.count >= program->program.structs.cap) {
+                program->program.structs.cap = program->program.structs.cap ? program->program.structs.cap * 2 : 4;
+                program->program.structs.items = realloc(program->program.structs.items, program->program.structs.cap * sizeof(Node *));
+            }
+            program->program.structs.items[program->program.structs.count++] = s;
+        }
+        // Merge enums
+        for (int ei = 0; ei < imp_prog->program.enums.count; ei++) {
+            Node *e = imp_prog->program.enums.items[ei];
+            if (program->program.enums.count >= program->program.enums.cap) {
+                program->program.enums.cap = program->program.enums.cap ? program->program.enums.cap * 2 : 4;
+                program->program.enums.items = realloc(program->program.enums.items, program->program.enums.cap * sizeof(Node *));
+            }
+            program->program.enums.items[program->program.enums.count++] = e;
+        }
+        free(imp_src);
+    }
+
     // Type check
     checker_run(program);
 

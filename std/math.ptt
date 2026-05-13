@@ -1,0 +1,22 @@
+min(a int, b int) int {
+  a lt b ?{ give a }
+  give b
+}
+
+max(a int, b int) int {
+  a gt b ?{ give a }
+  give b
+}
+
+abs(x int) int {
+  x lt 0 ?{ give 0 - x }
+  give x
+}
+
+pow(base int, exp int) int {
+  result is 1
+  through (i from 0 to exp by 1) {
+    result be result * base
+  }
+  give result
+}

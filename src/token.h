@@ -27,6 +27,8 @@ typedef enum {
     TOK_MATCH,
     TOK_TEST,
     TOK_ASSERT,
+    TOK_USE,
+    TOK_AS,
     TOK_AND,
     TOK_OR,
     TOK_NOT,
