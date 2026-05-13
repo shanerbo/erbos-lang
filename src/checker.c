@@ -408,8 +408,9 @@ static void check_stmt(Checker *c, Node *n) {
             if (n->field_assign.object->type == NODE_IDENT) {
                 const char *obj_name = n->field_assign.object->ident.name;
                 int ref_status = get_sym_is_ref(c, obj_name);
-                // ref_status: -1=local(ok), 0=param non-ref(error), 1=param ref(ok)
-                if (ref_status == 0) {
+                Type obj_t = get_sym(c, obj_name);
+                // ref_status: -1=local(ok), 0=param non-ref(error for structs), 1=param ref(ok)
+                if (ref_status == 0 && obj_t.kind == TYPE_STRUCT) {
                     fprintf(stderr, "error:%d: cannot mutate '%s' — parameter is not ref\n", n->line, obj_name);
                     exit(1);
                 }
@@ -462,9 +463,15 @@ static void check_stmt(Checker *c, Node *n) {
                 }
                 if (give_t.kind != TYPE_UNKNOWN && c->cur_return_type.kind != TYPE_UNKNOWN &&
                     !types_equal(give_t, c->cur_return_type)) {
-                    fprintf(stderr, "error:%d: return type mismatch: expected '%s', got '%s'\n",
-                        n->line, type_name(c->cur_return_type), type_name(give_t));
-                    exit(1);
+                    // Allow int<->struct compatibility (null pointers, pointer returns)
+                    int compat = (give_t.kind == TYPE_INT && c->cur_return_type.kind == TYPE_STRUCT) ||
+                                 (give_t.kind == TYPE_STRUCT && c->cur_return_type.kind == TYPE_INT) ||
+                                 (give_t.kind == TYPE_STRUCT && c->cur_return_type.kind == TYPE_STRUCT);
+                    if (!compat) {
+                        fprintf(stderr, "error:%d: return type mismatch: expected '%s', got '%s'\n",
+                            n->line, type_name(c->cur_return_type), type_name(give_t));
+                        exit(1);
+                    }
                 }
             }
             c->found_give = 1;
