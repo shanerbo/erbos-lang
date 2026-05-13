@@ -1,0 +1,106 @@
+// Leetcode 994: Rotting Oranges
+// BFS approach
+// Time: O(rows * cols)  Space: O(rows * cols)
+//
+// Grid values: 0=empty, 1=fresh, 2=rotten
+// Each minute, rotten spreads to adjacent fresh oranges
+// Return minutes until no fresh remain, or -1 if impossible
+
+// Encode (row, col) as row*100+col for queue storage
+// Grid is flattened: grid[row*cols + col]
+
+solve(grid list, rows int, cols int) int {
+  // Queue: list of encoded positions
+  queue is list of int
+  fresh is 0
+  
+  // Find initial rotten and count fresh
+  through (r from 0 to rows by 1) {
+    through (c from 0 to cols by 1) {
+      idx is r * cols + c
+      grid[idx] eq 2 ?{
+        queue.push(r * 100 + c)
+      }
+      grid[idx] eq 1 ?{
+        fresh be fresh + 1
+      }
+    }
+  }
+
+  fresh eq 0 ?{ give 0 }
+
+  minutes is 0
+  head is 0
+  // Directions: up, down, left, right
+  dr is [0 - 1, 1, 0, 0]
+  dc is [0, 0, 0 - 1, 1]
+
+  infi (head lt len(queue)) {
+    size is len(queue) - head
+    through (s from 0 to size by 1) {
+      pos is queue[head]
+      head be head + 1
+      r is pos / 100
+      c is pos mod 100
+
+      through (d from 0 to 4 by 1) {
+        nr is r + dr[d]
+        nc is c + dc[d]
+        nr ge 0 and nr lt rows and nc ge 0 and nc lt cols ?{
+          nidx is nr * cols + nc
+          grid[nidx] eq 1 ?{
+            list_set(grid, nidx, 2)
+            queue.push(nr * 100 + nc)
+            fresh be fresh - 1
+          }
+        }
+      }
+    }
+    fresh eq 0 ?{ give minutes + 1 }
+    minutes be minutes + 1
+  }
+
+  give -1
+}
+
+spark {
+  // Test 1: [[2,1,1],[1,1,0],[0,1,1]] → 4
+  g1 is [2,1,1, 1,1,0, 0,1,1]
+  yell(solve(g1, 3, 3))
+
+  // Test 2: [[2,1,1],[0,1,1],[1,0,1]] → -1 (unreachable)
+  g2 is [2,1,1, 0,1,1, 1,0,1]
+  yell(solve(g2, 3, 3))
+
+  // Test 3: [[0,2]] → 0 (no fresh)
+  g3 is [0, 2]
+  yell(solve(g3, 1, 2))
+
+  // Test 4: [[2,1,1],[1,1,1],[0,1,2]] → 2 (two sources)
+  g4 is [2,1,1, 1,1,1, 0,1,2]
+  yell(solve(g4, 3, 3))
+
+  // Test 5: [[1]] → -1 (no rotten source)
+  g5 is [1]
+  yell(solve(g5, 1, 1))
+
+  // Test 6: [[2]] → 0 (already all rotten, no fresh)
+  g6 is [2]
+  yell(solve(g6, 1, 1))
+
+  // Test 7: [[0]] → 0 (empty)
+  g7 is [0]
+  yell(solve(g7, 1, 1))
+
+  // Test 8: [[2,1],[1,1]] → 2
+  g8 is [2,1, 1,1]
+  yell(solve(g8, 2, 2))
+
+  // Test 9: [[2,2],[1,1]] → 1
+  g9 is [2,2, 1,1]
+  yell(solve(g9, 2, 2))
+
+  // Test 10: [[1,2,1,1,2,1]] → 2 (1D row)
+  g10 is [1,2,1,1,2,1]
+  yell(solve(g10, 1, 6))
+}
