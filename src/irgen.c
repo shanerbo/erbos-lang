@@ -5,15 +5,20 @@
 #include "token.h"
 
 typedef struct {
-    IRFunc *func;       // current function being generated
-    IRBlock *block;     // current basic block
-    int vreg_next;      // next virtual register number
-    int label_next;     // next label number
-    // Local variable → vreg mapping
+    IRFunc *func;
+    IRBlock *block;
+    int vreg_next;
+    int label_next;
     char **local_names;
     VReg *local_vregs;
+    int *local_is_mut;  // 1 if variable was reassigned (needs stack slot)
+    int *local_slots;   // stack slot index for mutable vars
     int local_count;
     int local_cap;
+    int slot_next;      // next stack slot
+    // Loop context for stop/skip
+    int loop_start;
+    int loop_end;
 } IRGenCtx;
 
 static VReg new_vreg(IRGenCtx *c) { return c->vreg_next++; }
@@ -30,21 +35,39 @@ static void emit(IRGenCtx *c, IRInst inst) {
 
 static void set_local(IRGenCtx *c, const char *name, VReg v) {
     for (int i = 0; i < c->local_count; i++) {
-        if (!strcmp(c->local_names[i], name)) { c->local_vregs[i] = v; return; }
+        if (!strcmp(c->local_names[i], name)) {
+            c->local_vregs[i] = v;
+            if (c->local_slots[i] < 0)
+                c->local_slots[i] = c->slot_next++;
+            emit(c, (IRInst){.op = IR_STORE_LOCAL, .a = v, .imm = c->local_slots[i]});
+            return;
+        }
     }
     if (c->local_count >= c->local_cap) {
         c->local_cap = c->local_cap ? c->local_cap * 2 : 16;
         c->local_names = realloc(c->local_names, c->local_cap * sizeof(char *));
         c->local_vregs = realloc(c->local_vregs, c->local_cap * sizeof(VReg));
+        c->local_is_mut = realloc(c->local_is_mut, c->local_cap * sizeof(int));
+        c->local_slots = realloc(c->local_slots, c->local_cap * sizeof(int));
     }
     c->local_names[c->local_count] = (char *)name;
     c->local_vregs[c->local_count] = v;
+    c->local_is_mut[c->local_count] = 0;
+    c->local_slots[c->local_count] = c->slot_next++;
+    // Store initial value
+    emit(c, (IRInst){.op = IR_STORE_LOCAL, .a = v, .imm = c->local_slots[c->local_count]});
     c->local_count++;
 }
 
 static VReg get_local(IRGenCtx *c, const char *name) {
-    for (int i = c->local_count - 1; i >= 0; i--)
-        if (!strcmp(c->local_names[i], name)) return c->local_vregs[i];
+    for (int i = c->local_count - 1; i >= 0; i--) {
+        if (!strcmp(c->local_names[i], name)) {
+            // Always load from stack — safe across blocks
+            VReg dst = new_vreg(c);
+            emit(c, (IRInst){.op = IR_LOAD_LOCAL, .dst = dst, .imm = c->local_slots[i]});
+            return dst;
+        }
+    }
     return -1;
 }
 
@@ -62,9 +85,11 @@ static IRBlock *new_block(IRGenCtx *c) {
     return b;
 }
 
-// Forward declarations
+static void switch_block(IRGenCtx *c, IRBlock *b) { c->block = b; }
+
 static VReg gen_expr(IRGenCtx *c, Node *n);
 static void gen_stmt(IRGenCtx *c, Node *n);
+static void gen_block(IRGenCtx *c, Node *block);
 
 static VReg gen_expr(IRGenCtx *c, Node *n) {
     if (!n) return -1;
@@ -87,7 +112,6 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
         case NODE_IDENT: {
             VReg v = get_local(c, n->ident.name);
             if (v >= 0) return v;
-            // Unknown — return a placeholder
             VReg dst = new_vreg(c);
             emit(c, (IRInst){.op = IR_CONST, .dst = dst, .imm = 0});
             return dst;
@@ -126,7 +150,6 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
             return dst;
         }
         case NODE_CALL: {
-            // Generate args
             VReg *args = NULL;
             if (n->call.arg_count > 0)
                 args = malloc(n->call.arg_count * sizeof(VReg));
@@ -137,12 +160,16 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
             return dst;
         }
         default: {
-            // Fallback for complex nodes — emit as call to codegen later
             VReg dst = new_vreg(c);
             emit(c, (IRInst){.op = IR_CONST, .dst = dst, .imm = 0});
             return dst;
         }
     }
+}
+
+static void gen_block(IRGenCtx *c, Node *block) {
+    for (int i = 0; i < block->block.stmts.count; i++)
+        gen_stmt(c, block->block.stmts.items[i]);
 }
 
 static void gen_stmt(IRGenCtx *c, Node *n) {
@@ -171,8 +198,165 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
         case NODE_METHOD_CALL:
             gen_expr(c, n);
             break;
+
+        // === IF / NAH ===
+        case NODE_IF: {
+            int end_lbl = new_label(c);
+            for (int i = 0; i < n->if_stmt.branch_count; i++) {
+                VReg cond = gen_expr(c, n->if_stmt.conds[i]);
+                int then_lbl = new_label(c);
+                int next_lbl = new_label(c);
+                emit(c, (IRInst){.op = IR_BR_COND, .a = cond, .label = then_lbl, .label2 = next_lbl});
+                // Then block
+                IRBlock *then_b = new_block(c);
+                then_b->label = then_lbl;
+                switch_block(c, then_b);
+                gen_block(c, n->if_stmt.bodies[i]);
+                emit(c, (IRInst){.op = IR_BR, .label = end_lbl});
+                // Next (else-if or else or end)
+                IRBlock *next_b = new_block(c);
+                next_b->label = next_lbl;
+                switch_block(c, next_b);
+            }
+            // Nah (else) block
+            if (n->if_stmt.nah_body) {
+                gen_block(c, n->if_stmt.nah_body);
+            }
+            emit(c, (IRInst){.op = IR_BR, .label = end_lbl});
+            IRBlock *end_b = new_block(c);
+            end_b->label = end_lbl;
+            switch_block(c, end_b);
+            break;
+        }
+
+        // === THROUGH RANGE (for i in start..end) ===
+        case NODE_THROUGH_RANGE: {
+            VReg from = gen_expr(c, n->through_range.from);
+            VReg to = gen_expr(c, n->through_range.to);
+            VReg step;
+            if (n->through_range.by)
+                step = gen_expr(c, n->through_range.by);
+            else {
+                step = new_vreg(c);
+                emit(c, (IRInst){.op = IR_CONST, .dst = step, .imm = 1});
+            }
+            // Store to/step as hidden locals so they survive across blocks
+            int to_slot = c->slot_next++;
+            int step_slot = c->slot_next++;
+            emit(c, (IRInst){.op = IR_STORE_LOCAL, .a = to, .imm = to_slot});
+            emit(c, (IRInst){.op = IR_STORE_LOCAL, .a = step, .imm = step_slot});
+
+            // Init loop var
+            set_local(c, n->through_range.var_name, from);
+
+            int cond_lbl = new_label(c);
+            int body_lbl = new_label(c);
+            int inc_lbl = new_label(c);
+            int end_lbl = new_label(c);
+
+            int prev_start = c->loop_start;
+            int prev_end = c->loop_end;
+            c->loop_start = inc_lbl;
+            c->loop_end = end_lbl;
+
+            emit(c, (IRInst){.op = IR_BR, .label = cond_lbl});
+
+            // Condition
+            IRBlock *cond_b = new_block(c);
+            cond_b->label = cond_lbl;
+            switch_block(c, cond_b);
+            VReg iter = get_local(c, n->through_range.var_name);
+            VReg to_load = new_vreg(c);
+            emit(c, (IRInst){.op = IR_LOAD_LOCAL, .dst = to_load, .imm = to_slot});
+            VReg cmp = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CMP_LT, .dst = cmp, .a = iter, .b = to_load});
+            emit(c, (IRInst){.op = IR_BR_COND, .a = cmp, .label = body_lbl, .label2 = end_lbl});
+
+            // Body
+            IRBlock *body_b = new_block(c);
+            body_b->label = body_lbl;
+            switch_block(c, body_b);
+            gen_block(c, n->through_range.body);
+            emit(c, (IRInst){.op = IR_BR, .label = inc_lbl});
+
+            // Increment
+            IRBlock *inc_b = new_block(c);
+            inc_b->label = inc_lbl;
+            switch_block(c, inc_b);
+            VReg cur = get_local(c, n->through_range.var_name);
+            VReg step_load = new_vreg(c);
+            emit(c, (IRInst){.op = IR_LOAD_LOCAL, .dst = step_load, .imm = step_slot});
+            VReg next = new_vreg(c);
+            emit(c, (IRInst){.op = IR_ADD, .dst = next, .a = cur, .b = step_load});
+            set_local(c, n->through_range.var_name, next);
+            emit(c, (IRInst){.op = IR_BR, .label = cond_lbl});
+
+            // End
+            IRBlock *end_b = new_block(c);
+            end_b->label = end_lbl;
+            switch_block(c, end_b);
+
+            c->loop_start = prev_start;
+            c->loop_end = prev_end;
+            break;
+        }
+
+        // === INFI (while/infinite loop) ===
+        case NODE_INFI: {
+            int cond_lbl = new_label(c);
+            int body_lbl = new_label(c);
+            int end_lbl = new_label(c);
+
+            int prev_start = c->loop_start;
+            int prev_end = c->loop_end;
+            c->loop_start = cond_lbl;
+            c->loop_end = end_lbl;
+
+            emit(c, (IRInst){.op = IR_BR, .label = cond_lbl});
+
+            IRBlock *cond_b = new_block(c);
+            cond_b->label = cond_lbl;
+            switch_block(c, cond_b);
+
+            if (n->infi.cond) {
+                VReg cond = gen_expr(c, n->infi.cond);
+                emit(c, (IRInst){.op = IR_BR_COND, .a = cond, .label = body_lbl, .label2 = end_lbl});
+            } else {
+                emit(c, (IRInst){.op = IR_BR, .label = body_lbl});
+            }
+
+            IRBlock *body_b = new_block(c);
+            body_b->label = body_lbl;
+            switch_block(c, body_b);
+            gen_block(c, n->infi.body);
+            emit(c, (IRInst){.op = IR_BR, .label = cond_lbl});
+
+            IRBlock *end_b = new_block(c);
+            end_b->label = end_lbl;
+            switch_block(c, end_b);
+
+            c->loop_start = prev_start;
+            c->loop_end = prev_end;
+            break;
+        }
+
+        // === STOP (break) ===
+        case NODE_STOP:
+            if (c->loop_end >= 0)
+                emit(c, (IRInst){.op = IR_BR, .label = c->loop_end});
+            break;
+
+        // === SKIP (continue) ===
+        case NODE_SKIP:
+            if (c->loop_start >= 0)
+                emit(c, (IRInst){.op = IR_BR, .label = c->loop_start});
+            break;
+
+        case NODE_BLOCK:
+            gen_block(c, n);
+            break;
+
         default:
-            // TODO: control flow (if, loops, match)
             break;
     }
 }
@@ -195,6 +379,8 @@ IRProgram *irgen_generate(Node *program) {
         IRGenCtx ctx = {0};
         ctx.func = irf;
         ctx.block = new_block(&ctx);
+        ctx.loop_start = -1;
+        ctx.loop_end = -1;
 
         // Register params as locals
         for (int j = 0; j < f->func_def.param_count; j++) {
@@ -203,13 +389,14 @@ IRProgram *irgen_generate(Node *program) {
         }
 
         // Generate body
-        Node *body = f->func_def.body;
-        for (int j = 0; j < body->block.stmts.count; j++)
-            gen_stmt(&ctx, body->block.stmts.items[j]);
+        gen_block(&ctx, f->func_def.body);
 
         irf->vreg_count = ctx.vreg_next;
+        irf->local_slots = ctx.slot_next;
         free(ctx.local_names);
         free(ctx.local_vregs);
+        free(ctx.local_is_mut);
+        free(ctx.local_slots);
     }
 
     return ir;
