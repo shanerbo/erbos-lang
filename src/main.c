@@ -156,7 +156,11 @@ int main(int argc, char **argv) {
     if (ir_mode) {
         IRProgram *ir = irgen_generate(program);
         FILE *ir_out = fopen(asm_path, "w");
-        fprintf(ir_out, ".global _start\n.align 2\n\n");
+        fprintf(ir_out, ".global _start\n.align 2\n");
+        fprintf(ir_out, ".section __TEXT,__text\n\n");
+        // Emit builtins (yell, heap_alloc, str ops, etc.)
+        codegen_emit_builtins(ir_out);
+        // Emit user functions via IR pipeline
         for (int i = 0; i < ir->func_count; i++) {
             RegAllocResult alloc = regalloc_run(&ir->funcs[i]);
             iremit_func(ir_out, &ir->funcs[i], &alloc);
@@ -164,8 +168,8 @@ int main(int argc, char **argv) {
             free(alloc.vreg_to_phys);
             free(alloc.vreg_to_spill);
         }
-        // Minimal _start that calls spark (main)
-        fprintf(ir_out, "_start:\n    bl _spark\n    mov x16, #1\n    svc #0x80\n");
+        // _start calls spark
+        fprintf(ir_out, "_start:\n    bl _spark\n    mov x16, #1\n    mov x0, #0\n    svc #0x80\n");
         fclose(ir_out);
         printf("IR pipeline: generated %s (%d functions)\n", asm_path, ir->func_count);
         free(src);

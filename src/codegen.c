@@ -1637,3 +1637,37 @@ void codegen_tests(Node *program, const char *output_path) {
     (void)program;
     (void)output_path;
 }
+
+void codegen_emit_builtins(FILE *out) {
+    Gen g = {0};
+    g.out = out;
+    emit_yell_int(&g);
+    emit_yell_str(&g);
+    emit_yell_dispatch(&g);
+    emit_task_builtins(&g);
+    emit_heap_alloc(&g);
+    emit_str_eq(&g);
+    emit_str_concat(&g);
+    emit_int_to_str(&g);
+    emit_str_builtins(&g);
+    emit_map_builtins(&g);
+    emit_imap_builtins(&g);
+    emit_list_builtins(&g);
+    // Panic handlers
+    fprintf(out, ".globl _panic_oob\n.p2align 2\n_panic_oob:\n");
+    fprintf(out, "    adrp x0, _oob_msg@PAGE\n    add x0, x0, _oob_msg@PAGEOFF\n");
+    fprintf(out, "    bl _yell_str\n    mov x16, #1\n    mov x0, #1\n    svc #0x80\n\n");
+    fprintf(out, ".globl _panic_capacity\n.p2align 2\n_panic_capacity:\n");
+    fprintf(out, "    adrp x0, _cap_msg@PAGE\n    add x0, x0, _cap_msg@PAGEOFF\n");
+    fprintf(out, "    bl _yell_str\n    mov x16, #1\n    mov x0, #1\n    svc #0x80\n\n");
+    // Data section for panic messages
+    fprintf(out, ".section __DATA,__data\n");
+    fprintf(out, "_oob_msg: .asciz \"panic: index out of bounds\"\n");
+    fprintf(out, "_cap_msg: .asciz \"panic: capacity overflow\"\n");
+    // Heap allocator state
+    fprintf(out, ".section __DATA,__bss\n.p2align 3\n");
+    fprintf(out, "_heap_ptr: .quad 0\n");
+    fprintf(out, "_heap_end: .quad 0\n");
+    fprintf(out, "_heap_free_list: .quad 0\n");
+    fprintf(out, ".section __TEXT,__text\n\n");
+}
