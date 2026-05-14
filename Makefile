@@ -1,6 +1,6 @@
 CC = cc
 CFLAGS = -Wall -Wextra -std=c11
-SRC = src/main.c src/lexer.c src/parser.c src/checker.c src/optimizer.c src/codegen.c
+SRC = src/main.c src/lexer.c src/parser.c src/checker.c src/optimizer.c src/codegen.c src/irgen.c src/regalloc.c src/iremit.c
 OUT = erbos
 
 all: $(OUT)

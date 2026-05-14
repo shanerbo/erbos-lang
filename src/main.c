@@ -7,6 +7,9 @@
 #include "checker.h"
 #include "optimizer.h"
 #include "codegen.h"
+#include "irgen.h"
+#include "regalloc.h"
+#include "iremit.h"
 
 static char *read_file(const char *path) {
     FILE *f = fopen(path, "r");
@@ -23,13 +26,14 @@ static char *read_file(const char *path) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: erbos <file.ptt>\n       erbos run <file.ptt>\n       erbos test <file.ptt>\n");
+        fprintf(stderr, "usage: erbos <file.ptt>\n       erbos run <file.ptt>\n       erbos test <file.ptt>\n       erbos ir <file.ptt>\n");
         return 1;
     }
 
-    // Check for "erbos run file.ptt" or "erbos test file.ptt"
+    // Check for "erbos run file.ptt" or "erbos test file.ptt" or "erbos ir file.ptt"
     int run_mode = 0;
     int test_mode __attribute__((unused)) = 0;
+    int ir_mode = 0;
     const char *input;
     if (argc >= 3 && strcmp(argv[1], "run") == 0) {
         run_mode = 1;
@@ -37,6 +41,9 @@ int main(int argc, char **argv) {
     } else if (argc >= 3 && strcmp(argv[1], "test") == 0) {
         test_mode = 1;
         run_mode = 1; // test mode also runs
+        input = argv[2];
+    } else if (argc >= 3 && strcmp(argv[1], "ir") == 0) {
+        ir_mode = 1;
         input = argv[2];
     } else {
         input = argv[1];
@@ -144,6 +151,26 @@ int main(int argc, char **argv) {
 
     // Optimize
     optimizer_run(program);
+
+    // IR pipeline (experimental — erbos ir mode)
+    if (ir_mode) {
+        IRProgram *ir = irgen_generate(program);
+        FILE *ir_out = fopen(asm_path, "w");
+        fprintf(ir_out, ".global _start\n.align 2\n\n");
+        for (int i = 0; i < ir->func_count; i++) {
+            RegAllocResult alloc = regalloc_run(&ir->funcs[i]);
+            iremit_func(ir_out, &ir->funcs[i], &alloc);
+            fprintf(ir_out, "\n");
+            free(alloc.vreg_to_phys);
+            free(alloc.vreg_to_spill);
+        }
+        // Minimal _start that calls spark (main)
+        fprintf(ir_out, "_start:\n    bl _spark\n    mov x16, #1\n    svc #0x80\n");
+        fclose(ir_out);
+        printf("IR pipeline: generated %s (%d functions)\n", asm_path, ir->func_count);
+        free(src);
+        return 0;
+    }
 
     // Codegen
     codegen(program, asm_path);
