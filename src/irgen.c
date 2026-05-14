@@ -19,6 +19,8 @@ typedef struct {
     // Loop context for stop/skip
     int loop_start;
     int loop_end;
+    // Program ref for struct/enum info
+    Node *program;
 } IRGenCtx;
 
 static VReg new_vreg(IRGenCtx *c) { return c->vreg_next++; }
@@ -150,6 +152,32 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
             return dst;
         }
         case NODE_CALL: {
+            // Check if it's a struct constructor
+            int is_struct = 0;
+            int field_count = 0;
+            if (c->program) {
+                for (int si = 0; si < c->program->program.structs.count; si++) {
+                    Node *s = c->program->program.structs.items[si];
+                    if (!strcmp(s->struct_def.name, n->call.name)) {
+                        is_struct = 1;
+                        field_count = s->struct_def.field_count;
+                        break;
+                    }
+                }
+            }
+            if (is_struct) {
+                // Call _alloc_StructName
+                char alloc_name[128];
+                snprintf(alloc_name, sizeof(alloc_name), "alloc_%s", n->call.name);
+                VReg ptr = new_vreg(c);
+                emit(c, (IRInst){.op = IR_CALL, .dst = ptr, .str = strdup(alloc_name), .args = NULL, .arg_count = 0});
+                // Store args as fields
+                for (int i = 0; i < n->call.arg_count && i < field_count; i++) {
+                    VReg val = gen_expr(c, n->call.args[i]);
+                    emit(c, (IRInst){.op = IR_STORE, .a = ptr, .b = val, .imm = i * 8});
+                }
+                return ptr;
+            }
             VReg *args = NULL;
             if (n->call.arg_count > 0)
                 args = malloc(n->call.arg_count * sizeof(VReg));
@@ -157,6 +185,28 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
                 args[i] = gen_expr(c, n->call.args[i]);
             VReg dst = new_vreg(c);
             emit(c, (IRInst){.op = IR_CALL, .dst = dst, .str = (char *)n->call.name, .args = args, .arg_count = n->call.arg_count});
+            return dst;
+        }
+        case NODE_FIELD_ACCESS: {
+            VReg obj = gen_expr(c, n->field_access.object);
+            // Find field offset
+            int offset = 0;
+            if (c->program && n->field_access.struct_name) {
+                for (int si = 0; si < c->program->program.structs.count; si++) {
+                    Node *s = c->program->program.structs.items[si];
+                    if (!strcmp(s->struct_def.name, n->field_access.struct_name)) {
+                        for (int fi = 0; fi < s->struct_def.field_count; fi++) {
+                            if (!strcmp(s->struct_def.field_names[fi], n->field_access.field)) {
+                                offset = fi * 8;
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            VReg dst = new_vreg(c);
+            emit(c, (IRInst){.op = IR_LOAD, .dst = dst, .a = obj, .imm = offset});
             return dst;
         }
         default: {
@@ -198,6 +248,29 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
         case NODE_METHOD_CALL:
             gen_expr(c, n);
             break;
+
+        case NODE_FIELD_ASSIGN: {
+            VReg val = gen_expr(c, n->field_assign.value);
+            VReg obj = gen_expr(c, n->field_assign.object);
+            // Find field offset (search all structs)
+            int offset = 0;
+            if (c->program) {
+                for (int si = 0; si < c->program->program.structs.count; si++) {
+                    Node *s = c->program->program.structs.items[si];
+                    int found = 0;
+                    for (int fi = 0; fi < s->struct_def.field_count; fi++) {
+                        if (!strcmp(s->struct_def.field_names[fi], n->field_assign.field)) {
+                            offset = fi * 8;
+                            found = 1;
+                            break;
+                        }
+                    }
+                    if (found) break;
+                }
+            }
+            emit(c, (IRInst){.op = IR_STORE, .a = obj, .b = val, .imm = offset});
+            break;
+        }
 
         // === IF / NAH ===
         case NODE_IF: {
@@ -381,6 +454,7 @@ IRProgram *irgen_generate(Node *program) {
         ctx.block = new_block(&ctx);
         ctx.loop_start = -1;
         ctx.loop_end = -1;
+        ctx.program = program;
 
         // Register params as locals
         for (int j = 0; j < f->func_def.param_count; j++) {

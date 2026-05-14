@@ -160,6 +160,16 @@ int main(int argc, char **argv) {
         fprintf(ir_out, ".section __TEXT,__text\n\n");
         // Emit builtins (yell, heap_alloc, str ops, etc.)
         codegen_emit_builtins(ir_out);
+        // Emit struct allocators
+        for (int si = 0; si < program->program.structs.count; si++) {
+            Node *s = program->program.structs.items[si];
+            int size = s->struct_def.field_count * 8;
+            if (size == 0) size = 8;
+            fprintf(ir_out, ".globl _alloc_%s\n.p2align 2\n_alloc_%s:\n", s->struct_def.name, s->struct_def.name);
+            fprintf(ir_out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
+            fprintf(ir_out, "    mov x0, #%d\n    bl _heap_alloc\n", size);
+            fprintf(ir_out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
+        }
         // Emit user functions via IR pipeline
         for (int i = 0; i < ir->func_count; i++) {
             RegAllocResult alloc = regalloc_run(&ir->funcs[i]);

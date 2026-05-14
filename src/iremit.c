@@ -52,11 +52,10 @@ static void emit_to_dst(FILE *out, RegAllocResult *a, VReg dst, int src_reg) {
 }
 
 void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
-    int spill_slots = alloc->spill_count + func->local_slots;
-    int stack_size = (spill_slots + 2) * 16;
+    int local_base = 16;
+    int locals_size = (func->local_slots > 0 ? func->local_slots : 1) * 8;
+    int stack_size = local_base + locals_size + 256; // generous padding
     if (stack_size % 16 != 0) stack_size += 8;
-    // local_slots start after spill slots
-    int local_base = (alloc->spill_count + 1) * SPILL_BASE;
 
     // Prologue
     fprintf(out, "_%s:\n", func->name);
@@ -165,30 +164,6 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
                     break;
                 }
                 case IR_CALL: {
-                    // Save caller-saved registers that are in use
-                    // Push all allocated regs except the ones used for args
-                    // Simple approach: save x0-x18 to stack before call, restore after
-                    // Only save regs that are allocated to live vregs
-                    int save_count = 0;
-                    int saved_regs[PHYS_REG_COUNT];
-                    for (int r = 0; r < PHYS_REG_COUNT; r++) {
-                        // Check if any vreg with end > current inst uses this reg
-                        int in_use = 0;
-                        for (int v = 0; v < alloc->vreg_count; v++) {
-                            if (alloc->vreg_to_phys[v] == r && v != inst->dst) {
-                                in_use = 1;
-                                break;
-                            }
-                        }
-                        if (in_use) saved_regs[save_count++] = r;
-                    }
-                    // Push saved regs (pairs for alignment)
-                    int push_size = ((save_count + 1) / 2) * 16;
-                    if (push_size > 0)
-                        fprintf(out, "    sub sp, sp, #%d\n", push_size);
-                    for (int s = 0; s < save_count; s++)
-                        fprintf(out, "    str x%d, [sp, #%d]\n", saved_regs[s], s * 8);
-
                     // Move args to x0-x7
                     for (int ai = 0; ai < inst->arg_count && ai < 8; ai++) {
                         int r = ensure_reg(out, alloc, inst->args[ai]);
@@ -196,24 +171,8 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
                             fprintf(out, "    mov x%d, x%d\n", ai, r);
                     }
                     fprintf(out, "    bl _%s\n", inst->str);
-
-                    // Save result to dst before restoring
-                    int dst_phys = -1;
-                    if (inst->dst >= 0 && !is_spilled(alloc, inst->dst))
-                        dst_phys = phys(alloc, inst->dst);
-
-                    if (dst_phys >= 0 && dst_phys != 0)
-                        fprintf(out, "    mov x%d, x0\n", dst_phys);
-                    else if (is_spilled(alloc, inst->dst))
-                        store_spill(out, alloc, inst->dst, 0);
-
-                    // Restore saved regs (skip dst reg)
-                    for (int s = 0; s < save_count; s++) {
-                        if (saved_regs[s] != dst_phys)
-                            fprintf(out, "    ldr x%d, [sp, #%d]\n", saved_regs[s], s * 8);
-                    }
-                    if (push_size > 0)
-                        fprintf(out, "    add sp, sp, #%d\n", push_size);
+                    // Result in x0 → move to dst
+                    emit_to_dst(out, alloc, inst->dst, 0);
                     break;
                 }
                 case IR_RET: {
@@ -262,6 +221,29 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
                         fprintf(out, "    ldr x%d, [x29, #-%d]\n", d, off);
                     else
                         fprintf(out, "    sub x10, x29, #%d\n    ldr x%d, [x10]\n", off, d);
+                    if (is_spilled(alloc, inst->dst))
+                        store_spill(out, alloc, inst->dst, 11);
+                    break;
+                }
+                case IR_STORE: {
+                    // mem[%a + imm] = %b
+                    int ra = ensure_reg(out, alloc, inst->a);
+                    int rb;
+                    if (is_spilled(alloc, inst->b) && ra == 9) {
+                        fprintf(out, "    mov x10, x9\n");
+                        rb = ensure_reg(out, alloc, inst->b);
+                        ra = 10;
+                    } else {
+                        rb = ensure_reg(out, alloc, inst->b);
+                    }
+                    fprintf(out, "    str x%d, [x%d, #%d]\n", rb, ra, (int)inst->imm);
+                    break;
+                }
+                case IR_LOAD: {
+                    // %dst = mem[%a + imm]
+                    int ra = ensure_reg(out, alloc, inst->a);
+                    int d = is_spilled(alloc, inst->dst) ? 11 : phys(alloc, inst->dst);
+                    fprintf(out, "    ldr x%d, [x%d, #%d]\n", d, ra, (int)inst->imm);
                     if (is_spilled(alloc, inst->dst))
                         store_spill(out, alloc, inst->dst, 11);
                     break;
