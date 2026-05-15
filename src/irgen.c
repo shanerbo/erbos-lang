@@ -178,15 +178,157 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
                 }
                 return ptr;
             }
+            // Remap built-in calls to their real emitted symbols.
+            // Mirrors the dispatch in src/codegen.c so the IR backend
+            // produces calls to symbols that actually exist.
+            const char *call_name = n->call.name;
+            if (!strcmp(call_name, "list"))      call_name = "list_new";
+            else if (!strcmp(call_name, "map"))  call_name = "map_new";
+            else if (!strcmp(call_name, "imap")) call_name = "imap_new";
+            else if (!strcmp(call_name, "task")) {
+                // task() returns a placeholder handle (0). No bl needed.
+                VReg dst = new_vreg(c);
+                emit(c, (IRInst){.op = IR_CONST, .dst = dst, .imm = 0});
+                return dst;
+            }
+            // Universal len(): for strings call _str_len; for lists/maps
+            // load count from offset 8 (their shared header layout).
+            // We can't always know the runtime type here at the IR level
+            // (the checker tagged resolved_type on the arg, but it isn't
+            // re-read here), so dispatch via a single _len helper which
+            // does the same heuristic as direct codegen at runtime.
+            else if (!strcmp(call_name, "len")) {
+                if (n->call.arg_count == 1) {
+                    Node *arg = n->call.args[0];
+                    // Heuristic match on resolved_type set by the checker:
+                    //   3 = list/map (load offset 8)
+                    //   5 = string (call _str_len)
+                    if (arg->resolved_type == 5) {
+                        call_name = "str_len";
+                    } else {
+                        // Treat as a generic header-load.
+                        VReg argv = gen_expr(c, arg);
+                        VReg dst = new_vreg(c);
+                        emit(c, (IRInst){.op = IR_LOAD, .dst = dst, .a = argv, .imm = 8});
+                        return dst;
+                    }
+                }
+            }
             VReg *args = NULL;
             if (n->call.arg_count > 0)
                 args = malloc(n->call.arg_count * sizeof(VReg));
             for (int i = 0; i < n->call.arg_count; i++)
                 args[i] = gen_expr(c, n->call.args[i]);
             VReg dst = new_vreg(c);
-            emit(c, (IRInst){.op = IR_CALL, .dst = dst, .str = (char *)n->call.name, .args = args, .arg_count = n->call.arg_count});
+            emit(c, (IRInst){.op = IR_CALL, .dst = dst, .str = (char *)call_name, .args = args, .arg_count = n->call.arg_count});
             return dst;
         }
+        case NODE_METHOD_CALL: {
+            // Mirror the dispatch order in src/codegen.c so the IR
+            // backend produces the same observable behaviour as the
+            // direct codegen:
+            //   1. enum constructor (object IDENT names a registered enum)
+            //   2. user method on a typed struct receiver (resolved_struct_name)
+            //   3. built-in collection / task method (push/pop/get/set/keys/len/fire/collapse)
+            //   4. import-alias call (module.func)
+            //   5. generic same-name fallback
+            const char *method = n->method_call.method;
+
+            // 1. Enum constructor: EnumName.Variant(args...)
+            if (n->method_call.object->type == NODE_IDENT && c->program) {
+                const char *obj_name = n->method_call.object->ident.name;
+                for (int ei = 0; ei < c->program->program.enums.count; ei++) {
+                    Node *e = c->program->program.enums.items[ei];
+                    if (strcmp(e->enum_def.name, obj_name) != 0) continue;
+                    int variant_idx = -1;
+                    for (int vi = 0; vi < e->enum_def.variant_count; vi++) {
+                        if (!strcmp(e->enum_def.variant_names[vi], method)) {
+                            variant_idx = vi; break;
+                        }
+                    }
+                    if (variant_idx < 0) break; // fall through to other dispatch
+                    int nfields = n->method_call.arg_count;
+                    int size = (nfields + 1) * 8;
+                    if (size < 16) size = 16;
+                    VReg sz = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_CONST, .dst = sz, .imm = size});
+                    VReg *aa = malloc(sizeof(VReg));
+                    aa[0] = sz;
+                    VReg ptr = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_CALL, .dst = ptr, .str = "heap_alloc", .args = aa, .arg_count = 1});
+                    // tag at offset 0
+                    VReg tag = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_CONST, .dst = tag, .imm = variant_idx});
+                    emit(c, (IRInst){.op = IR_STORE, .a = ptr, .b = tag, .imm = 0});
+                    // fields at offsets 8, 16, ...
+                    for (int fi = 0; fi < nfields; fi++) {
+                        VReg val = gen_expr(c, n->method_call.args[fi]);
+                        emit(c, (IRInst){.op = IR_STORE, .a = ptr, .b = val, .imm = (fi + 1) * 8});
+                    }
+                    return ptr;
+                }
+            }
+
+            // 2. User method on a typed struct receiver
+            // 3. Built-in list/map/imap/task method
+            // 4. Import alias
+            // 5. Fallback
+            // For all four, the call shape is: emit receiver as args[0],
+            // then the user-supplied args as args[1..N], then `bl _<sym>`.
+            // The symbol depends on which branch matches.
+            VReg receiver = gen_expr(c, n->method_call.object);
+            int total_args = n->method_call.arg_count + 1;
+            VReg *args = malloc(total_args * sizeof(VReg));
+            args[0] = receiver;
+            for (int i = 0; i < n->method_call.arg_count; i++)
+                args[i + 1] = gen_expr(c, n->method_call.args[i]);
+
+            const char *sym = NULL;
+            char sym_buf[256];
+
+            // 2. resolved_struct_name set by the checker
+            if (n->method_call.resolved_struct_name) {
+                snprintf(sym_buf, sizeof(sym_buf), "%s_%s",
+                         n->method_call.resolved_struct_name, method);
+                sym = strdup(sym_buf);
+            }
+            // 3. built-in collection methods
+            if (!sym) {
+                if (!strcmp(method, "push") || !strcmp(method, "pop") || !strcmp(method, "len")) {
+                    snprintf(sym_buf, sizeof(sym_buf), "list_%s", method);
+                    sym = strdup(sym_buf);
+                } else if (!strcmp(method, "set") || !strcmp(method, "get") || !strcmp(method, "keys")) {
+                    snprintf(sym_buf, sizeof(sym_buf), "map_%s", method);
+                    sym = strdup(sym_buf);
+                } else if (!strcmp(method, "fire") || !strcmp(method, "collapse")) {
+                    snprintf(sym_buf, sizeof(sym_buf), "task_%s", method);
+                    sym = strdup(sym_buf);
+                }
+            }
+            // 4. import-alias call (alias.func)
+            if (!sym && n->method_call.object->type == NODE_IDENT && c->program) {
+                const char *obj_name = n->method_call.object->ident.name;
+                for (int ai = 0; ai < c->program->program.use_count; ai++) {
+                    if (!strcmp(c->program->program.use_aliases[ai], obj_name)) {
+                        snprintf(sym_buf, sizeof(sym_buf), "%s_%s", obj_name, method);
+                        sym = strdup(sym_buf);
+                        // Drop the receiver — it's an alias, not a value.
+                        for (int i = 0; i < n->method_call.arg_count; i++)
+                            args[i] = args[i + 1];
+                        total_args = n->method_call.arg_count;
+                        break;
+                    }
+                }
+            }
+            // 5. fallback
+            if (!sym) sym = strdup(method);
+
+            VReg dst = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CALL, .dst = dst, .str = (char *)sym,
+                             .args = args, .arg_count = total_args});
+            return dst;
+        }
+
         case NODE_FIELD_ACCESS: {
             VReg obj = gen_expr(c, n->field_access.object);
             // Find field offset
@@ -446,7 +588,17 @@ IRProgram *irgen_generate(Node *program) {
         }
         IRFunc *irf = &ir->funcs[ir->func_count++];
         memset(irf, 0, sizeof(IRFunc));
-        irf->name = f->func_def.name;
+        // Mangle methods as `<ReceiverType>_<method>` so the emitted
+        // symbol matches what the call-site emitter produces. Free
+        // functions keep their original name.
+        if (f->func_def.receiver_type) {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "%s_%s",
+                     f->func_def.receiver_type, f->func_def.name);
+            irf->name = strdup(buf);
+        } else {
+            irf->name = f->func_def.name;
+        }
         irf->param_count = f->func_def.param_count;
 
         IRGenCtx ctx = {0};

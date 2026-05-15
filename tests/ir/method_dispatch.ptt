@@ -1,0 +1,38 @@
+// Regression test: full method dispatch through the IR backend.
+//
+// Verifies P4.3's NODE_METHOD_CALL handling in irgen:
+//   - user method on a typed struct receiver lowers to `_<Type>_<name>`
+//   - the receiver becomes the implicit first argument
+//   - return values flow back through x0
+//
+// Expected output:
+//   1
+//   2
+//   3
+//   42
+
+Counter is { value int }
+
+Counter.bump(self ref Counter) {
+  self.value be self.value + 1
+}
+
+Counter.set(self ref Counter, n int) {
+  self.value be n
+}
+
+Counter.get(self Counter) int {
+  give self.value
+}
+
+spark {
+  c is Counter()
+  c.bump()
+  yell(c.get())
+  c.bump()
+  yell(c.get())
+  c.bump()
+  yell(c.get())
+  c.set(42)
+  yell(c.get())
+}

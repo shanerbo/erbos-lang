@@ -93,6 +93,7 @@ ever reappears, the test will print zeros and fail the suite.
 | Arithmetic (+,-,*,/,mod) | ✅ | |
 | Comparisons (eq,ne,lt,gt,le,ge) | ✅ | |
 | Function calls | ✅ | Args in x0-x7, result in x0 |
+| User method calls | ✅ | Full dispatch (enum constructors, user methods on structs, builtin collection methods, import aliases, fallback) — P4.3 |
 | Variables | ✅ | All go through stack slots |
 | if/nah | ✅ | Multi-branch with basic blocks |
 | through-range loops | ✅ | to/step stored in hidden slots |
@@ -102,20 +103,33 @@ ever reappears, the test will print zeros and fail the suite.
 | Field access | ✅ | Survives `bl` calls (P0 fix) |
 | Field access after calls | ✅ | Fixed in P0 (stack-layout bug) |
 | Field assign | ✅ | |
+| Cross-block / call-aware regalloc | ✅ | P4.2 — callee-save x19..x28 chosen for vregs that span calls; prologue/epilogue save & restore |
+| Large stack frames (> 504 bytes) | ✅ | Prologue splits `stp ..., [sp, #-N]!` when N exceeds the immediate range — P4.3 |
+| Function-scoped labels | ✅ | `L_<func>_<n>` to prevent label collisions across functions — P4.3 |
+| `len()` on list/map/string | ✅ | Direct header load for collections, `_str_len` call for strings — P4.3 |
+| Built-in constructors (`list()`, `map()`, `imap()`, `task()`) | ✅ | Remapped to `_list_new` / `_map_new` / `_imap_new` / inline 0 — P4.3 |
 
 ### Not Yet Implemented in IR backend
-These work in the direct codegen but not yet in the IR pipeline. P3
-(generics) and P4.2 (cross-block regalloc) are the prerequisites for
-landing them cleanly without re-introducing the kind of latent bug P0
-just fixed.
+These work in the direct codegen but not yet in the IR pipeline.
+Each is the next blocker on the path to flipping the IR backend to
+the default; together they are the work P4.3-completion will absorb
+before retiring the direct codegen.
 
-| Feature | Depends On |
-|---------|-----------|
-| Lists / Maps / Enums | Same heap path as structs — likely close to working now; needs targeted tests in `tests/ir/` |
-| through-in (collection iteration) | Lists |
-| RAII (scope-end free) | Liveness propagation — pending P4.2 |
-| String interpolation | `_str_concat` builtin emission from IR |
-| match (pattern matching) | Enums |
+| Feature | Notes |
+|---------|-------|
+| `NODE_LIST_LIT` (list literal `[1, 2, 3]`) | Currently produces 0 from the gen_expr default case |
+| `NODE_MAP_LIT` (map literal `["a" to 1]`) | Same |
+| `NODE_INDEX` (`xs[i]`) | Same |
+| `through (x in collection)` (collection iteration) | Same |
+| String interpolation (`"hello {name}"`) | Needs runtime string concat emitter from IR |
+| `match` pattern matching | Needs enum payload field load + branch table |
+| RAII (scope-end heap free) | Liveness propagation across blocks — partial after P4.2 |
+
+### IR backend usage
+The IR backend is currently opt-in via `./erbos ir <file.ptt>`. The
+default `./erbos run <file.ptt>` and `./erbos test <file.ptt>` use
+the original direct codegen. This will flip once the gap list above
+is closed; see `docs/native-stdlib-plan.md` for the schedule.
 
 ---
 

@@ -23,10 +23,32 @@ static int g_locals_bytes = 0;
 // of iremit_func.
 static int g_saved_csr[10] = {0};
 static int g_csr_slot_base = 0;
+// Function name used to prefix all locally-scoped labels, so
+// `.L0`/`.L1` from one function don't collide with the same labels
+// in another. iremit_func sets this before emitting any block.
+static const char *g_func_name = NULL;
+
+// Emit the epilogue's `ldp x29, x30, [sp], #stack_size` sequence,
+// splitting into separate `add sp, sp, #N` instructions when
+// stack_size exceeds the single-immediate ldp range (504 bytes).
+static void emit_epilogue_ldp(FILE *out, int stack_size) {
+    if (stack_size <= 504) {
+        fprintf(out, "    ldp x29, x30, [sp], #%d\n", stack_size);
+        return;
+    }
+    fprintf(out, "    ldp x29, x30, [sp], #16\n");
+    int extra = stack_size - 16;
+    while (extra > 4095) {
+        fprintf(out, "    add sp, sp, #4095\n");
+        extra -= 4095;
+    }
+    if (extra > 0)
+        fprintf(out, "    add sp, sp, #%d\n", extra);
+}
 
 // Emit the instruction sequence that restores any saved x19..x28
 // registers from the frame. Called immediately before every
-// `ldp x29, x30, [sp], #stack_size; ret` epilogue.
+// epilogue.
 static void emit_csr_restore(FILE *out) {
     int slot = 0;
     for (int r = 19; r <= 28; r++) {
@@ -123,12 +145,29 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
     g_locals_bytes = locals_size;
     for (int r = 0; r < 10; r++) g_saved_csr[r] = saved_csr[r];
     g_csr_slot_base = local_base + locals_size + spill_bytes;
+    g_func_name = func->name;
 
-    // Prologue: pre-decrement sp by stack_size and save fp/lr at the bottom.
+    // Prologue: reserve `stack_size` bytes and save fp/lr at the bottom.
     // After `mov x29, sp`, x29 == sp; everything in the frame uses POSITIVE
     // offsets from x29. Layout documented at the top of this file.
+    //
+    // ARM64's `stp xN, xM, [sp, #-imm]!` requires imm in [0, 504]. For
+    // larger frames we split into a separate `sub sp, sp, #(stack_size-16)`
+    // followed by `stp ..., [sp, #-16]!`.
     fprintf(out, "_%s:\n", func->name);
-    fprintf(out, "    stp x29, x30, [sp, #-%d]!\n", stack_size);
+    if (stack_size <= 504) {
+        fprintf(out, "    stp x29, x30, [sp, #-%d]!\n", stack_size);
+    } else {
+        int extra = stack_size - 16;
+        // sub-immediate has the same range; emit two subs if needed.
+        while (extra > 4095) {
+            fprintf(out, "    sub sp, sp, #4095\n");
+            extra -= 4095;
+        }
+        if (extra > 0)
+            fprintf(out, "    sub sp, sp, #%d\n", extra);
+        fprintf(out, "    stp x29, x30, [sp, #-16]!\n");
+    }
     fprintf(out, "    mov x29, sp\n");
 
     // Save any callee-save registers we plan to use. Slot N in the
@@ -150,7 +189,7 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
     // Emit each block
     for (int bi = 0; bi < func->block_count; bi++) {
         IRBlock *b = &func->blocks[bi];
-        if (bi > 0) fprintf(out, ".L%d:\n", b->label);
+        if (bi > 0) fprintf(out, "L_%s_%d:\n", g_func_name, b->label);
 
         for (int ii = 0; ii < b->count; ii++) {
             IRInst *inst = &b->insts[ii];
@@ -265,13 +304,13 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
                     if (ra != 0)
                         fprintf(out, "    mov x0, x%d\n", ra);
                     emit_csr_restore(out);
-                    fprintf(out, "    ldp x29, x30, [sp], #%d\n", stack_size);
+                    emit_epilogue_ldp(out, stack_size);
                     fprintf(out, "    ret\n");
                     break;
                 }
                 case IR_RET_VOID: {
                     emit_csr_restore(out);
-                    fprintf(out, "    ldp x29, x30, [sp], #%d\n", stack_size);
+                    emit_epilogue_ldp(out, stack_size);
                     fprintf(out, "    ret\n");
                     break;
                 }
@@ -281,16 +320,16 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
                     break;
                 }
                 case IR_BR:
-                    fprintf(out, "    b .L%d\n", inst->label);
+                    fprintf(out, "    b L_%s_%d\n", g_func_name, inst->label);
                     break;
                 case IR_BR_COND: {
                     int ra = ensure_reg(out, alloc, inst->a);
-                    fprintf(out, "    cbnz x%d, .L%d\n", ra, inst->label);
-                    fprintf(out, "    b .L%d\n", inst->label2);
+                    fprintf(out, "    cbnz x%d, L_%s_%d\n", ra, g_func_name, inst->label);
+                    fprintf(out, "    b L_%s_%d\n", g_func_name, inst->label2);
                     break;
                 }
                 case IR_LABEL:
-                    fprintf(out, ".L%d:\n", inst->label);
+                    fprintf(out, "L_%s_%d:\n", g_func_name, inst->label);
                     break;
                 case IR_STORE_LOCAL: {
                     int ra = ensure_reg(out, alloc, inst->a);
@@ -346,7 +385,7 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
         IRBlock *last = &func->blocks[func->block_count - 1];
         if (last->count == 0 || (last->insts[last->count-1].op != IR_RET && last->insts[last->count-1].op != IR_RET_VOID)) {
             emit_csr_restore(out);
-            fprintf(out, "    ldp x29, x30, [sp], #%d\n", stack_size);
+            emit_epilogue_ldp(out, stack_size);
             fprintf(out, "    ret\n");
         }
     }
