@@ -266,14 +266,37 @@ static Type check_expr(Checker *c, Node *n) {
         }
         case NODE_METHOD_CALL: {
             const char *m = n->method_call.method;
+
+            // Detect an enum constructor BEFORE evaluating the object,
+            // because the object is a bare identifier naming the enum
+            // type (e.g. `Result.Ok(42)`), not a value. If we let
+            // check_expr() of the object run first, get_sym() on the
+            // type name would produce TYPE_UNKNOWN and the constructor
+            // would lose its statically-known result type.
+            if (n->method_call.object->type == NODE_IDENT) {
+                const char *obj_name = n->method_call.object->ident.name;
+                if (is_struct(c, obj_name)) {
+                    // It's a known struct or enum name. If it has an enum
+                    // entry registered, treat this as an enum constructor:
+                    // type-check the args (best effort) and return the
+                    // enum's named struct type.
+                    for (int j = 0; j < n->method_call.arg_count; j++)
+                        check_expr(c, n->method_call.args[j]);
+                    return make_struct(obj_name);
+                }
+            }
+
             Type obj_t = check_expr(c, n->method_call.object);
 
             // Dispatch order:
-            //   1. enum constructor (handled at codegen time; passes through here)
+            //   1. enum constructor (handled above)
             //   2. user method on the receiver's static struct/enum type
             //   3. built-in collection / task methods (push/pop/len/set/get/keys/fire/collapse)
             //   4. last-resort: same-name free function
-            if (obj_t.kind == TYPE_STRUCT && obj_t.struct_name) {
+            // Save whether we knew the receiver type — used for the
+            // "no such method" diagnostic if no built-in matches.
+            int receiver_was_struct = (obj_t.kind == TYPE_STRUCT && obj_t.struct_name != NULL);
+            if (receiver_was_struct) {
                 FuncInfo *user_method = find_method(c, obj_t.struct_name, m);
                 if (user_method) {
                     // Implicit `self` is the receiver; user-declared params follow.
@@ -325,9 +348,18 @@ static Type check_expr(Checker *c, Node *n) {
             }
             if (!strcmp(m, "keys")) return make_type(TYPE_LIST);
             if (!strcmp(m, "set") || !strcmp(m, "fire") || !strcmp(m, "collapse")) return make_type(TYPE_VOID);
-            // User method
+            // User method via free-function fallback
             FuncInfo *fi = find_func(c, m);
             if (fi) return fi->return_type;
+            // If the receiver was a known struct/enum, we already tried to
+            // resolve a user method above. None matched, none of the built-in
+            // names matched, and there's no free function with this name.
+            // Report a clear "no such method" rather than fall through.
+            if (receiver_was_struct) {
+                fprintf(stderr, "error:%d: type '%s' has no method '%s' (and no built-in or free function named '%s' is in scope)\n",
+                    n->line, obj_t.struct_name, m, m);
+                exit(1);
+            }
             return make_type(TYPE_UNKNOWN);
         }
         case NODE_FIELD_ACCESS: {
@@ -581,6 +613,32 @@ void checker_run(Node *program) {
         c.funcs[i].param_count = f->func_def.param_count;
         c.funcs[i].param_types_str = f->func_def.param_types;
         c.funcs[i].param_is_ref = f->func_def.param_is_ref;
+
+        // Validate method shape: receiver type must exist as a struct or enum,
+        // and the method must declare at least one parameter (the receiver).
+        // The first parameter's declared type must match the receiver type.
+        if (f->func_def.receiver_type) {
+            if (!is_struct(&c, f->func_def.receiver_type)) {
+                fprintf(stderr, "error:%d: method '%s.%s' attached to unknown type '%s'\n",
+                    f->line, f->func_def.receiver_type, f->func_def.name,
+                    f->func_def.receiver_type);
+                exit(1);
+            }
+            if (f->func_def.param_count < 1) {
+                fprintf(stderr, "error:%d: method '%s.%s' must declare a receiver parameter (e.g. 'self %s' or 'self ref %s')\n",
+                    f->line, f->func_def.receiver_type, f->func_def.name,
+                    f->func_def.receiver_type, f->func_def.receiver_type);
+                exit(1);
+            }
+            const char *first_param_type = f->func_def.param_types[0];
+            if (strcmp(first_param_type, f->func_def.receiver_type) != 0) {
+                fprintf(stderr, "error:%d: method '%s.%s' receiver parameter must be of type '%s', got '%s'\n",
+                    f->line, f->func_def.receiver_type, f->func_def.name,
+                    f->func_def.receiver_type, first_param_type);
+                exit(1);
+            }
+        }
+
         if (!f->func_def.return_type) c.funcs[i].return_type = make_type(TYPE_VOID);
         else if (!strcmp(f->func_def.return_type, "int")) c.funcs[i].return_type = make_type(TYPE_INT);
         else if (!strcmp(f->func_def.return_type, "str")) c.funcs[i].return_type = make_type(TYPE_STR);

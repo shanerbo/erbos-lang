@@ -43,7 +43,7 @@
 | `{ }` | block / scope |
 | `( )` | params, loop header |
 | `[ ]` | list/map literal, index |
-| `.` | field access, method call, module access |
+| `.` | field access, method call, module access; method-def head `Type.name(self ...)` |
 | `+` `-` `*` `/` `%` | arithmetic |
 | `>` `<` `>=` `<=` `==` `!=` | comparisons |
 | `//` | single-line comment |

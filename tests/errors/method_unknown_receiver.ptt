@@ -1,0 +1,8 @@
+// A method's receiver type must exist as a struct or enum.
+Nope.method(self Nope) {
+  yell(1)
+}
+
+spark {
+  yell(1)
+}

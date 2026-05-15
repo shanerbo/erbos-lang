@@ -1,0 +1,7 @@
+// Calling an unknown method on a struct receiver should error clearly.
+Foo is { x int }
+
+spark {
+  f is Foo()
+  f.does_not_exist()
+}

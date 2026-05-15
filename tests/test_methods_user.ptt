@@ -1,10 +1,13 @@
-// User-defined methods on a struct.
+// User-defined methods on user types (P0 spike + P1 productionisation).
 //
-// Verifies the P0 methods spike:
-//   - method definitions parse: `Type.name(self ref Type, ...)`
-//   - the checker tags method calls with the resolved receiver type
-//   - codegen lowers them to `_Type_method(self, args...)` instead of
-//     dispatching to the generic builtin path
+// Covers:
+//   - method definitions parse: `Type.name(self [ref] Type, ...)`
+//   - void / parameterised / value-returning methods
+//   - methods on structs, methods on enums
+//   - per-instance state isolation
+//   - methods that return their owning type (Point -> Point)
+//   - recursive method calls through self
+//   - methods called inside loops
 
 Counter is {
   value int
@@ -20,6 +23,34 @@ Counter.add(self ref Counter, n int) {
 
 Counter.get(self Counter) int {
   give self.value
+}
+
+Counter.bump_n(self ref Counter, n int) {
+  n le 0 ?{
+    give
+  }
+  self.value be self.value + 1
+  self.bump_n(n - 1)
+}
+
+Point is {
+  x int
+  y int
+}
+
+Point.translated(self Point, dx int, dy int) Point {
+  p is Point()
+  p.x be self.x + dx
+  p.y be self.y + dy
+  give p
+}
+
+Result is
+  Ok(value int)
+  | Err(message str)
+
+Result.tag(self Result) int {
+  give 99
 }
 
 test "user methods: void mutator" {
@@ -45,4 +76,32 @@ test "user methods: multiple instances are independent" {
   b.bump()
   assert(a.get() eq 2)
   assert(b.get() eq 1)
+}
+
+test "user methods: recursion through self" {
+  c is Counter()
+  c.bump_n(50)
+  assert(c.get() eq 50)
+}
+
+test "user methods: called inside a loop" {
+  c is Counter()
+  through (i from 0 to 100 by 1) {
+    c.bump()
+  }
+  assert(c.get() eq 100)
+}
+
+test "user methods: returning the owning struct type" {
+  origin is Point()
+  origin.x be 10
+  origin.y be 20
+  shifted is origin.translated(5, 7)
+  assert(shifted.x eq 15)
+  assert(shifted.y eq 27)
+}
+
+test "user methods: methods on enum receivers" {
+  r is Result.Ok(42)
+  assert(r.tag() eq 99)
 }

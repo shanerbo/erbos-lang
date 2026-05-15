@@ -1,0 +1,11 @@
+// A method must declare a receiver parameter as its first argument.
+Foo is { x int }
+
+Foo.bad() {
+  yell(42)
+}
+
+spark {
+  f is Foo()
+  f.bad()
+}

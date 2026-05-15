@@ -210,6 +210,7 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 | Negative numbers | ✅ |
 | `nil` for null pointers | ✅ |
 | Method syntax (obj.method()) | ✅ |
+| User-defined methods on structs and enums (`Type.name(self ...)`) | ✅ |
 | Scoped blocks ({} for lifetimes) | ✅ |
 | RAII (heap freed at scope end) | ✅ |
 | Enums + `match` pattern matching | ✅ |

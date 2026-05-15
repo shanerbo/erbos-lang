@@ -98,6 +98,52 @@ p.x be 10
 p.y be 20
 ```
 
+## Methods
+
+A method is a function attached to a user type. Define it with
+`Type.name(self [ref] Type, ...)`:
+
+```
+Counter is { value int }
+
+Counter.bump(self ref Counter) {
+  self.value be self.value + 1
+}
+
+Counter.add(self ref Counter, n int) {
+  self.value be self.value + n
+}
+
+Counter.get(self Counter) int {
+  give self.value
+}
+
+spark {
+  c is Counter()
+  c.bump()
+  c.add(40)
+  yell(c.get())   // 41
+}
+```
+
+Rules:
+- The first parameter is the receiver. Use `ref` to allow mutation; without
+  `ref`, the method cannot modify struct fields (same enforcement as
+  ordinary `ref` parameters).
+- The receiver's declared type must match the type the method is attached
+  to. `Foo.bar(self Bar) { ... }` is a compile error.
+- Methods on enum types work the same way:
+  ```
+  Result.tag(self Result) int { give 99 }
+  ```
+- Method dispatch is statically resolved. The compiler emits each method as
+  `_<Type>_<name>` (for example `_Counter_bump`), so different types can
+  share method names without collision.
+- Built-in collection methods (`push`, `pop`, `set`, `get`, `keys`, `len`)
+  on the literal `list` / `map` / `imap` / `task` types still lower to
+  their built-in symbols. User methods on user types take precedence over
+  any same-named free function.
+
 ## Lists
 
 ```

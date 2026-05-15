@@ -1,0 +1,11 @@
+// The first parameter's declared type must match the receiver type.
+Foo is { x int }
+Bar is { y int }
+
+Foo.misnamed(self Bar) {
+  yell(self.y)
+}
+
+spark {
+  f is Foo()
+}
