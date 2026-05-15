@@ -161,7 +161,14 @@ static void emit_to_dst(FILE *out, RegAllocResult *a, VReg dst, int src_reg) {
 void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
     int local_base = 16;
     int locals_size = (func->local_slots > 0 ? func->local_slots : 1) * 8;
-    int spill_bytes = alloc->spill_count * 8;
+    // Each regalloc spill consumes SPILL_BASE (16) bytes of frame, not
+    // 8 — that's the "historical" arithmetic the spill-index formula
+    // bakes in: vreg_to_spill[v] = (idx+1) * 16, so consecutive
+    // spills sit 16 bytes apart. Sizing the spill area at 8 bytes/spill
+    // would let the SECOND spill collide with the first byte of the
+    // CSR save area (we hit this once LICM started introducing
+    // cross-iteration vregs that all spill).
+    int spill_bytes = alloc->spill_count * SPILL_BASE;
 
     // Determine which callee-save registers (x19..x28) the allocator
     // actually picked. Each one needs 8 bytes of frame for prologue

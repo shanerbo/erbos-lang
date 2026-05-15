@@ -16,7 +16,7 @@
 | P5.2 | Scalar replacement of aggregates (SRA) | ✅ done |
 | P5.3 | Escape analysis + stack allocation | ✅ done |
 | P5.4 | Bounds-check elimination (lower-bound; upper-bound deferred) | ✅ done |
-| P5.5 | Loop-invariant code motion (LICM) | pending |
+| P5.5 | Loop-invariant code motion (LICM) | ✅ done |
 | P6 | Rewrite `std/map.ptt` in pure Potato; delete C-emitted builtins | pending |
 
 After P3 the language can *express* `Map<K, V>` as pure Potato. P4 and P5

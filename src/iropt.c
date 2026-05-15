@@ -58,6 +58,7 @@ static void iropt_inline(IRProgram *ir);
 static void iropt_sra(IRProgram *ir);
 static void iropt_stackify(IRProgram *ir);
 static void iropt_bce(IRProgram *ir);
+static void iropt_licm(IRProgram *ir);
 
 // Pass dispatch table. New passes should be inserted in the canonical
 // order documented at the top of this file (inlining first because it
@@ -67,7 +68,7 @@ static const IROptPassEntry g_passes[] = {
     { "sra",             IROPT_O1, iropt_sra },             // P5.2
     { "stackify",        IROPT_O1, iropt_stackify },        // P5.3
     { "bce",             IROPT_O1, iropt_bce },             // P5.4
-    // { "licm",            IROPT_O1, iropt_licm },            // P5.5
+    { "licm",            IROPT_O1, iropt_licm },            // P5.5
     { NULL, IROPT_O0, NULL }, // sentinel
 };
 
@@ -1211,5 +1212,276 @@ static void iropt_bce(IRProgram *ir) {
     if (!ir || ir->func_count == 0) return;
     for (int fi = 0; fi < ir->func_count; fi++) {
         bce_func(&ir->funcs[fi]);
+    }
+}
+
+// ============================================================
+// P5.5 — loop-invariant code motion (LICM)
+// ============================================================
+//
+// What this pass does: identify natural loops in the function CFG
+// and hoist instructions whose operands are all defined outside
+// the loop (i.e., the result is the same on every iteration) to
+// the loop's pre-header block. Hoisting eliminates the per-
+// iteration cost of repeated work.
+//
+// Loop detection: irgen emits loops linearly with the back-edge
+// flowing from the increment block back to the condition block.
+// We exploit that structural property: a back-edge is any IR_BR
+// or IR_BR_COND in block B targeting a label whose owning block H
+// has block index < B's index. The loop's body covers blocks
+// [H, B] inclusive.
+//
+// Pre-header: any block whose terminator is IR_BR to H's label
+// AND whose own index is < H. Irgen always emits a `BR cond_lbl`
+// from the block immediately preceding the cond block, and never
+// merges the loop's pre-header with anything else, so a unique
+// pre-header always exists for irgen-emitted loops.
+//
+// Hoistable instructions:
+//
+//   - Pure compute: IR_CONST, IR_COPY, IR_ADD, IR_SUB, IR_MUL,
+//     IR_DIV, IR_MOD, IR_NEG, IR_AND, IR_OR, IR_NOT, IR_CMP_*,
+//     IR_LOAD_STR, IR_ADDR_LOCAL — if every operand is defined
+//     outside the loop (inst index < H's first inst, or in the
+//     pre-header itself), hoist.
+//
+//   - IR_LOAD_LOCAL slot — hoistable if no IR_STORE_LOCAL of the
+//     same slot exists inside the loop. (Conservative: any other
+//     write to the slot would invalidate the load's value.)
+//
+//   - IR_LOAD %a, off — hoistable if `%a` is defined outside the
+//     loop AND no IR_STORE or IR_CALL appears inside the loop
+//     (a CALL could mutate any heap memory; an IR_STORE could
+//     alias the same address). With SRA + stackify upstream,
+//     most surviving IR_LOADs target stack-resident addresses
+//     (IR_ADDR_LOCAL), so a CALL conservatively kills them too
+//     for now (a future rev can refine alias analysis).
+//
+// Anything with side effects (IR_CALL, IR_STORE, IR_STORE_LOCAL,
+// IR_RET, IR_RET_VOID, IR_BR, IR_BR_COND, IR_LABEL, IR_PHI) is
+// never hoisted. Bounds checks lowered as IR_BR_COND are out of
+// scope here (they'd already have been eliminated by P5.4 when
+// provably safe).
+
+// Insert `inst` into block `b` immediately before the terminator.
+// The terminator is whichever of IR_BR / IR_BR_COND / IR_RET /
+// IR_RET_VOID sits at the end. If the block has no terminator
+// (shouldn't happen for irgen output), append to the end.
+static void block_insert_before_terminator(IRBlock *b, IRInst inst) {
+    int term_pos = b->count;
+    for (int i = b->count - 1; i >= 0; i--) {
+        IROp op = b->insts[i].op;
+        if (op == IR_BR || op == IR_BR_COND || op == IR_RET || op == IR_RET_VOID) {
+            term_pos = i;
+            break;
+        }
+    }
+    if (b->count + 1 > b->cap) {
+        b->cap = b->cap ? b->cap * 2 : 16;
+        b->insts = realloc(b->insts, b->cap * sizeof(IRInst));
+    }
+    if (term_pos < b->count) {
+        memmove(&b->insts[term_pos + 1], &b->insts[term_pos],
+                (b->count - term_pos) * sizeof(IRInst));
+    }
+    b->insts[term_pos] = inst;
+    b->count++;
+}
+
+// Returns 1 iff vreg `v` is defined either before block index
+// `loop_first` (anywhere with block index strictly less than
+// loop_first) or in the pre-header block itself. The pre-header
+// has index `preheader_bi`; both invariant defs in the pre-header
+// (after we hoist them) and any earlier-block def count.
+static int vreg_def_invariant(IRFunc *func, VReg v, int loop_first,
+                              int loop_last, int preheader_bi) {
+    if (v < 0) return 1; // no operand
+    for (int bi = 0; bi < func->block_count; bi++) {
+        IRBlock *b = &func->blocks[bi];
+        for (int i = 0; i < b->count; i++) {
+            if (b->insts[i].dst != v) continue;
+            // Found the unique def. Check whether it's outside the loop.
+            if (bi < loop_first || bi > loop_last) return 1;
+            // Inside the loop — not invariant unless it sits in the
+            // pre-header (which by def isn't part of the loop range).
+            if (bi == preheader_bi) return 1;
+            return 0;
+        }
+    }
+    // No def found — defensive: treat as invariant (probably a
+    // function parameter, which is defined "before everything").
+    return 1;
+}
+
+// Returns 1 iff no IR_STORE_LOCAL writing to `slot` exists in
+// blocks [loop_first, loop_last] (the loop body).
+static int slot_unwritten_in_loop(IRFunc *func, int slot,
+                                  int loop_first, int loop_last) {
+    for (int bi = loop_first; bi <= loop_last; bi++) {
+        IRBlock *b = &func->blocks[bi];
+        for (int i = 0; i < b->count; i++) {
+            IRInst *ins = &b->insts[i];
+            if (ins->op == IR_STORE_LOCAL && (int)ins->imm == slot) return 0;
+        }
+    }
+    return 1;
+}
+
+// Returns 1 iff the loop body has no IR_STORE and no IR_CALL —
+// i.e. nothing that could alias-mutate heap-resident memory. We
+// use this as the "safe to hoist any IR_LOAD" predicate.
+static int loop_has_no_memory_writes(IRFunc *func, int loop_first, int loop_last) {
+    for (int bi = loop_first; bi <= loop_last; bi++) {
+        IRBlock *b = &func->blocks[bi];
+        for (int i = 0; i < b->count; i++) {
+            IROp op = b->insts[i].op;
+            if (op == IR_STORE || op == IR_CALL) return 0;
+        }
+    }
+    return 1;
+}
+
+// Decide whether the instruction at (bi, ii) inside the loop is
+// hoistable to the pre-header.
+static int inst_is_hoistable(IRFunc *func, int bi, int ii,
+                             int loop_first, int loop_last,
+                             int preheader_bi,
+                             int loop_has_memory_writes) {
+    IRInst *ins = &func->blocks[bi].insts[ii];
+    switch (ins->op) {
+        case IR_CONST: case IR_LOAD_STR:
+            return 1;
+        case IR_ADDR_LOCAL:
+            // Frame-relative address; the address itself is constant
+            // for the function's lifetime.
+            return 1;
+        case IR_COPY:
+            return vreg_def_invariant(func, ins->a, loop_first, loop_last, preheader_bi);
+        case IR_NEG: case IR_NOT:
+            return vreg_def_invariant(func, ins->a, loop_first, loop_last, preheader_bi);
+        case IR_ADD: case IR_SUB: case IR_MUL: case IR_DIV: case IR_MOD:
+        case IR_AND: case IR_OR:
+        case IR_CMP_EQ: case IR_CMP_NE: case IR_CMP_LT:
+        case IR_CMP_GT: case IR_CMP_LE: case IR_CMP_GE:
+            return vreg_def_invariant(func, ins->a, loop_first, loop_last, preheader_bi)
+                && vreg_def_invariant(func, ins->b, loop_first, loop_last, preheader_bi);
+        case IR_LOAD_LOCAL:
+            // Slot must not be written inside the loop.
+            return slot_unwritten_in_loop(func, (int)ins->imm, loop_first, loop_last);
+        case IR_LOAD:
+            // Address operand must be invariant; no aliasing writes
+            // inside the loop.
+            if (loop_has_memory_writes) return 0;
+            return vreg_def_invariant(func, ins->a, loop_first, loop_last, preheader_bi);
+        default:
+            return 0;
+    }
+}
+
+// Process a single natural loop. `header_bi` is the block index of
+// the loop header (the cond block); `back_bi` is the block whose
+// terminator targets the header (the inc block in irgen's shape);
+// `preheader_bi` is the unique pre-header.
+static void hoist_loop(IRFunc *func, int header_bi, int back_bi, int preheader_bi) {
+    int loop_first = header_bi;
+    int loop_last = back_bi;
+    int has_writes = !loop_has_no_memory_writes(func, loop_first, loop_last);
+
+    // Iterate to fixed point: hoisting one instruction may turn
+    // a previously non-invariant operand into an invariant one
+    // (because its def now lives in the pre-header).
+    int changed = 1;
+    int iters = 0;
+    while (changed && iters < 32) {
+        changed = 0;
+        iters++;
+        for (int bi = loop_first; bi <= loop_last; bi++) {
+            IRBlock *b = &func->blocks[bi];
+            for (int ii = 0; ii < b->count; ) {
+                if (inst_is_hoistable(func, bi, ii, loop_first, loop_last,
+                                      preheader_bi, has_writes)) {
+                    IRInst moved = b->insts[ii];
+                    // Remove from current block.
+                    memmove(&b->insts[ii], &b->insts[ii + 1],
+                            (b->count - ii - 1) * sizeof(IRInst));
+                    b->count--;
+                    // Insert into pre-header before its terminator.
+                    block_insert_before_terminator(&func->blocks[preheader_bi],
+                                                   moved);
+                    changed = 1;
+                    // Don't advance ii — the next instruction shifted
+                    // into the current position.
+                    continue;
+                }
+                ii++;
+            }
+        }
+        // Re-evaluate the "memory writes" flag after this round.
+        has_writes = !loop_has_no_memory_writes(func, loop_first, loop_last);
+    }
+}
+
+// Find natural loops in the function. We enumerate every back-edge:
+// a terminator IR_BR / IR_BR_COND in block B whose target label
+// lives in block H with H's block index < B's. The loop body is
+// [H, B]. The pre-header is the block immediately before H whose
+// terminator is IR_BR to H's label.
+static int find_block_idx_by_label(IRFunc *func, int label) {
+    for (int bi = 0; bi < func->block_count; bi++) {
+        if (func->blocks[bi].label == label) return bi;
+    }
+    return -1;
+}
+
+static void licm_func(IRFunc *func) {
+    // Walk blocks in order. For each terminator that targets an
+    // earlier block, treat it as a back-edge.
+    for (int bi = 0; bi < func->block_count; bi++) {
+        IRBlock *b = &func->blocks[bi];
+        if (b->count == 0) continue;
+        IRInst *term = &b->insts[b->count - 1];
+        int target_label = -1;
+        if (term->op == IR_BR) target_label = term->label;
+        // IR_BR_COND: either branch may be a back-edge; in
+        // irgen's shape only IR_BR_COND from cond->body is
+        // forward. The back-edge is always IR_BR from inc->cond.
+        // We still tolerate IR_BR_COND back-edges defensively.
+        else if (term->op == IR_BR_COND) {
+            int t1 = term->label;
+            int t2 = term->label2;
+            int b1 = find_block_idx_by_label(func, t1);
+            int b2 = find_block_idx_by_label(func, t2);
+            if (b1 >= 0 && b1 < bi) target_label = t1;
+            else if (b2 >= 0 && b2 < bi) target_label = t2;
+        }
+        if (target_label < 0) continue;
+        int header_bi = find_block_idx_by_label(func, target_label);
+        if (header_bi < 0 || header_bi > bi) continue;
+        // Find the pre-header: a block with index < header_bi
+        // whose terminator IR_BR targets the header label, and
+        // which is not itself part of any enclosing loop body
+        // (we don't track nested loops perfectly here — a simple
+        // heuristic: the immediate predecessor in block index
+        // order with that terminator).
+        int preheader_bi = -1;
+        for (int pbi = header_bi - 1; pbi >= 0; pbi--) {
+            IRBlock *pb = &func->blocks[pbi];
+            if (pb->count == 0) continue;
+            IRInst *pt = &pb->insts[pb->count - 1];
+            if (pt->op == IR_BR && pt->label == target_label) {
+                preheader_bi = pbi;
+                break;
+            }
+        }
+        if (preheader_bi < 0) continue;
+        hoist_loop(func, header_bi, bi, preheader_bi);
+    }
+}
+
+static void iropt_licm(IRProgram *ir) {
+    if (!ir || ir->func_count == 0) return;
+    for (int fi = 0; fi < ir->func_count; fi++) {
+        licm_func(&ir->funcs[fi]);
     }
 }
