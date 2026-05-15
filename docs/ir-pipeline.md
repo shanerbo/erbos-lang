@@ -109,57 +109,72 @@ ever reappears, the test will print zeros and fail the suite.
 | `len()` on list/map/string | ✅ | Direct header load for collections, `_str_len` call for strings — P4.3 |
 | Built-in constructors (`list()`, `map()`, `imap()`, `task()`) | ✅ | Remapped to `_list_new` / `_map_new` / `_imap_new` / inline 0 — P4.3 |
 
-### Not Yet Implemented in IR backend
-These work in the direct codegen but not yet in the IR pipeline.
-Each is the next blocker on the path to flipping the IR backend to
-the default; together they are the work P4.3-completion will absorb
-before retiring the direct codegen.
+### Implemented after the foundation
+Every NODE_* the parser produces now lowers correctly through the
+IR pipeline. The following landed across P4.3a through P4.3e2 and
+the regalloc fix in P4.3e:
 
 | Feature | Notes |
 |---------|-------|
-| `NODE_LIST_LIT` (list literal `[1, 2, 3]`) | Currently produces 0 from the gen_expr default case |
-| `NODE_MAP_LIT` (map literal `["a" to 1]`) | Same |
-| `NODE_INDEX` (`xs[i]`) | Same |
-| `through (x in collection)` (collection iteration) | Same |
-| String interpolation (`"hello {name}"`) | Needs runtime string concat emitter from IR |
-| `match` pattern matching | Needs enum payload field load + branch table |
-| RAII (scope-end heap free) | Liveness propagation across blocks — partial after P4.2 |
+| `NODE_LIST_LIT` (list literal `[1, 2, 3]`) | P4.3a |
+| `NODE_MAP_LIT` (map literal `["a" to 1]`) | P4.3a |
+| `NODE_INDEX` (`xs[i]`) with bounds check | P4.3a + the bounds-check addition that landed alongside P4.3f |
+| `through (x in collection)` (collection iteration) | P4.3b |
+| String literals + `IR_LOAD_STR` | P4.3b — string pool emitted via `iremit_finalize_data` |
+| String interpolation (`"hello {name}"`) | P4.3c (also fixed an `_int_to_str` ABI bug) |
+| `match` pattern matching | P4.3d |
+| RAII (scope-end heap free) | P4.3e — per-local heap tracking; emit `_heap_free` at scope end / returns / function fall-off |
+| Test blocks (`test "..." { ... }` + `assert(...)`) | P4.3e2 — per-test `_test_<N>` synthesis + multi-test `_start` runner |
 
 ### IR backend usage
-The IR backend is currently opt-in via `./erbos ir <file.ptt>`. The
-default `./erbos run <file.ptt>` and `./erbos test <file.ptt>` use
-the original direct codegen. This will flip once the gap list above
-is closed; see `docs/native-stdlib-plan.md` for the schedule.
+The IR backend is the only backend. `./erbos run <file.ptt>` and
+`./erbos test <file.ptt>` go through the IR pipeline; `./erbos ir
+<file.ptt>` emits the .s only without assembling, useful for
+inspecting generated code. The legacy direct codegen (`src/codegen.c`)
+was retired in P4.3g; runtime helpers (yell, heap allocator, str
+ops, list/map/imap builtins, panic + assert handlers) live in
+`src/runtime_emit.c`.
 
 ---
 
 ## Architecture
 
 ```
-Source (.ptt) → Lexer → Parser → Checker → Optimizer → IR Generator → Register Allocator → ARM64 Emitter
-                                                         (irgen.c)      (regalloc.c)        (iremit.c)
+Source (.ptt) → Lexer → Parser → Monomorph → Checker → Optimizer
+              → IR Generator → Register Allocator → ARM64 Emitter
+                  (irgen.c)        (regalloc.c)        (iremit.c)
 ```
 
 ### Key Files
 - `src/ir.h` — IR data structures (opcodes, instructions, blocks, functions)
-- `src/irgen.c` — AST → IR translation
-- `src/regalloc.c` — Linear scan register allocation (vreg → physical reg)
-- `src/iremit.c` — IR → ARM64 assembly emission
+- `src/irgen.c` — AST → IR translation, RAII heap-free bookkeeping
+- `src/regalloc.c` — Cross-block, call-aware linear-scan register allocator
+- `src/iremit.c` — IR → ARM64 assembly emission, prologue/epilogue, string pool
+- `src/runtime_emit.c` — C-emitted runtime helpers (yell, heap, str/list/map/imap, panics, asserts)
 
 ### Design Decisions
-- **All named locals use stack slots** — Correct across basic blocks without PHI nodes
-- **No caller-save around calls** — Since locals are on stack, they survive calls naturally
-- **Register allocator assigns regs to temporaries only** — Within a single basic block
-- **Hidden stack slots for loop bounds** — `to` and `step` values stored to survive iterations
+- **Named locals go through stack slots** — survives basic-block transitions
+  cleanly without PHI nodes. The IR generator stamps each local with a slot
+  index in `slot_next`; iremit translates slot N to byte offset
+  `local_base + N*8` from x29.
+- **Cross-block, call-aware regalloc** — vregs whose live range strictly
+  contains an `IR_CALL` are placed in callee-save registers (x19..x28)
+  with prologue saves and matching epilogue restores. Shorter-lived
+  vregs prefer the temporary range x8/x11..x18; **x9 and x10 are reserved**
+  as iremit scratch for large-offset frame addressing.
+- **Hidden stack slots for loop bounds** — `to`/`step` for `through (i from a to b by c)`,
+  and the collection pointer + index for `through (x in coll)`. Both pairs
+  use `slot_next++` so they don't collide with user locals.
+- **RAII heap-free** — per-local `is_heap` / `is_moved` / `alloc_size`
+  parallel arrays; emit_scope_cleanup walks live heap locals at scope end,
+  at returns, and at function fall-off.
 
 ### How to Test
 ```bash
-# IR pipeline (experimental)
-./erbos ir file.ptt        # generates .s file only
+./erbos run file.ptt       # default: build, run, clean up via the IR pipeline
+./erbos test file.ptt      # same; the test framework runs in the binary
+./erbos ir file.ptt        # generates .s file only (no assemble/link)
 # Then manually: as + ld + run
 
-# Old codegen (default, all tests pass)
-./erbos run file.ptt       # compile + run
-./erbos test file.ptt      # run test framework
-make test                  # full regression
+make test                  # full regression — 80 OK lines as of P4.3g
 ```

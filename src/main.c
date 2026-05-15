@@ -7,10 +7,10 @@
 #include "monomorph.h"
 #include "checker.h"
 #include "optimizer.h"
-#include "codegen.h"
 #include "irgen.h"
 #include "regalloc.h"
 #include "iremit.h"
+#include "runtime_emit.h"
 
 static char *read_file(const char *path) {
     FILE *f = fopen(path, "r");
@@ -28,23 +28,19 @@ static char *read_file(const char *path) {
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr,
-            "usage: erbos <file.ptt>           # build to binary (IR backend)\n"
-            "       erbos run <file.ptt>       # build and run, then clean up\n"
-            "       erbos test <file.ptt>      # same as run; the test framework runs in the binary\n"
-            "       erbos ir <file.ptt>        # emit the .s only (IR backend), don't assemble\n"
-            "       erbos legacy [run|test] <file.ptt>\n"
-            "                                  # use the original direct codegen instead of the IR backend\n");
+            "usage: erbos <file.ptt>      # build to binary\n"
+            "       erbos run <file.ptt>  # build and run, then clean up\n"
+            "       erbos test <file.ptt> # same as run; the test framework runs in the binary\n"
+            "       erbos ir <file.ptt>   # emit the .s only, don't assemble\n");
         return 1;
     }
 
-    // Subcommand parsing. Defaults: build via IR backend, then assemble +
-    // link. `run` / `test` add execute-and-cleanup. `ir` stops after .s
-    // emission. `legacy` opts into the original direct codegen, with
-    // optional run/test sub-subcommand for the same execute-and-cleanup
-    // behaviour.
+    // Subcommand parsing. The IR backend is the only backend now;
+    // `run` / `test` add execute-and-cleanup, `ir` stops after .s
+    // emission. The earlier `legacy` opt-out (for the retired direct
+    // codegen, src/codegen.c) was removed in #34 P4.3g.
     int run_mode = 0;     // run binary after linking, then delete it
     int ir_only = 0;      // stop after generating .s (no assemble/link/run)
-    int use_legacy = 0;   // route through the direct codegen path
     const char *input = NULL;
 
     if (argc >= 3 && strcmp(argv[1], "run") == 0) {
@@ -56,14 +52,6 @@ int main(int argc, char **argv) {
     } else if (argc >= 3 && strcmp(argv[1], "ir") == 0) {
         ir_only = 1;
         input = argv[2];
-    } else if (argc >= 3 && strcmp(argv[1], "legacy") == 0) {
-        use_legacy = 1;
-        if (argc >= 4 && (strcmp(argv[2], "run") == 0 || strcmp(argv[2], "test") == 0)) {
-            run_mode = 1;
-            input = argv[3];
-        } else if (argc >= 3) {
-            input = argv[2];
-        }
     } else {
         input = argv[1];
     }
@@ -180,16 +168,17 @@ int main(int argc, char **argv) {
     // Optimize
     optimizer_run(program);
 
-    // Helper: write the IR-pipeline assembly to `asm_path`.
-    // Splits its work via the irgen + iremit + finalise sequence and
-    // shares the runtime emit (codegen_emit_builtins) with the legacy
-    // path. Returns the number of IR functions emitted.
+    // Helper: write the IR-pipeline assembly to `asm_path`. Splits its
+    // work via the irgen + iremit + finalise sequence; runtime helpers
+    // (yell, heap allocator, str/list/map/imap helpers, panic and
+    // assert handlers, data section) come from src/runtime_emit.c.
+    // Returns the number of IR functions emitted.
     #define EMIT_IR_TO_FILE(asm_path_arg) ({                                    \
         IRProgram *ir = irgen_generate(program);                                \
         FILE *ir_out = fopen((asm_path_arg), "w");                              \
         fprintf(ir_out, ".global _start\n.align 2\n");                          \
         fprintf(ir_out, ".section __TEXT,__text\n\n");                          \
-        codegen_emit_builtins(ir_out);                                          \
+        runtime_emit_builtins(ir_out);                                          \
         for (int si = 0; si < program->program.structs.count; si++) {           \
             Node *s = program->program.structs.items[si];                       \
             int size = s->struct_def.field_count * 8;                           \
@@ -242,20 +231,12 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    // Build path. The IR backend reached behavioural parity with the
-    // direct codegen on every program in the corpus (30/30 examples,
-    // 16/16 framework tests, 11/11 dedicated IR regression tests) at
-    // commit 894af1c (#32 RAII heap-free + the regalloc x9/x10
-    // reservation that fixed kitchen_sink). The default now routes
-    // through the IR pipeline; `./erbos legacy ...` opts back into the
-    // original direct codegen for one release while regressions shake
-    // out, and `./erbos ir <file>` continues to emit the .s only
-    // without assembling.
-    if (use_legacy) {
-        codegen(program, asm_path);
-    } else {
-        EMIT_IR_TO_FILE(asm_path);
-    }
+    // Build path. The IR backend is now the only backend; the original
+    // direct codegen (src/codegen.c) was retired in #34 P4.3g after a
+    // release of opt-out testing through the `legacy` subcommand
+    // confirmed the IR pipeline produced byte-identical output on
+    // every program in the corpus.
+    EMIT_IR_TO_FILE(asm_path);
     if (!run_mode) printf("generated %s\n", asm_path);
 
     // Assemble + link

@@ -9,8 +9,8 @@
 | P2 | Per-struct field resolution | ✅ done |
 | P3 | Generics + monomorphization | ✅ done |
 | P4.1 | Fix IR heap-corruption bug (subsumed by P0) | ✅ done |
-| P4.2 | Cross-block, call-aware register allocation | ⏳ in progress |
-| P4.3 | Switch IR to default backend; retire direct codegen | pending |
+| P4.2 | Cross-block, call-aware register allocation | ✅ done |
+| P4.3 | Switch IR to default backend; retire direct codegen | ✅ done (P4.3a–P4.3g) |
 | P5.0 | `src/iropt.c` scaffold + `-O0`/`-O1`/`-O2` flag wiring | pending |
 | P5.1 | Aggressive inlining (loops, branches, locals) | pending |
 | P5.2 | Scalar replacement of aggregates (SRA) | pending |

@@ -286,8 +286,6 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 | Result/Option as built-in types | — |
 | Traits / interfaces | — |
 | Operator overloading | — |
-| Cross-block / call-aware register allocation in IR backend | P4.2 |
-| Switch IR to default backend; retire direct codegen | P4.3 |
 | Optimization passes (inlining, SRA, escape analysis, BCE, LICM) | P5 |
 | Pure-Potato `std/map` (replacing the C-emitted `_map_*` builtins) | P6 |
 | Self-hosting | — |
@@ -336,14 +334,14 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 - [x] User-defined methods on structs and enums
 - [x] Per-struct type-aware field resolution
 - [x] Generics + monomorphization
+- [x] Cross-block / call-aware register allocation in the IR backend
+- [x] Switch IR to default backend; retire the direct codegen
 - [ ] Deep clone for `rep`
 - [ ] Result/Option as built-in types
 - [ ] Traits / interfaces
 - [ ] Operator overloading
 - [ ] Compile-time evaluation
 - [ ] Built-in `fmt`
-- [ ] Cross-block / call-aware register allocation in the IR backend
-- [ ] Switch IR to default backend; retire the direct codegen
 - [ ] Optimization passes (inlining, SRA, escape analysis, BCE, LICM)
 - [ ] Pure-Potato `std/map`, `std/list` (replacing C-emitted builtins)
 - [ ] Green-thread runtime integration in compiled output
@@ -387,14 +385,17 @@ Standard library: `std/math`, `std/queue`, `std/stack`
 ## Architecture
 
 ```
-source.ptt 🥔 → [Lexer] → [Parser] → [Monomorph] → [Checker] → [Optimizer] → [Codegen] → ARM64 .s → [as + ld] → binary
+source.ptt 🥔 → [Lexer] → [Parser] → [Monomorph] → [Checker] → [Optimizer]
+              → [IRGen] → [RegAlloc] → [IREmit] → ARM64 .s → [as + ld] → binary
 ```
 
-Written in C11. ~7,200 lines across `src/`. No external dependencies.
+Written in C11. ~7,300 lines across `src/`. No external dependencies.
 
 The **Monomorph** pass (`src/monomorph.c`) instantiates every concrete generic form (`Box<int>`, `Map<str, int>`, …) before type checking, so the rest of the pipeline only ever sees fully-specialised types. Names are mangled inside-out: `List<Pair<str, int>>` becomes the symbol `_List__Pair__str__int`.
 
-A second, experimental backend (SSA-style IR + linear-scan register allocator) lives alongside the direct codegen and can be invoked with `erbos ir <file.ptt>`. See [`docs/ir-pipeline.md`](docs/ir-pipeline.md) for status and `docs/native-stdlib-plan.md` for the full plan to retire the C-emitted collection builtins in favour of pure-Potato `std/map` / `std/list`.
+The **IR backend** is the only backend. The legacy AST-walking direct codegen was retired after the IR pipeline reached behavioural parity on every program in the test corpus (see `docs/ir-pipeline.md`). The IR uses cross-block, call-aware register allocation: vregs whose live range crosses a `bl` are placed in callee-save registers (x19..x28) with proper prologue saves, while shorter-lived values use the temporary range (x8, x11..x18; x9 and x10 are reserved as scratch for frame addressing).
+
+`erbos ir <file.ptt>` emits the .s only, useful for inspecting generated assembly. Runtime helpers (yell, heap allocator, str/list/map/imap operations, panic and assert handlers) are emitted from `src/runtime_emit.c` as raw ARM64 assembly; they will progressively be replaced by pure-Potato implementations as the optimization passes (`docs/native-stdlib-plan.md`) make user-Potato performance competitive.
 
 ---
 
