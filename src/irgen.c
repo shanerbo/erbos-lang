@@ -840,6 +840,88 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
             gen_block(c, n);
             break;
 
+        case NODE_MATCH: {
+            // Stash the match scrutinee in a hidden local so each arm
+            // can re-read it (each arm reloads to extract its bindings
+            // and to read the tag). Direct codegen does the equivalent
+            // by pushing onto the stack (`str x0, [sp, #-16]!`).
+            VReg scrutinee = gen_expr(c, n->match_expr.expr);
+            int scrut_slot = c->slot_next++;
+            emit(c, (IRInst){.op = IR_STORE_LOCAL, .a = scrutinee, .imm = scrut_slot});
+
+            int end_lbl = new_label(c);
+
+            for (int i = 0; i < n->match_expr.arm_count; i++) {
+                int hit_lbl = new_label(c);   // arm body
+                int miss_lbl = new_label(c);  // try next arm
+
+                // Resolve the variant's tag index by name (enum order
+                // determines tag numbering). Falls back to arm order
+                // if the variant name isn't found in any registered
+                // enum — same conservative behaviour as direct codegen.
+                int tag = i;
+                const char *vname = n->match_expr.arm_variant_names[i];
+                if (c->program) {
+                    for (int ei = 0; ei < c->program->program.enums.count; ei++) {
+                        Node *e = c->program->program.enums.items[ei];
+                        int found = 0;
+                        for (int vi = 0; vi < e->enum_def.variant_count; vi++) {
+                            if (!strcmp(e->enum_def.variant_names[vi], vname)) {
+                                tag = vi;
+                                found = 1;
+                                break;
+                            }
+                        }
+                        if (found) break;
+                    }
+                }
+
+                // Load scrutinee, then tag (offset 0).
+                VReg scrut = new_vreg(c);
+                emit(c, (IRInst){.op = IR_LOAD_LOCAL, .dst = scrut, .imm = scrut_slot});
+                VReg actual_tag = new_vreg(c);
+                emit(c, (IRInst){.op = IR_LOAD, .dst = actual_tag, .a = scrut, .imm = 0});
+
+                // Compare actual_tag == expected_tag.
+                VReg expected_tag = new_vreg(c);
+                emit(c, (IRInst){.op = IR_CONST, .dst = expected_tag, .imm = tag});
+                VReg matches = new_vreg(c);
+                emit(c, (IRInst){.op = IR_CMP_EQ, .dst = matches,
+                                 .a = actual_tag, .b = expected_tag});
+                emit(c, (IRInst){.op = IR_BR_COND, .a = matches,
+                                 .label = hit_lbl, .label2 = miss_lbl});
+
+                // hit_lbl: bind variant fields then run body.
+                IRBlock *hit_b = new_block(c);
+                hit_b->label = hit_lbl;
+                switch_block(c, hit_b);
+                for (int b = 0; b < n->match_expr.arm_binding_counts[i]; b++) {
+                    VReg s2 = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_LOAD_LOCAL, .dst = s2, .imm = scrut_slot});
+                    VReg field = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_LOAD, .dst = field, .a = s2,
+                                     .imm = (b + 1) * 8});
+                    set_local(c, n->match_expr.arm_bindings[i][b], field);
+                }
+                gen_block(c, n->match_expr.arm_bodies[i]);
+                emit(c, (IRInst){.op = IR_BR, .label = end_lbl});
+
+                // miss_lbl: try the next arm (or fall through to end_lbl
+                // if this was the last one).
+                IRBlock *miss_b = new_block(c);
+                miss_b->label = miss_lbl;
+                switch_block(c, miss_b);
+            }
+            // No arm matched: continue past end. (Direct codegen falls
+            // through similarly; an explicit panic could be added later.)
+            emit(c, (IRInst){.op = IR_BR, .label = end_lbl});
+
+            IRBlock *end_b = new_block(c);
+            end_b->label = end_lbl;
+            switch_block(c, end_b);
+            break;
+        }
+
         default:
             break;
     }

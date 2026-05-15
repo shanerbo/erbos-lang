@@ -1,0 +1,39 @@
+// Regression test: enum constructors + match dispatch through the
+// IR backend. Verifies P4.3d's NODE_MATCH handler in irgen.c.
+//
+// Expected output:
+//   42
+//   oops
+//   100
+//   missing
+
+Result is
+  Ok(value int)
+  | Err(message str)
+
+spark {
+  r is Result.Ok(42)
+  match r {
+    Ok(v) => yell(v)
+    Err(msg) => yell(msg)
+  }
+
+  bad is Result.Err("oops")
+  match bad {
+    Ok(v) => yell(v)
+    Err(msg) => yell(msg)
+  }
+
+  // Ensure the second match also distinguishes Ok vs Err correctly.
+  good is Result.Ok(100)
+  match good {
+    Ok(v) => yell(v)
+    Err(msg) => yell(msg)
+  }
+
+  worse is Result.Err("missing")
+  match worse {
+    Ok(v) => yell(v)
+    Err(msg) => yell(msg)
+  }
+}
