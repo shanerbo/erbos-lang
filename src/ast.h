@@ -55,7 +55,8 @@ struct Node {
 
         // NODE_FUNC_DEF
         struct {
-            char *name;
+            char *name;             // bare method name when receiver_type != NULL
+            char *receiver_type;    // NULL for free functions; struct name for methods
             char **param_names;
             char **param_types;
             int *param_is_ref;
@@ -140,6 +141,7 @@ struct Node {
             char *method;
             Node **args;
             int arg_count;
+            char *resolved_struct_name; // set by checker when this is a user method on a struct
         } method_call;
 
         // NODE_BINARY

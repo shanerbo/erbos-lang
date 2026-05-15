@@ -1,0 +1,48 @@
+// User-defined methods on a struct.
+//
+// Verifies the P0 methods spike:
+//   - method definitions parse: `Type.name(self ref Type, ...)`
+//   - the checker tags method calls with the resolved receiver type
+//   - codegen lowers them to `_Type_method(self, args...)` instead of
+//     dispatching to the generic builtin path
+
+Counter is {
+  value int
+}
+
+Counter.bump(self ref Counter) {
+  self.value be self.value + 1
+}
+
+Counter.add(self ref Counter, n int) {
+  self.value be self.value + n
+}
+
+Counter.get(self Counter) int {
+  give self.value
+}
+
+test "user methods: void mutator" {
+  c is Counter()
+  c.bump()
+  c.bump()
+  c.bump()
+  assert(c.get() eq 3)
+}
+
+test "user methods: parameterised mutator" {
+  c is Counter()
+  c.add(10)
+  c.add(32)
+  assert(c.get() eq 42)
+}
+
+test "user methods: multiple instances are independent" {
+  a is Counter()
+  b is Counter()
+  a.bump()
+  a.bump()
+  b.bump()
+  assert(a.get() eq 2)
+  assert(b.get() eq 1)
+}

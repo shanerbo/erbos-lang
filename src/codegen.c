@@ -396,6 +396,23 @@ static void emit_expr(Gen *g, Node *n) {
             // Regular method call (existing code)
             const char *method = n->method_call.method;
 
+            // User method on a struct: tagged by the checker as resolved_struct_name.
+            // Lower as `_<Type>_<method>(self, args...)` with the receiver becoming x0
+            // and the user-declared args going into x1, x2, ... in source order.
+            if (n->method_call.resolved_struct_name) {
+                emit_expr(g, n->method_call.object);
+                fprintf(g->out, "    str x0, [sp, #-16]!\n"); // save receiver
+                for (int i = n->method_call.arg_count - 1; i >= 0; i--) {
+                    emit_expr(g, n->method_call.args[i]);
+                    fprintf(g->out, "    str x0, [sp, #-16]!\n");
+                }
+                for (int i = 0; i < n->method_call.arg_count; i++)
+                    fprintf(g->out, "    ldr x%d, [sp], #16\n", i + 1);
+                fprintf(g->out, "    ldr x0, [sp], #16\n"); // receiver into x0
+                fprintf(g->out, "    bl _%s_%s\n", n->method_call.resolved_struct_name, method);
+                break;
+            }
+
             // List methods: push, pop, len
             if (!strcmp(method, "push") || !strcmp(method, "pop") || !strcmp(method, "len")) {
                 emit_expr(g, n->method_call.object);
@@ -871,7 +888,14 @@ static void emit_func(Gen *g, Node *n) {
     for (int i = 0; i < n->func_def.param_count; i++)
         add_local(g, n->func_def.param_names[i], 0);
 
-    fprintf(g->out, ".globl _%s\n.p2align 2\n_%s:\n", n->func_def.name, n->func_def.name);
+    // Methods are emitted as `_<ReceiverType>_<method>`; free functions stay `_<name>`.
+    if (n->func_def.receiver_type) {
+        fprintf(g->out, ".globl _%s_%s\n.p2align 2\n_%s_%s:\n",
+            n->func_def.receiver_type, n->func_def.name,
+            n->func_def.receiver_type, n->func_def.name);
+    } else {
+        fprintf(g->out, ".globl _%s\n.p2align 2\n_%s:\n", n->func_def.name, n->func_def.name);
+    }
     fprintf(g->out, "    stp x29, x30, [sp, #-16]!\n");
     fprintf(g->out, "    mov x29, sp\n");
     fprintf(g->out, "    sub sp, sp, #1024\n");

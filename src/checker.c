@@ -21,6 +21,7 @@ typedef struct {
 
 typedef struct {
     char *name;
+    char *receiver_type;        // NULL for free functions
     Type return_type;
     int param_count;
     char **param_types_str;
@@ -89,9 +90,24 @@ static Type get_sym(Checker *c, const char *name) {
     return make_type(TYPE_UNKNOWN);
 }
 
+// find_func looks up a *free* function (receiver_type == NULL).
 static FuncInfo *find_func(Checker *c, const char *name) {
     for (int i = 0; i < c->func_count; i++)
-        if (!strcmp(c->funcs[i].name, name)) return &c->funcs[i];
+        if (!c->funcs[i].receiver_type && !strcmp(c->funcs[i].name, name))
+            return &c->funcs[i];
+    return NULL;
+}
+
+// find_method looks up a method on a specific struct/enum receiver type.
+// Returns NULL if no such method exists; caller decides what to do
+// (try free function, try built-in, etc.).
+static FuncInfo *find_method(Checker *c, const char *receiver_type, const char *name) {
+    if (!receiver_type) return NULL;
+    for (int i = 0; i < c->func_count; i++)
+        if (c->funcs[i].receiver_type &&
+            !strcmp(c->funcs[i].receiver_type, receiver_type) &&
+            !strcmp(c->funcs[i].name, name))
+            return &c->funcs[i];
     return NULL;
 }
 
@@ -251,6 +267,39 @@ static Type check_expr(Checker *c, Node *n) {
         case NODE_METHOD_CALL: {
             const char *m = n->method_call.method;
             Type obj_t = check_expr(c, n->method_call.object);
+
+            // Dispatch order:
+            //   1. enum constructor (handled at codegen time; passes through here)
+            //   2. user method on the receiver's static struct/enum type
+            //   3. built-in collection / task methods (push/pop/len/set/get/keys/fire/collapse)
+            //   4. last-resort: same-name free function
+            if (obj_t.kind == TYPE_STRUCT && obj_t.struct_name) {
+                FuncInfo *user_method = find_method(c, obj_t.struct_name, m);
+                if (user_method) {
+                    // Implicit `self` is the receiver; user-declared params follow.
+                    int expected = user_method->param_count - 1; // minus self
+                    if (n->method_call.arg_count != expected) {
+                        fprintf(stderr, "error:%d: method '%s.%s' expects %d arguments, got %d\n",
+                            n->line, obj_t.struct_name, m, expected, n->method_call.arg_count);
+                        exit(1);
+                    }
+                    for (int j = 0; j < n->method_call.arg_count; j++) {
+                        Type arg_t = check_expr(c, n->method_call.args[j]);
+                        Type expected_t = parse_type_str(c, user_method->param_types_str[j + 1]);
+                        if (arg_t.kind != TYPE_UNKNOWN && expected_t.kind != TYPE_UNKNOWN &&
+                            !types_equal(arg_t, expected_t)) {
+                            fprintf(stderr, "error:%d: argument %d of '%s.%s' expects '%s', got '%s'\n",
+                                n->line, j + 1, obj_t.struct_name, m,
+                                type_name(expected_t), type_name(arg_t));
+                            exit(1);
+                        }
+                    }
+                    // Tag the call so codegen can emit the mangled symbol.
+                    n->method_call.resolved_struct_name = (char *)obj_t.struct_name;
+                    return user_method->return_type;
+                }
+            }
+
             if (!strcmp(m, "push")) {
                 if (n->method_call.arg_count > 0) {
                     Type arg_t = check_expr(c, n->method_call.args[0]);
@@ -528,6 +577,7 @@ void checker_run(Node *program) {
     for (int i = 0; i < c.func_count; i++) {
         Node *f = program->program.funcs.items[i];
         c.funcs[i].name = f->func_def.name;
+        c.funcs[i].receiver_type = f->func_def.receiver_type;
         c.funcs[i].param_count = f->func_def.param_count;
         c.funcs[i].param_types_str = f->func_def.param_types;
         c.funcs[i].param_is_ref = f->func_def.param_is_ref;

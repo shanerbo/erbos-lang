@@ -819,6 +819,16 @@ Node *parser_parse(Parser *p) {
             t->test_def.body = parse_block(p);
             list_push(&program->program.tests, t);
         }
+        // Method def: IDENT . IDENT ( ... )   e.g.  Counter.bump(self ref Counter) { ... }
+        else if (at(p, TOK_IDENT) && peek_at(p, 1)->type == TOK_DOT &&
+                 peek_at(p, 2)->type == TOK_IDENT && peek_at(p, 3)->type == TOK_LPAREN) {
+            char *recv = eat(p, TOK_IDENT)->value;
+            eat(p, TOK_DOT);
+            // parse_func_def reads from the method-name token onward.
+            Node *m = parse_func_def(p);
+            m->func_def.receiver_type = recv;
+            list_push(&program->program.funcs, m);
+        }
         // Struct: IDENT IS {
         else if (at(p, TOK_IDENT) && peek_at(p, 1)->type == TOK_IS && peek_at(p, 2)->type == TOK_LBRACE) {
             list_push(&program->program.structs, parse_struct_def(p));
