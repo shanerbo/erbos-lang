@@ -13,6 +13,15 @@ typedef struct {
     VReg *local_vregs;
     int *local_is_mut;  // 1 if variable was reassigned (needs stack slot)
     int *local_slots;   // stack slot index for mutable vars
+    // RAII bookkeeping (P4.3e). Mirrors src/codegen.c's per-local
+    // is_heap / is_moved / alloc_sizes parallel arrays; populated when
+    // a NODE_VAR_DECL's RHS is a heap-producing expression (struct
+    // constructor, list/map/imap literal, or one of the *_new helpers).
+    // Cleared on `give expr` for the returned name and on `is now` for
+    // the source name, so moved variables are never double-freed.
+    int *local_is_heap;
+    int *local_is_moved;
+    int *local_alloc_sizes;
     int local_count;
     int local_cap;
     int slot_next;      // next stack slot
@@ -42,6 +51,10 @@ static void set_local(IRGenCtx *c, const char *name, VReg v) {
             if (c->local_slots[i] < 0)
                 c->local_slots[i] = c->slot_next++;
             emit(c, (IRInst){.op = IR_STORE_LOCAL, .a = v, .imm = c->local_slots[i]});
+            // Reassigning a moved-out local re-binds it; clear the
+            // moved flag so it can participate in the next scope's
+            // RAII cleanup naturally.
+            c->local_is_moved[i] = 0;
             return;
         }
     }
@@ -51,14 +64,72 @@ static void set_local(IRGenCtx *c, const char *name, VReg v) {
         c->local_vregs = realloc(c->local_vregs, c->local_cap * sizeof(VReg));
         c->local_is_mut = realloc(c->local_is_mut, c->local_cap * sizeof(int));
         c->local_slots = realloc(c->local_slots, c->local_cap * sizeof(int));
+        c->local_is_heap = realloc(c->local_is_heap, c->local_cap * sizeof(int));
+        c->local_is_moved = realloc(c->local_is_moved, c->local_cap * sizeof(int));
+        c->local_alloc_sizes = realloc(c->local_alloc_sizes, c->local_cap * sizeof(int));
     }
     c->local_names[c->local_count] = (char *)name;
     c->local_vregs[c->local_count] = v;
     c->local_is_mut[c->local_count] = 0;
     c->local_slots[c->local_count] = c->slot_next++;
+    c->local_is_heap[c->local_count] = 0;
+    c->local_is_moved[c->local_count] = 0;
+    c->local_alloc_sizes[c->local_count] = 0;
     // Store initial value
     emit(c, (IRInst){.op = IR_STORE_LOCAL, .a = v, .imm = c->local_slots[c->local_count]});
     c->local_count++;
+}
+
+// Mark a named local as heap-allocated (the most recent definition
+// wins). Sizes follow the same conventions src/codegen.c uses:
+// struct_field_count*8 (min 8) for struct allocations, 520 for list
+// headers, 152 for map/imap headers. The exact size only matters for
+// the free-list metadata; the allocator rounds up to 16-byte alignment
+// so any conservative over-estimate is safe.
+static void mark_heap_size(IRGenCtx *c, const char *name, int size) {
+    for (int i = c->local_count - 1; i >= 0; i--) {
+        if (!strcmp(c->local_names[i], name)) {
+            c->local_is_heap[i] = 1;
+            c->local_alloc_sizes[i] = size;
+            return;
+        }
+    }
+}
+
+// Mark a named local as moved-out. Subsequent emit_scope_cleanup
+// sweeps will skip it so the new owner's free is the only one.
+static void mark_moved_local(IRGenCtx *c, const char *name) {
+    for (int i = c->local_count - 1; i >= 0; i--) {
+        if (!strcmp(c->local_names[i], name)) {
+            c->local_is_moved[i] = 1;
+            return;
+        }
+    }
+}
+
+// Emit `_heap_free(ptr, size)` for every local in [from, local_count)
+// that is heap-allocated and not moved. Used at scope end (NODE_BLOCK),
+// at returns (NODE_GIVE), and at function fall-off.
+static void emit_scope_cleanup(IRGenCtx *c, int from) {
+    for (int i = from; i < c->local_count; i++) {
+        if (!c->local_is_heap[i] || c->local_is_moved[i]) continue;
+        // Mark as freed so a later cleanup over the same range
+        // (the function-end sweep after a NODE_BLOCK already cleaned
+        // its own range, then NODE_GIVE/fall-off sweeps everything)
+        // doesn't double-free.
+        c->local_is_moved[i] = 1;
+        VReg ptr = new_vreg(c);
+        emit(c, (IRInst){.op = IR_LOAD_LOCAL, .dst = ptr, .imm = c->local_slots[i]});
+        VReg sz = new_vreg(c);
+        int s = c->local_alloc_sizes[i] ? c->local_alloc_sizes[i] : 16;
+        emit(c, (IRInst){.op = IR_CONST, .dst = sz, .imm = s});
+        VReg *args = malloc(2 * sizeof(VReg));
+        args[0] = ptr;
+        args[1] = sz;
+        VReg ignored = new_vreg(c);
+        emit(c, (IRInst){.op = IR_CALL, .dst = ignored, .str = "heap_free",
+                         .args = args, .arg_count = 2});
+    }
 }
 
 static VReg get_local(IRGenCtx *c, const char *name) {
@@ -629,6 +700,46 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
         case NODE_VAR_DECL: {
             VReg v = gen_expr(c, n->var_decl.value);
             set_local(c, n->var_decl.name, v);
+            // RAII: mirror src/codegen.c's heap-marking. `is now`
+            // transfers ownership: the source is dead, the target is
+            // heap. `is rep` is shallow-clone and the new local also
+            // owns a heap copy. Plain decls of struct constructors and
+            // collection allocators are heap. Sizes follow the same
+            // conventions the direct codegen uses.
+            if (n->var_decl.is_move) {
+                if (n->var_decl.value->type == NODE_IDENT)
+                    mark_moved_local(c, n->var_decl.value->ident.name);
+                mark_heap_size(c, n->var_decl.name, 0); // size unknown — use default 16
+            } else if (n->var_decl.is_rep) {
+                mark_heap_size(c, n->var_decl.name, 0);
+            } else if (n->var_decl.value->type == NODE_CALL) {
+                const char *fn = n->var_decl.value->call.name;
+                int size = 0;
+                if (c->program) {
+                    for (int si = 0; si < c->program->program.structs.count; si++) {
+                        Node *s = c->program->program.structs.items[si];
+                        if (!strcmp(s->struct_def.name, fn)) {
+                            size = s->struct_def.field_count * 8;
+                            if (size == 0) size = 8;
+                            break;
+                        }
+                    }
+                }
+                if (size > 0) {
+                    mark_heap_size(c, n->var_decl.name, size);
+                } else if (!strcmp(fn, "list") || !strcmp(fn, "list_new")) {
+                    mark_heap_size(c, n->var_decl.name, 520);
+                } else if (!strcmp(fn, "map") || !strcmp(fn, "map_new")
+                        || !strcmp(fn, "imap") || !strcmp(fn, "imap_new")) {
+                    mark_heap_size(c, n->var_decl.name, 152);
+                } else if (!strncmp(fn, "alloc_", 6)) {
+                    mark_heap_size(c, n->var_decl.name, 520);
+                }
+            } else if (n->var_decl.value->type == NODE_LIST_LIT) {
+                mark_heap_size(c, n->var_decl.name, 520);
+            } else if (n->var_decl.value->type == NODE_MAP_LIT) {
+                mark_heap_size(c, n->var_decl.name, 152);
+            }
             break;
         }
         case NODE_ASSIGN: {
@@ -639,8 +750,15 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
         case NODE_GIVE: {
             if (n->give.value) {
                 VReg v = gen_expr(c, n->give.value);
+                // Returning a named local transfers ownership: skip its
+                // free in the cleanup sweep below. Mirrors how the
+                // direct codegen handles `give x` for heap x.
+                if (n->give.value->type == NODE_IDENT)
+                    mark_moved_local(c, n->give.value->ident.name);
+                emit_scope_cleanup(c, 0);
                 emit(c, (IRInst){.op = IR_RET, .a = v});
             } else {
+                emit_scope_cleanup(c, 0);
                 emit(c, (IRInst){.op = IR_RET_VOID});
             }
             break;
@@ -930,9 +1048,17 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
                 emit(c, (IRInst){.op = IR_BR, .label = c->loop_start});
             break;
 
-        case NODE_BLOCK:
+        case NODE_BLOCK: {
+            // RAII for nested `{ ... }` scopes: locals declared inside
+            // the block get freed when the block ends, mirroring
+            // src/codegen.c's emit_scope_cleanup(scope_start). We
+            // remember local_count at entry and only sweep what the
+            // block itself added.
+            int scope_start = c->local_count;
             gen_block(c, n);
+            emit_scope_cleanup(c, scope_start);
             break;
+        }
 
         case NODE_ASSERT: {
             // Mirror src/codegen.c:869-877. Evaluate the condition; if
@@ -1092,6 +1218,13 @@ IRProgram *irgen_generate(Node *program) {
 
         // Generate body
         gen_block(&ctx, f->func_def.body);
+        // Function fall-off cleanup: any heap locals still live at the
+        // end of the body must be freed before we return. Mirrors
+        // src/codegen.c::emit_func's terminal emit_scope_cleanup. If
+        // the body already ended in IR_RET/IR_RET_VOID (which call
+        // emit_scope_cleanup themselves), this sweep finds nothing
+        // because everything is marked moved.
+        emit_scope_cleanup(&ctx, 0);
 
         irf->vreg_count = ctx.vreg_next;
         irf->local_slots = ctx.slot_next;
@@ -1099,6 +1232,9 @@ IRProgram *irgen_generate(Node *program) {
         free(ctx.local_vregs);
         free(ctx.local_is_mut);
         free(ctx.local_slots);
+        free(ctx.local_is_heap);
+        free(ctx.local_is_moved);
+        free(ctx.local_alloc_sizes);
     }
 
     // Synthesize one IRFunc per `test "name" { ... }` block, named
@@ -1128,7 +1264,10 @@ IRProgram *irgen_generate(Node *program) {
         ctx.program = program;
 
         gen_block(&ctx, t->test_def.body);
-        // Test bodies don't have an explicit return; emit one.
+        // Test bodies don't have an explicit return; emit cleanup +
+        // RET_VOID. The cleanup matches what NODE_GIVE would have
+        // emitted if the test ended in `give`.
+        emit_scope_cleanup(&ctx, 0);
         emit(&ctx, (IRInst){.op = IR_RET_VOID});
 
         irf->vreg_count = ctx.vreg_next;
@@ -1137,6 +1276,9 @@ IRProgram *irgen_generate(Node *program) {
         free(ctx.local_vregs);
         free(ctx.local_is_mut);
         free(ctx.local_slots);
+        free(ctx.local_is_heap);
+        free(ctx.local_is_moved);
+        free(ctx.local_alloc_sizes);
     }
 
     return ir;

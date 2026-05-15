@@ -121,7 +121,16 @@ RegAllocResult regalloc_run(IRFunc *func) {
         } else {
             // Prefer a non-arg temporary in [x8, x18]; fall back to
             // arg registers [x0, x7] only if everything else is busy.
+            // Skip x9 and x10 — iremit reserves them as scratch for
+            // large-offset frame addressing (`add x10, x29, #N` /
+            // `ldr x9, [x29, #N]`) and for spill load/store sequences.
+            // If a vreg landed in x9 or x10, those scratch sequences
+            // would clobber the value being stored. (See the bug
+            // diagnosed via kitchen_sink section 15: an IR_ADD whose
+            // dst was x10 had its result destroyed by the immediately-
+            // following `add x10, x29, #256` in IR_STORE_LOCAL.)
             for (int r = 8; r <= 18; r++) {
+                if (r == 9 || r == 10) continue;
                 if (reg_free_at[r] < ranges[i].start) { assigned = r; break; }
             }
             if (assigned < 0) {

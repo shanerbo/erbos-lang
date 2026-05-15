@@ -1,0 +1,57 @@
+// Regression test: RAII heap-free + a `through (k in collection)`
+// loop whose increment slot lands at an offset > 255 (forcing iremit
+// to use the `add x10, x29, #N` scratch sequence).
+//
+// Two bugs are guarded by this test:
+//   1. P4.3e RAII: heap allocations inside a function body must be
+//      freed at scope exit (here at the end of `_spark`). Without
+//      RAII, a long-running program leaks; the regression that
+//      kitchen_sink exposed was state buildup from the leak path.
+//   2. iremit scratch-vs-vreg conflict: the regalloc must not assign
+//      x9 or x10 to any vreg, because iremit reuses them as scratch
+//      for large-offset frame addressing. If a vreg's live range
+//      includes an IR_STORE_LOCAL with offset > 255 and the regalloc
+//      chose x10 for that vreg, the store would corrupt the value.
+//      kitchen_sink section 15's `through (k in scores.keys())` hit
+//      this: the increment-block's `idx + 1` landed in x10, then the
+//      slot-store sequence overwrote it with the slot address.
+//
+// Expected output:
+//   3
+//   apple
+//   banana
+//   cherry
+//   3
+
+spark {
+  // Force enough locals + heap allocations that the through-in's
+  // hidden coll/idx slots end up at offsets > 255 from x29.
+  pad1 is "padding-string-1"
+  pad2 is "padding-string-2"
+  pad3 is "padding-string-3"
+  pad4 is "padding-string-4"
+  pad5 is "padding-string-5"
+  pad6 is "padding-string-6"
+  pad7 is "padding-string-7"
+  pad8 is "padding-string-8"
+  pad9 is "padding-string-9"
+  pad10 is "padding-string-10"
+  pad11 is "padding-string-11"
+  pad12 is "padding-string-12"
+  pad13 is "padding-string-13"
+  pad14 is "padding-string-14"
+  pad15 is "padding-string-15"
+  pad16 is "padding-string-16"
+
+  fruits is map of str to int
+  fruits.set("apple", 1)
+  fruits.set("banana", 2)
+  fruits.set("cherry", 3)
+
+  yell(len(fruits))
+  keys is fruits.keys()
+  through (k in keys) {
+    yell(k)
+  }
+  yell(len(keys))
+}
