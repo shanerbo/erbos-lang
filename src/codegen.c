@@ -1764,10 +1764,20 @@ void codegen_emit_builtins(FILE *out) {
     fprintf(out, ".globl _panic_capacity\n.p2align 2\n_panic_capacity:\n");
     fprintf(out, "    adrp x0, _cap_msg@PAGE\n    add x0, x0, _cap_msg@PAGEOFF\n");
     fprintf(out, "    bl _yell_str\n    mov x16, #1\n    mov x0, #1\n    svc #0x80\n\n");
-    // Data section for panic messages
+    // Assert handler — used by `assert(...)` calls in user test bodies.
+    // Prints the line number, then " assertion failed", then exits with 1.
+    fprintf(out, ".globl _assert_fail\n.p2align 2\n_assert_fail:\n");
+    fprintf(out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
+    fprintf(out, "    bl _yell_int\n");
+    fprintf(out, "    adrp x0, _assert_msg@PAGE\n    add x0, x0, _assert_msg@PAGEOFF\n");
+    fprintf(out, "    bl _yell_str\n");
+    fprintf(out, "    mov x16, #1\n    mov x0, #1\n    svc #0x80\n\n");
+    // Data section for panic messages + test runner strings.
     fprintf(out, ".section __DATA,__data\n");
     fprintf(out, "_oob_msg: .asciz \"panic: index out of bounds\"\n");
     fprintf(out, "_cap_msg: .asciz \"panic: capacity overflow\"\n");
+    fprintf(out, "_assert_msg: .asciz \" assertion failed\"\n");
+    fprintf(out, "_pass_prefix: .asciz \"pass: \"\n");
     // Heap allocator state
     fprintf(out, ".section __DATA,__bss\n.p2align 3\n");
     fprintf(out, "_heap_ptr: .quad 0\n");

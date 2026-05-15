@@ -213,6 +213,39 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
         case NODE_BINARY: {
             VReg a = gen_expr(c, n->binary.left);
             VReg b = gen_expr(c, n->binary.right);
+            // String operators: `+` -> _str_concat, `eq`/`ne` -> _str_eq
+            // (with optional inversion). Triggered by the checker's
+            // resolved_type == 2 ("this binary op is on strings") tag.
+            // Mirrors src/codegen.c:237-269.
+            if (n->resolved_type == 2) {
+                if (n->binary.op == TOK_PLUS || n->binary.op == TOK_ADD_WORD) {
+                    VReg *args = malloc(2 * sizeof(VReg));
+                    args[0] = a; args[1] = b;
+                    VReg dst = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_CALL, .dst = dst, .str = "str_concat",
+                                     .args = args, .arg_count = 2});
+                    return dst;
+                }
+                if (n->binary.op == TOK_EQ || n->binary.op == TOK_EQ_WORD) {
+                    VReg *args = malloc(2 * sizeof(VReg));
+                    args[0] = a; args[1] = b;
+                    VReg dst = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_CALL, .dst = dst, .str = "str_eq",
+                                     .args = args, .arg_count = 2});
+                    return dst;
+                }
+                if (n->binary.op == TOK_NEQ || n->binary.op == TOK_NE_WORD) {
+                    VReg *args = malloc(2 * sizeof(VReg));
+                    args[0] = a; args[1] = b;
+                    VReg eq_v = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_CALL, .dst = eq_v, .str = "str_eq",
+                                     .args = args, .arg_count = 2});
+                    // Invert: dst = !eq_v
+                    VReg dst = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_NOT, .dst = dst, .a = eq_v});
+                    return dst;
+                }
+            }
             VReg dst = new_vreg(c);
             IROp op;
             switch (n->binary.op) {
@@ -578,12 +611,18 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
         case NODE_FIELD_ASSIGN: {
             VReg val = gen_expr(c, n->field_assign.value);
             VReg obj = gen_expr(c, n->field_assign.object);
-            // Find field offset (search all structs)
+            // Resolve the field offset using the same per-struct policy
+            // P2 introduced for the direct codegen: when the checker
+            // tagged the assign with a struct name, look up the offset
+            // in that exact struct; otherwise fall back to a global
+            // search (used by the BST/linked-list pattern that stores
+            // struct pointers as int).
             int offset = 0;
-            if (c->program) {
-                for (int si = 0; si < c->program->program.structs.count; si++) {
+            int found = 0;
+            if (c->program && n->field_assign.struct_name) {
+                for (int si = 0; si < c->program->program.structs.count && !found; si++) {
                     Node *s = c->program->program.structs.items[si];
-                    int found = 0;
+                    if (strcmp(s->struct_def.name, n->field_assign.struct_name) != 0) continue;
                     for (int fi = 0; fi < s->struct_def.field_count; fi++) {
                         if (!strcmp(s->struct_def.field_names[fi], n->field_assign.field)) {
                             offset = fi * 8;
@@ -591,7 +630,20 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
                             break;
                         }
                     }
-                    if (found) break;
+                }
+            }
+            if (!found && c->program) {
+                for (int si = 0; si < c->program->program.structs.count; si++) {
+                    Node *s = c->program->program.structs.items[si];
+                    int local_found = 0;
+                    for (int fi = 0; fi < s->struct_def.field_count; fi++) {
+                        if (!strcmp(s->struct_def.field_names[fi], n->field_assign.field)) {
+                            offset = fi * 8;
+                            local_found = 1;
+                            break;
+                        }
+                    }
+                    if (local_found) break;
                 }
             }
             emit(c, (IRInst){.op = IR_STORE, .a = obj, .b = val, .imm = offset});
@@ -840,6 +892,37 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
             gen_block(c, n);
             break;
 
+        case NODE_ASSERT: {
+            // Mirror src/codegen.c:869-877. Evaluate the condition; if
+            // non-zero, fall through. If zero, call _assert_fail with
+            // the source line as x0; that helper prints the line, then
+            // " assertion failed", then exits 1 (it never returns).
+            VReg cond = gen_expr(c, n->assert_stmt.condition);
+            int ok_lbl = new_label(c);
+            int fail_lbl = new_label(c);
+            emit(c, (IRInst){.op = IR_BR_COND, .a = cond, .label = ok_lbl, .label2 = fail_lbl});
+
+            IRBlock *fail_b = new_block(c);
+            fail_b->label = fail_lbl;
+            switch_block(c, fail_b);
+            VReg line_no = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CONST, .dst = line_no, .imm = n->line});
+            VReg *aa = malloc(sizeof(VReg));
+            aa[0] = line_no;
+            VReg ignored = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CALL, .dst = ignored, .str = "assert_fail",
+                             .args = aa, .arg_count = 1});
+            // _assert_fail exits, but emit a branch anyway so the
+            // basic-block graph is well-formed (every block ends with
+            // either a branch or a return).
+            emit(c, (IRInst){.op = IR_BR, .label = ok_lbl});
+
+            IRBlock *ok_b = new_block(c);
+            ok_b->label = ok_lbl;
+            switch_block(c, ok_b);
+            break;
+        }
+
         case NODE_MATCH: {
             // Stash the match scrutinee in a hidden local so each arm
             // can re-read it (each arm reloads to extract its bindings
@@ -967,6 +1050,44 @@ IRProgram *irgen_generate(Node *program) {
 
         // Generate body
         gen_block(&ctx, f->func_def.body);
+
+        irf->vreg_count = ctx.vreg_next;
+        irf->local_slots = ctx.slot_next;
+        free(ctx.local_names);
+        free(ctx.local_vregs);
+        free(ctx.local_is_mut);
+        free(ctx.local_slots);
+    }
+
+    // Synthesize one IRFunc per `test "name" { ... }` block, named
+    // `_test_<N>` to mirror what the direct codegen emits. main.c's IR
+    // mode then emits a multi-test _start that announces each test by
+    // name and invokes _test_<N>; if the body contains a failing
+    // assert, _assert_fail exits the process.
+    for (int i = 0; i < program->program.tests.count; i++) {
+        Node *t = program->program.tests.items[i];
+
+        if (ir->func_count >= ir->func_cap) {
+            ir->func_cap = ir->func_cap ? ir->func_cap * 2 : 8;
+            ir->funcs = realloc(ir->funcs, ir->func_cap * sizeof(IRFunc));
+        }
+        IRFunc *irf = &ir->funcs[ir->func_count++];
+        memset(irf, 0, sizeof(IRFunc));
+        char buf[64];
+        snprintf(buf, sizeof(buf), "test_%d", i);
+        irf->name = strdup(buf);
+        irf->param_count = 0;
+
+        IRGenCtx ctx = {0};
+        ctx.func = irf;
+        ctx.block = new_block(&ctx);
+        ctx.loop_start = -1;
+        ctx.loop_end = -1;
+        ctx.program = program;
+
+        gen_block(&ctx, t->test_def.body);
+        // Test bodies don't have an explicit return; emit one.
+        emit(&ctx, (IRInst){.op = IR_RET_VOID});
 
         irf->vreg_count = ctx.vreg_next;
         irf->local_slots = ctx.slot_next;

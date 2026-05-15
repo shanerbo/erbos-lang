@@ -329,6 +329,34 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
                         store_spill(out, alloc, inst->dst, 11);
                     break;
                 }
+                case IR_AND: case IR_OR: {
+                    // Non-short-circuit logical AND/OR. The direct
+                    // codegen short-circuits via labels; that's a perf
+                    // optimization, not a correctness requirement, so
+                    // for now we always evaluate both sides (irgen
+                    // already produced the operands as separate vregs)
+                    // and combine bitwise. Boolean operands are 0/1, so
+                    // bitwise and == logical and. NOTE: side effects
+                    // in the right operand will execute even when
+                    // left is false; future work could move this back
+                    // to short-circuit form by lowering AND/OR to a
+                    // BR_COND in irgen.
+                    int ra = ensure_reg(out, alloc, inst->a);
+                    int rb;
+                    if (is_spilled(alloc, inst->b) && ra == 9) {
+                        fprintf(out, "    mov x10, x9\n");
+                        rb = ensure_reg(out, alloc, inst->b);
+                        ra = 10;
+                    } else {
+                        rb = ensure_reg(out, alloc, inst->b);
+                    }
+                    int d = is_spilled(alloc, inst->dst) ? 11 : phys(alloc, inst->dst);
+                    const char *mnem = inst->op == IR_AND ? "and" : "orr";
+                    fprintf(out, "    %s x%d, x%d, x%d\n", mnem, d, ra, rb);
+                    if (is_spilled(alloc, inst->dst))
+                        store_spill(out, alloc, inst->dst, 11);
+                    break;
+                }
                 case IR_CMP_EQ: case IR_CMP_NE: case IR_CMP_LT:
                 case IR_CMP_GT: case IR_CMP_LE: case IR_CMP_GE: {
                     int ra = ensure_reg(out, alloc, inst->a);

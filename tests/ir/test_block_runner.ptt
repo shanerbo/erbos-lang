@@ -1,0 +1,28 @@
+// Regression test: `test "..." { ... }` blocks run correctly through
+// the IR backend. Verifies P4.3e2's per-test _test_N synthesis +
+// multi-test _start runner in irgen.c and main.c, plus the new
+// NODE_ASSERT handler.
+//
+// Expected output (each pass line goes on its own line because
+// _yell_str of "pass: " emits a newline before the test name; the
+// test-name yell adds another newline):
+//   pass:
+//   first
+//   pass:
+//   second
+//   pass:
+//   third
+
+test "first" {
+  assert(1 + 1 eq 2)
+}
+
+test "second" {
+  x is 10
+  y is 20
+  assert(x + y eq 30)
+}
+
+test "third" {
+  assert(true and not false)
+}

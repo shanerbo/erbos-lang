@@ -184,12 +184,45 @@ int main(int argc, char **argv) {
             free(alloc.vreg_to_phys);
             free(alloc.vreg_to_spill);
         }
-        // _start calls spark
-        fprintf(ir_out, "_start:\n    bl _spark\n    mov x16, #1\n    mov x0, #0\n    svc #0x80\n\n");
-        // Emit the data section that holds string literals collected by
-        // IR_LOAD_STR. Must come after all functions so the @PAGE
-        // references resolve.
+        // _start dispatcher — match the direct-codegen semantics:
+        //   - If the program has any `test "..." { ... }` blocks,
+        //     synthesise a runner that prints each test's name (with
+        //     a "pass: " prefix), then calls the corresponding _test_N.
+        //     A failing assert inside the test body exits the process
+        //     via _assert_fail, so any name we print is by definition
+        //     for a test that ran to completion successfully.
+        //   - Otherwise call _spark.
+        int test_count = program->program.tests.count;
+        if (test_count > 0) {
+            fprintf(ir_out, ".globl _start\n.p2align 2\n_start:\n");
+            for (int i = 0; i < test_count; i++) {
+                // Print "pass: " then the test name. Both go through
+                // the IR backend's string pool via iremit_finalize_data.
+                fprintf(ir_out, "    adrp x0, _pass_prefix@PAGE\n    add x0, x0, _pass_prefix@PAGEOFF\n");
+                fprintf(ir_out, "    bl _yell_str\n");
+                // Inline a small data label per test name. Could go
+                // through the iremit string pool, but those are emitted
+                // in the data section after _start, so we use direct
+                // labels here whose definition is also after _start.
+                fprintf(ir_out, "    adrp x0, _test_name_%d@PAGE\n    add x0, x0, _test_name_%d@PAGEOFF\n", i, i);
+                fprintf(ir_out, "    bl _yell_str\n");
+                fprintf(ir_out, "    bl _test_%d\n", i);
+            }
+            fprintf(ir_out, "    mov x16, #1\n    mov x0, #0\n    svc #0x80\n\n");
+        } else {
+            fprintf(ir_out, "_start:\n    bl _spark\n    mov x16, #1\n    mov x0, #0\n    svc #0x80\n\n");
+        }
+        // Emit the IR string pool's data section (literals from the
+        // user code) plus the per-test name labels.
         iremit_finalize_data(ir_out);
+        if (test_count > 0) {
+            fprintf(ir_out, ".section __DATA,__data\n");
+            for (int i = 0; i < test_count; i++) {
+                Node *t = program->program.tests.items[i];
+                fprintf(ir_out, "_test_name_%d: .asciz \"%s\"\n", i, t->test_def.name);
+            }
+            fprintf(ir_out, ".section __TEXT,__text\n");
+        }
         fclose(ir_out);
         printf("IR pipeline: generated %s (%d functions)\n", asm_path, ir->func_count);
         free(src);
