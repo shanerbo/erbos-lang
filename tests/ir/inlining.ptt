@@ -1,0 +1,60 @@
+// Regression test: P5.1 aggressive inlining.
+// At -O1 (and -O2) every `b.get()` / `b.value()` call site below
+// should have its `bl _<Mangled>_<method>` replaced with the inlined
+// body — a direct `ldr` of the field. At -O0 the calls remain.
+//
+// Whichever level runs, observable output must be identical.
+//
+// Expected output:
+//   42
+//   100
+//   1
+//   2
+//   3
+//   6
+
+Box<T> is { value T }
+
+Box<T>.set(self ref Box<T>, v T) {
+  self.value be v
+}
+
+Box<T>.get(self Box<T>) T {
+  give self.value
+}
+
+Counter is { count int }
+
+Counter.bump(self ref Counter) {
+  self.count be self.count + 1
+}
+
+Counter.value(self Counter) int {
+  give self.count
+}
+
+spark {
+  // Single-instantiation Box<int> — inlining should turn three
+  // `bl _Box__int_get` calls into three direct loads.
+  bi is Box<int>()
+  bi.set(42)
+  yell(bi.get())
+
+  bs is Box<int>()
+  bs.set(100)
+  yell(bs.get())
+
+  // Counter loop — bump() is a void mutator inlinable as
+  // `self.count = self.count + 1`. value() is inlinable too.
+  c is Counter()
+  c.bump()
+  yell(c.value())   // 1
+  c.bump()
+  yell(c.value())   // 2
+  c.bump()
+  yell(c.value())   // 3
+
+  // Sum via inlined value()
+  total is c.value() + c.value()
+  yell(total)       // 6 (= 3 + 3)
+}
