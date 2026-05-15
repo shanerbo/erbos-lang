@@ -371,6 +371,20 @@ static Type check_expr(Checker *c, Node *n) {
                         n->line, obj_t.struct_name, n->field_access.field);
                     exit(1);
                 }
+                // Look up the field's declared type so that callers
+                // (like the give/return-type check) see the right
+                // type. Without this, every field access reports
+                // TYPE_INT regardless of the struct's actual field
+                // declaration, which silently miscompiled monomorph
+                // outputs that store str/bool fields.
+                StructInfo *si = find_struct(c, obj_t.struct_name);
+                if (si) {
+                    for (int i = 0; i < si->field_count; i++) {
+                        if (!strcmp(si->field_names[i], n->field_access.field)) {
+                            return parse_type_str(c, si->field_types[i]);
+                        }
+                    }
+                }
             } else {
                 n->field_access.struct_name = NULL;
             }

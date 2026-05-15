@@ -4,6 +4,7 @@
 #include <sys/wait.h>
 #include "lexer.h"
 #include "parser.h"
+#include "monomorph.h"
 #include "checker.h"
 #include "optimizer.h"
 #include "codegen.h"
@@ -145,6 +146,11 @@ int main(int argc, char **argv) {
         }
         free(imp_src);
     }
+
+    // Monomorphize generic structs and methods. After this pass the
+    // AST is fully concrete; the checker, optimizer, and codegen need
+    // no awareness of generics.
+    monomorph_run(program);
 
     // Type check
     checker_run(program);

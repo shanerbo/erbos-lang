@@ -1,0 +1,83 @@
+// Generic structs + generic methods + monomorphization.
+//
+// Verifies P3:
+//   - parametric struct: Box<T>, Pair<K, V>
+//   - parametric methods: Box<T>.set / Box<T>.get
+//   - the monomorphization pass clones one specialised struct per
+//     concrete instantiation and one specialised method per
+//     instantiation+template
+//   - per-instantiation symbol mangling: Box<int> -> Box__int,
+//     Pair<str, int> -> Pair__str__int
+//   - distinct concrete instantiations of the same template don't
+//     interfere
+
+Box<T> is {
+  value T
+}
+
+Box<T>.set(self ref Box<T>, v T) {
+  self.value be v
+}
+
+Box<T>.get(self Box<T>) T {
+  give self.value
+}
+
+Pair<K, V> is {
+  key K
+  value V
+}
+
+Pair<K, V>.set_key(self ref Pair<K, V>, k K) {
+  self.key be k
+}
+
+Pair<K, V>.set_value(self ref Pair<K, V>, v V) {
+  self.value be v
+}
+
+Pair<K, V>.get_key(self Pair<K, V>) K {
+  give self.key
+}
+
+Pair<K, V>.get_value(self Pair<K, V>) V {
+  give self.value
+}
+
+test "generic Box<int>" {
+  b is Box<int>()
+  b.set(42)
+  assert(b.get() eq 42)
+}
+
+test "generic Box<str>" {
+  b is Box<str>()
+  b.set("hello")
+  // String comparison flows through _str_eq.
+  assert(b.get() eq "hello")
+}
+
+test "two distinct instantiations of the same template" {
+  bi is Box<int>()
+  bs is Box<str>()
+  bi.set(7)
+  bs.set("seven")
+  assert(bi.get() eq 7)
+  assert(bs.get() eq "seven")
+}
+
+test "two-parameter generic Pair<str, int>" {
+  p is Pair<str, int>()
+  p.set_key("alice")
+  p.set_value(95)
+  assert(p.get_key() eq "alice")
+  assert(p.get_value() eq 95)
+}
+
+test "two-parameter generic Pair<int, int>" {
+  p is Pair<int, int>()
+  p.set_key(10)
+  p.set_value(20)
+  assert(p.get_key() eq 10)
+  assert(p.get_value() eq 20)
+}

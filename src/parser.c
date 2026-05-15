@@ -40,6 +40,7 @@ static Node *parse_expr(Parser *p);
 static Node *parse_stmt(Parser *p);
 static Node *parse_block(Parser *p);
 static Node *parse_if_continuation(Parser *p, Node *first_cond, int line);
+static char *parse_type_name(Parser *p);
 
 // --- Expression parsing ---
 
@@ -150,6 +151,103 @@ static Node *parse_primary(Parser *p) {
     }
     if (at(p, TOK_IDENT)) {
         char *name = cur(p)->value;
+
+        // Parametric constructor: `Box<int>()` or `Map<str, int>()`.
+        // We disambiguate from a comparison by looking ahead: an
+        // angle-bracketed type-arg list contains only types and commas,
+        // is closed with '>', and is immediately followed by '('. If
+        // any token in the lookahead window is something other than
+        // IDENT / a primitive-type keyword / ',' / '<' / '>' before we
+        // see the closing '>(', or if the closing '>' is not followed
+        // by '(', this is not a constructor — fall through.
+        if (peek_at(p, 1)->type == TOK_LT) {
+            int look = 2;
+            int depth = 1;
+            int ok = 1;
+            while (ok && depth > 0) {
+                TokenType t = p->tokens[p->pos + look].type;
+                if (t == TOK_EOF || t == TOK_NEWLINE) { ok = 0; break; }
+                if (t == TOK_LT) depth++;
+                else if (t == TOK_GT) { depth--; if (depth == 0) { look++; break; } }
+                else if (t != TOK_IDENT && t != TOK_INT && t != TOK_STR_TYPE &&
+                         t != TOK_BOOL && t != TOK_LIST && t != TOK_MAP &&
+                         t != TOK_IMAP && t != TOK_TASK && t != TOK_VOID &&
+                         t != TOK_COMMA) { ok = 0; break; }
+                look++;
+            }
+            if (ok && p->tokens[p->pos + look].type == TOK_LPAREN) {
+                // Parametric constructor confirmed. parse_type_name reads
+                // `Box<int>` as one allocated string, then we consume `(`
+                // and arguments as for an ordinary call.
+                char *full = parse_type_name(p);
+                eat(p, TOK_LPAREN);
+                Node *n = alloc_node(NODE_CALL, line);
+                n->call.name = full;
+                int cap = 4;
+                n->call.args = malloc(cap * sizeof(Node *));
+                n->call.arg_count = 0;
+                if (!at(p, TOK_RPAREN)) {
+                    if (at(p, TOK_REF)) p->pos++;
+                    n->call.args[n->call.arg_count++] = parse_expr(p);
+                    while (at(p, TOK_COMMA)) {
+                        p->pos++;
+                        if (n->call.arg_count >= cap) {
+                            cap *= 2;
+                            n->call.args = realloc(n->call.args, cap * sizeof(Node *));
+                        }
+                        if (at(p, TOK_REF)) p->pos++;
+                        n->call.args[n->call.arg_count++] = parse_expr(p);
+                    }
+                }
+                eat(p, TOK_RPAREN);
+                Node *base = n;
+                // Continue with the same chain logic the normal IDENT
+                // path uses below.
+                while (at(p, TOK_DOT) || at(p, TOK_LBRACKET)) {
+                    if (at(p, TOK_DOT)) {
+                        p->pos++;
+                        char *field = eat(p, TOK_IDENT)->value;
+                        if (at(p, TOK_LPAREN)) {
+                            p->pos++;
+                            Node *mc = alloc_node(NODE_METHOD_CALL, line);
+                            mc->method_call.object = base;
+                            mc->method_call.method = field;
+                            int mcap = 4;
+                            mc->method_call.args = malloc(mcap * sizeof(Node *));
+                            mc->method_call.arg_count = 0;
+                            if (!at(p, TOK_RPAREN)) {
+                                mc->method_call.args[mc->method_call.arg_count++] = parse_expr(p);
+                                while (at(p, TOK_COMMA)) {
+                                    p->pos++;
+                                    if (mc->method_call.arg_count >= mcap) {
+                                        mcap *= 2;
+                                        mc->method_call.args = realloc(mc->method_call.args, mcap * sizeof(Node *));
+                                    }
+                                    mc->method_call.args[mc->method_call.arg_count++] = parse_expr(p);
+                                }
+                            }
+                            eat(p, TOK_RPAREN);
+                            base = mc;
+                        } else {
+                            Node *fa = alloc_node(NODE_FIELD_ACCESS, line);
+                            fa->field_access.object = base;
+                            fa->field_access.field = field;
+                            base = fa;
+                        }
+                    } else {
+                        p->pos++;
+                        Node *idx = parse_expr(p);
+                        eat(p, TOK_RBRACKET);
+                        Node *ia = alloc_node(NODE_INDEX, line);
+                        ia->index_access.object = base;
+                        ia->index_access.index = idx;
+                        base = ia;
+                    }
+                }
+                return base;
+            }
+        }
+
         p->pos++;
         Node *base;
 
@@ -679,6 +777,90 @@ static Node *parse_enum_def(Parser *p) {
     return n;
 }
 
+// Read a single type expression and return it as one allocated string.
+// Handles bare names ("int", "str", "Counter") and parametric types
+// ("Box<int>", "Map<str, int>", "List<Pair<str, int>>"). Nested generics
+// are supported via depth-counting on '<' / '>'.
+//
+// The monomorphization pass later parses these strings back into a
+// (template-name, [arg-types]) shape.
+static char *parse_type_name(Parser *p) {
+    if (!at(p, TOK_IDENT) && !at(p, TOK_INT) && !at(p, TOK_STR_TYPE) &&
+        !at(p, TOK_BOOL) && !at(p, TOK_VOID) && !at(p, TOK_LIST) &&
+        !at(p, TOK_MAP) && !at(p, TOK_IMAP) && !at(p, TOK_TASK)) {
+        // Caller's responsibility to surface a useful error; just take
+        // whatever token's `value` is and advance like the old code did.
+        char *v = cur(p)->value;
+        p->pos++;
+        return v ? strdup(v) : strdup("");
+    }
+    // Buffer up the head identifier; if it's a primitive keyword the
+    // token's `value` may be NULL — fall back to the keyword spelling.
+    const char *head = cur(p)->value;
+    if (!head) {
+        switch (cur(p)->type) {
+            case TOK_INT: head = "int"; break;
+            case TOK_STR_TYPE: head = "str"; break;
+            case TOK_BOOL: head = "bool"; break;
+            case TOK_VOID: head = "void"; break;
+            case TOK_LIST: head = "list"; break;
+            case TOK_MAP: head = "map"; break;
+            case TOK_IMAP: head = "imap"; break;
+            case TOK_TASK: head = "task"; break;
+            default: head = ""; break;
+        }
+    }
+    // Most type expressions are short. 256 bytes covers `Map<str, list<Pair<str,int>>>` etc.
+    char buf[512];
+    int len = (int)strlen(head);
+    if (len >= (int)sizeof(buf)) len = (int)sizeof(buf) - 1;
+    memcpy(buf, head, len);
+    buf[len] = '\0';
+    p->pos++;
+    if (at(p, TOK_LT)) {
+        // Append everything from `<` to its matching `>` verbatim.
+        int depth = 0;
+        while (1) {
+            if (at(p, TOK_EOF)) break;
+            if (at(p, TOK_LT)) depth++;
+            else if (at(p, TOK_GT)) {
+                depth--;
+                // Concatenate the '>' then stop.
+                if (len + 1 < (int)sizeof(buf)) buf[len++] = '>';
+                buf[len] = '\0';
+                p->pos++;
+                if (depth == 0) break;
+                continue;
+            }
+            const char *piece = cur(p)->value;
+            if (!piece) {
+                switch (cur(p)->type) {
+                    case TOK_LT: piece = "<"; break;
+                    case TOK_GT: piece = ">"; break;
+                    case TOK_COMMA: piece = ","; break;
+                    case TOK_INT: piece = "int"; break;
+                    case TOK_STR_TYPE: piece = "str"; break;
+                    case TOK_BOOL: piece = "bool"; break;
+                    case TOK_VOID: piece = "void"; break;
+                    case TOK_LIST: piece = "list"; break;
+                    case TOK_MAP: piece = "map"; break;
+                    case TOK_IMAP: piece = "imap"; break;
+                    case TOK_TASK: piece = "task"; break;
+                    default: piece = ""; break;
+                }
+            }
+            int plen = (int)strlen(piece);
+            if (len + plen < (int)sizeof(buf)) {
+                memcpy(buf + len, piece, plen);
+                len += plen;
+                buf[len] = '\0';
+            }
+            p->pos++;
+        }
+    }
+    return strdup(buf);
+}
+
 // Parse an optional <T1, T2, ...> type-parameter list immediately after a
 // type name. Caller is positioned just after the IDENT; if the next token
 // is not TOK_LT this is a no-op and returns 0/NULL via out params.
@@ -728,8 +910,7 @@ static Node *parse_struct_def(Parser *p) {
         skip_newlines(p);
         if (at(p, TOK_RBRACE)) break;
         char *fname = eat(p, TOK_IDENT)->value;
-        char *ftype = cur(p)->value;
-        p->pos++;
+        char *ftype = parse_type_name(p);
         if (n->struct_def.field_count >= cap) {
             cap *= 2;
             n->struct_def.field_names = realloc(n->struct_def.field_names, cap * sizeof(char *));
@@ -772,8 +953,7 @@ static Node *parse_func_def(Parser *p) {
             // Check for "ref" before type
             int is_ref = 0;
             if (at(p, TOK_REF)) { is_ref = 1; p->pos++; }
-            char *ptype = cur(p)->value;
-            p->pos++;
+            char *ptype = parse_type_name(p);
             n->func_def.param_names[n->func_def.param_count] = pname;
             n->func_def.param_types[n->func_def.param_count] = ptype;
             n->func_def.param_is_ref[n->func_def.param_count] = is_ref;
@@ -783,10 +963,9 @@ static Node *parse_func_def(Parser *p) {
         eat(p, TOK_RPAREN);
     }
 
-    // Return type
+    // Return type — supports parametric types (e.g. `Box<int>`).
     if (is_type_token(p) && !at(p, TOK_LBRACE)) {
-        n->func_def.return_type = cur(p)->value;
-        p->pos++;
+        n->func_def.return_type = parse_type_name(p);
     }
 
     n->func_def.body = parse_block(p);
