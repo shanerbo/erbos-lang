@@ -3,12 +3,18 @@
 
 #include "ir.h"
 
-// Maps virtual registers to physical ARM64 registers (x0-x18)
-// or spills to stack slots.
+// Maps virtual registers to physical ARM64 registers (x0-x28).
 // Result: each VReg gets either a physical reg or a stack offset.
+//
+//   x0..x18  - caller-save (clobbered by `bl`); x0..x7 also serve as
+//              argument/return registers.
+//   x19..x28 - callee-save; iremit emits prologue/epilogue saves for
+//              every callee-save register the allocator picks.
+//   x29 = frame pointer, x30 = link register — never allocated to a
+//   vreg.
 
-#define PHYS_REG_COUNT 19  // x0-x18 (x19-x28 callee-saved, x29=fp, x30=lr)
-#define SPILL_BASE 16      // stack spill starts at [x29, #-16], #-32, etc.
+#define PHYS_REG_COUNT 29  // x0..x28
+#define SPILL_BASE 16      // stack spill slots; iremit re-bases above the locals area
 
 typedef struct {
     int *vreg_to_phys;   // vreg → physical reg (0-18), or -1 if spilled

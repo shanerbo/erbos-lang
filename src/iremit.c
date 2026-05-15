@@ -3,9 +3,11 @@
 #include "iremit.h"
 
 // Frame layout (positive offsets from x29 == sp):
-//   [x29, #0..15]                              saved {x29, x30}
-//   [x29, #16 .. #16 + local_slots*8)          IR locals (IR_STORE_LOCAL/LOAD_LOCAL)
-//   [x29, #16 + local_slots*8 ..)              regalloc spill slots
+//   [x29, #0..15]                                                    saved {x29, x30}
+//   [x29, #16 .. #16 + local_slots*8)                                IR locals
+//   [x29, #16 + local_slots*8 .. + spill_bytes)                      regalloc spills
+//   [x29, #16 + local_slots*8 + spill_bytes .. + csr_bytes)          saved x19..x28
+//   [x29, ...)                                                       scratch padding
 //
 // regalloc.c hands back vreg_to_spill[v] = (slot_idx + 1) * SPILL_BASE,
 // where SPILL_BASE == 16. We translate that to an actual frame offset by
@@ -14,6 +16,29 @@
 // Module-level state set by iremit_func before any helper runs.
 static int g_local_base = 16;
 static int g_locals_bytes = 0;
+// Callee-save register save area state. g_saved_csr[r-19] is non-zero
+// iff x<r> was assigned to some vreg in this function and must be
+// preserved across the call. g_csr_slot_base is the byte offset (from
+// x29) of the save area's first slot. Both are populated at the start
+// of iremit_func.
+static int g_saved_csr[10] = {0};
+static int g_csr_slot_base = 0;
+
+// Emit the instruction sequence that restores any saved x19..x28
+// registers from the frame. Called immediately before every
+// `ldp x29, x30, [sp], #stack_size; ret` epilogue.
+static void emit_csr_restore(FILE *out) {
+    int slot = 0;
+    for (int r = 19; r <= 28; r++) {
+        if (!g_saved_csr[r - 19]) continue;
+        int off = g_csr_slot_base + slot * 8;
+        if (off <= 255)
+            fprintf(out, "    ldr x%d, [x29, #%d]\n", r, off);
+        else
+            fprintf(out, "    add x10, x29, #%d\n    ldr x%d, [x10]\n", off, r);
+        slot++;
+    }
+}
 
 // Get physical register number for a vreg
 static int phys(RegAllocResult *a, VReg v) {
@@ -76,11 +101,28 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
     int local_base = 16;
     int locals_size = (func->local_slots > 0 ? func->local_slots : 1) * 8;
     int spill_bytes = alloc->spill_count * 8;
-    int stack_size = local_base + locals_size + spill_bytes + 256; // 256 bytes scratch padding
+
+    // Determine which callee-save registers (x19..x28) the allocator
+    // actually picked. Each one needs 8 bytes of frame for prologue
+    // save / epilogue restore.
+    int saved_csr[10] = {0};
+    int saved_csr_count = 0;
+    for (int v = 0; v < alloc->vreg_count; v++) {
+        int p = alloc->vreg_to_phys[v];
+        if (p >= 19 && p <= 28 && !saved_csr[p - 19]) {
+            saved_csr[p - 19] = 1;
+            saved_csr_count++;
+        }
+    }
+    int csr_bytes = saved_csr_count * 8;
+
+    int stack_size = local_base + locals_size + spill_bytes + csr_bytes + 256;
     if (stack_size % 16 != 0) stack_size += 8;
 
     g_local_base = local_base;
     g_locals_bytes = locals_size;
+    for (int r = 0; r < 10; r++) g_saved_csr[r] = saved_csr[r];
+    g_csr_slot_base = local_base + locals_size + spill_bytes;
 
     // Prologue: pre-decrement sp by stack_size and save fp/lr at the bottom.
     // After `mov x29, sp`, x29 == sp; everything in the frame uses POSITIVE
@@ -88,6 +130,22 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
     fprintf(out, "_%s:\n", func->name);
     fprintf(out, "    stp x29, x30, [sp, #-%d]!\n", stack_size);
     fprintf(out, "    mov x29, sp\n");
+
+    // Save any callee-save registers we plan to use. Slot N in the
+    // save area corresponds to the Nth-numerically-lowest live
+    // callee-save register; emit_csr_restore() walks the same order.
+    {
+        int slot = 0;
+        for (int r = 19; r <= 28; r++) {
+            if (!saved_csr[r - 19]) continue;
+            int off = g_csr_slot_base + slot * 8;
+            if (off <= 255)
+                fprintf(out, "    str x%d, [x29, #%d]\n", r, off);
+            else
+                fprintf(out, "    add x10, x29, #%d\n    str x%d, [x10]\n", off, r);
+            slot++;
+        }
+    }
 
     // Emit each block
     for (int bi = 0; bi < func->block_count; bi++) {
@@ -206,11 +264,13 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
                     int ra = ensure_reg(out, alloc, inst->a);
                     if (ra != 0)
                         fprintf(out, "    mov x0, x%d\n", ra);
+                    emit_csr_restore(out);
                     fprintf(out, "    ldp x29, x30, [sp], #%d\n", stack_size);
                     fprintf(out, "    ret\n");
                     break;
                 }
                 case IR_RET_VOID: {
+                    emit_csr_restore(out);
                     fprintf(out, "    ldp x29, x30, [sp], #%d\n", stack_size);
                     fprintf(out, "    ret\n");
                     break;
@@ -281,10 +341,11 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
         }
     }
 
-    // If function doesn't end with ret, add epilogue
+    // If function doesn't end with ret, add epilogue (incl. callee-save restore).
     if (func->block_count > 0) {
         IRBlock *last = &func->blocks[func->block_count - 1];
         if (last->count == 0 || (last->insts[last->count-1].op != IR_RET && last->insts[last->count-1].op != IR_RET_VOID)) {
+            emit_csr_restore(out);
             fprintf(out, "    ldp x29, x30, [sp], #%d\n", stack_size);
             fprintf(out, "    ret\n");
         }

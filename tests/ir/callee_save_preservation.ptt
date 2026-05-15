@@ -1,0 +1,37 @@
+// Regression: a function compiled through the IR backend must save
+// any callee-save register (x19..x28) it uses in its prologue and
+// restore it in its epilogue. Otherwise a caller that's keeping a
+// value in x19 across a `bl` to such a function loses that value.
+//
+// We exercise this by using a struct field stored before a call,
+// then re-read after the call to a function that the IR backend
+// (after P4.2) prefers to allocate to x19. If x19 is not saved by
+// the callee, the receiver pointer (kept in x19 by the regalloc) is
+// clobbered and the post-call read returns garbage.
+//
+// Expected output:
+//   100
+//   200
+//   200
+//   100
+
+Point is {
+  x int
+  y int
+}
+
+bump(p Point) {
+  // Body that exercises some arithmetic and a yell, intended to
+  // force the regalloc to use callee-save registers internally.
+  yell(p.x + p.y)
+}
+
+spark {
+  p is Point()
+  p.x be 100
+  p.y be 200
+  yell(p.x)
+  bump(p)
+  yell(p.y)
+  yell(p.x)
+}
