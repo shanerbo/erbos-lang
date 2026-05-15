@@ -3,7 +3,12 @@ erbos
 
 # Object files
 *.o
-*.s
+
+# Generated assembly (anywhere except hand-written runtime under src/)
+/*.s
+examples/**/*.s
+tests/**/*.s
+# (src/runtime_asm.s is real source and is intentionally tracked)
 
 # Compiled examples
 examples/hello
@@ -41,6 +46,22 @@ examples/nomut_test
 examples/oob_test
 examples/give_nested
 examples/give_ownership
+examples/kitchen_sink
+
+# Compiled leetcode examples (no extension)
+examples/leetcode/two_sum
+examples/leetcode/two_sum_map
+examples/leetcode/longest_substr
+examples/leetcode/longest_substr_brute
+examples/leetcode/next_perm
+examples/leetcode/next_perm_v2
+examples/leetcode/phone_combos
+examples/leetcode/rotting_oranges
+
+# C-runtime test binaries
+tests/test_runtime
+tests/test_channel
+tests/test_parallel
 
 # OS
 .DS_Store
