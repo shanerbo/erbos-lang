@@ -242,17 +242,20 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    // Build path. The IR backend has reached behavioural parity with
-    // the direct codegen on every framework test (15/15) and almost
-    // every example (29/30). Kitchen-sink-style stress programs can
-    // still hit a heap/regalloc edge case under heavy mixed allocator
-    // load (see #33's commit message); until that's diagnosed and
-    // closed, the default keeps using the direct codegen and the IR
-    // backend is opt-in via `./erbos ir`. The new `legacy` subcommand
-    // remains a no-op alias for the default during this transition;
-    // it'll become a real opt-out once we flip.
-    (void)use_legacy;
-    codegen(program, asm_path);
+    // Build path. The IR backend reached behavioural parity with the
+    // direct codegen on every program in the corpus (30/30 examples,
+    // 16/16 framework tests, 11/11 dedicated IR regression tests) at
+    // commit 894af1c (#32 RAII heap-free + the regalloc x9/x10
+    // reservation that fixed kitchen_sink). The default now routes
+    // through the IR pipeline; `./erbos legacy ...` opts back into the
+    // original direct codegen for one release while regressions shake
+    // out, and `./erbos ir <file>` continues to emit the .s only
+    // without assembling.
+    if (use_legacy) {
+        codegen(program, asm_path);
+    } else {
+        EMIT_IR_TO_FILE(asm_path);
+    }
     if (!run_mode) printf("generated %s\n", asm_path);
 
     // Assemble + link
