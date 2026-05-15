@@ -1,0 +1,39 @@
+// Regression test for IR-backend stack-frame layout bug.
+//
+// History: prior to commit (P0 heap spike), the IR emitter set
+// `mov x29, sp` *after* a single combined `stp ... [sp, #-stack_size]!`
+// prologue, which left x29 == sp at the bottom of the saved frame.
+// IR_STORE_LOCAL / IR_LOAD_LOCAL then addressed locals as `[x29, #-N]`,
+// landing BELOW the allocated frame. The first `bl _yell` saved fp/lr
+// at exactly that address and clobbered the local. The second yell read
+// the saved fp instead of the heap pointer and dereferenced 0.
+//
+// Expected output (each line on its own):
+//   100
+//   200
+//   300
+//   100
+//   200
+//   300
+//
+// If this prints zeros after any `yell`, the IR backend has regressed —
+// do NOT modify this test to match buggy output. Fix the emitter.
+
+Point is {
+  x int
+  y int
+  z int
+}
+
+spark {
+  p is Point()
+  p.x be 100
+  p.y be 200
+  p.z be 300
+  yell(p.x)
+  yell(p.y)
+  yell(p.z)
+  yell(p.x)
+  yell(p.y)
+  yell(p.z)
+}

@@ -9,9 +9,10 @@ $(OUT): $(SRC) src/*.h
 	$(CC) $(CFLAGS) -o $(OUT) $(SRC)
 
 clean:
-	rm -f $(OUT) *.o *.s examples/*.s examples/*.o
+	rm -f $(OUT) *.o *.s examples/*.s examples/*.o tests/ir/*.s tests/ir/*.o
+	rm -f $(addprefix tests/ir/,$(notdir $(basename $(wildcard tests/ir/*.ptt))))
 
-test: $(OUT) test-pass test-fail test-runtime test-framework
+test: $(OUT) test-pass test-fail test-runtime test-framework test-ir
 	@echo ""
 	@echo "All tests passed."
 
@@ -70,7 +71,32 @@ test-fail: $(OUT)
 	done; \
 	[ $$fail -eq 0 ] || (echo "Some failure tests did not error"; exit 1)
 
-.PHONY: all clean test test-pass test-fail test-runtime test-framework
+.PHONY: all clean test test-pass test-fail test-runtime test-framework test-ir
+
+# Build and run a .ptt source through the experimental IR pipeline.
+# Compares stdout against a sibling .expected file.
+test-ir: $(OUT)
+	@echo "=== IR backend regression tests ==="
+	@fail=0; \
+	for f in tests/ir/*.ptt; do \
+		b=$$(basename $$f .ptt); \
+		out_dir=tests/ir; \
+		./$(OUT) ir "$$f" > /dev/null 2>&1 || { echo "  FAIL: $$b (IR codegen)"; fail=1; continue; }; \
+		as -o "$$out_dir/$$b.o" "$$out_dir/$$b.s" 2>/dev/null || { echo "  FAIL: $$b (assemble)"; fail=1; continue; }; \
+		ld -o "$$out_dir/$$b" "$$out_dir/$$b.o" -lSystem -syslibroot $$(xcrun --show-sdk-path) -e _start 2>/dev/null || { echo "  FAIL: $$b (link)"; fail=1; continue; }; \
+		actual=$$("$$out_dir/$$b" 2>/dev/null); \
+		expected=$$(cat "$$f.expected"); \
+		if [ "$$actual" = "$$expected" ]; then \
+			echo "  OK:   $$b"; \
+		else \
+			echo "  FAIL: $$b (output mismatch)"; \
+			echo "    expected: $$(echo "$$expected" | tr '\n' '|')"; \
+			echo "    actual:   $$(echo "$$actual" | tr '\n' '|')"; \
+			fail=1; \
+		fi; \
+		rm -f "$$out_dir/$$b" "$$out_dir/$$b.o" "$$out_dir/$$b.s"; \
+	done; \
+	[ $$fail -eq 0 ] || (echo "Some IR backend tests failed"; exit 1)
 
 test-runtime:
 	@echo "=== Runtime C tests ==="

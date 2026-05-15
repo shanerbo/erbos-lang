@@ -1,83 +1,86 @@
-# IR Pipeline: Known Issues & Next Steps
+# IR Pipeline: Status & Postmortems
 
-## Critical Bug: Heap Memory Corruption After `bl` Calls
+## Postmortem: "Heap memory corruption after bl calls" — fixed in P0 spike
 
 ### Symptom
-Struct field access returns 0 after any function call (`bl`), even though the field was correctly stored before the call.
+Struct field access returned 0 after any function call (`bl`), even though
+the field was correctly stored before the call. Reproduced with:
 
 ```potato
-Point is {
-  x int
-  y int
-}
+Point is { x int, y int }
 spark {
   p is Point()
-  p.x be 10
   p.y be 20
-  yell(p.y)   // prints 20 ✓
-  yell(p.y)   // prints 0  ✗ (should be 20)
+  yell(p.y)   // prints 20
+  yell(p.y)   // prints 0   <-- bug
 }
 ```
 
-### What Works
-- Single field access before any call: ✓
-- Field store (`p.y be 20`): ✓ (verified by reading immediately after)
-- Multiple yells of plain ints: ✓
-- Loops, if/nah, arithmetic: all ✓
+### Actual root cause: stack frame layout — NOT heap corruption
 
-### What's Broken
-- Any `bl` instruction corrupts the heap memory where struct fields are stored
-- Affects: `_yell`, `_alloc_*`, any user function call
-- The struct pointer (stored in a stack slot) remains valid — it's the *pointed-to memory* that gets zeroed
+The bug name was misleading. The corrupted memory was **not** on the heap;
+it was in the stack frame, addressed below the stack pointer.
 
-### Debugging Done
-1. Stack frame overlap ruled out — increased frame to 512 bytes, same result
-2. Caller-save/restore removed — all locals go through stack slots, same result
-3. Local slot overlap with save area — fixed, same result
-4. Verified `_yell_int` only uses its own stack buffer (`[sp, #32]`, 64 bytes below its frame)
-5. Verified `_heap_alloc` uses mmap (syscall 197) for fresh pages
+`src/iremit.c::iremit_func` emitted this prologue:
 
-### Likely Root Causes (not yet verified)
-1. **`_heap_alloc` mmap returns address overlapping with stack** — On macOS ARM64, stack is at high addresses, heap should be low. But if the binary has no `__PAGEZERO` or unusual layout, mmap might return unexpected addresses.
-2. **`_yell_int` write syscall corrupts memory** — The write syscall (x16=#4) takes buffer pointer in x1. If x1 is wrong, kernel could write to heap. But yell_int sets x1 = sp+32 (its own buffer).
-3. **`_alloc_Point` returns uninitialized/reused memory** — The free-list allocator might return a block that gets reused. But we never free anything in this test.
-
-### How to Debug
-```bash
-cd ~/erbos-lang
-./erbos ir /tmp/test.ptt
-as -o /tmp/test.o /tmp/test.s
-ld -o /tmp/test /tmp/test.o -lSystem -syslibroot $(xcrun --show-sdk-path) -e _start
-lldb /tmp/test
-# Set breakpoint after field store:
-# (lldb) b _spark
-# (lldb) r
-# Step to after "str x1, [x2, #8]" (p.y = 20)
-# Check: x register read, memory read [x2+8]
-# Step through bl _yell
-# Check: memory read [same address] — should still be 20
+```
+stp x29, x30, [sp, #-stack_size]!   ; sp -= stack_size, save fp/lr at [sp]
+mov x29, sp                          ; x29 = sp (now == bottom of frame)
 ```
 
-### Generated Assembly (minimal repro)
-```asm
-_spark:
-    stp x29, x30, [sp, #-288]!
-    mov x29, sp
-    bl _alloc_Point          ; returns heap ptr in x0
-    str x0, [x29, #-16]     ; store p to local slot
-    mov x1, #20
-    ldr x2, [x29, #-16]     ; load p
-    str x1, [x2, #8]        ; p.y = 20
-    ldr x1, [x29, #-16]     ; load p
-    ldr x2, [x1, #8]        ; x2 = p.y (should be 20)
-    mov x0, x2
-    bl _yell                 ; prints 20 ✓
-    mov x1, x0
-    ldr x1, [x29, #-16]     ; load p again
-    ldr x2, [x1, #8]        ; x2 = p.y (returns 0 ✗)
-    mov x0, x2
-    bl _yell                 ; prints 0
+After this, `x29 == sp`. `IR_STORE_LOCAL` and `IR_LOAD_LOCAL` then addressed
+locals as `[x29, #-N]` — i.e. **below** the stack pointer, in the kernel's
+red-zone-equivalent or in unmapped memory.
+
+The first `bl _yell` did its own `stp x29, x30, [sp, #-16]!`, which wrote
+the caller's saved fp/lr at exactly `[sp - 16]` — the same address the
+local was supposed to live at. The store clobbered the heap pointer that
+had been written there. The second `ldr x1, [x29, #-16]` then read back
+the saved fp instead of the heap pointer; dereferencing the saved fp as a
+struct pointer reads zeros, hence the `yell(p.y)` printing `0`.
+
+### Comparison with the working direct codegen
+
+`src/codegen.c::emit_func` uses a different prologue:
+
 ```
+stp x29, x30, [sp, #-16]!   ; reserve only 16 bytes for fp/lr
+mov x29, sp                  ; x29 = top of frame
+sub sp, sp, #1024            ; reserve another 1024 bytes for locals
+```
+
+Now `x29` is at the saved-fp area (high), `sp` is 1024 bytes below it
+(low), and `[x29, #-N]` for `N` in `(0, 1024]` lives between `sp` and
+`x29` — valid. That's why direct codegen never had the bug.
+
+### Fix shipped in P0
+
+Changed `iremit.c` to address locals and spills as POSITIVE offsets from
+`x29` (which equals `sp` after the prologue). The combined `stp ... !`
+already reserves the full frame; everything in `[x29, #16 .. stack_size)`
+is valid stack space.
+
+Bonus fix: regalloc's spill slots were originally numbered `16, 32, 48,
+…` with no awareness of the locals area. They overlapped the locals.
+`iremit.c` now translates the raw spill index from regalloc through
+`spill_off()` so spills land strictly above the locals area.
+
+Frame layout post-fix (positive offsets from x29):
+
+```
+[x29, #0..15]                              saved {x29, x30}
+[x29, #16 .. #16 + local_slots*8)          IR locals
+[x29, #16 + local_slots*8 ..)              regalloc spills
+[high]                                     scratch padding (256 bytes)
+```
+
+### Regression test
+
+`tests/ir/struct_field_after_call.ptt` plus its `.expected` file. Wired
+into `make test` via the new `test-ir` target, which compiles each
+`tests/ir/*.ptt` through the IR backend, assembles + links + runs it,
+and compares stdout against the sibling `.expected`. If the layout bug
+ever reappears, the test will print zeros and fail the suite.
 
 ---
 
@@ -96,23 +99,22 @@ _spark:
 | infi loops | ✅ | With optional condition |
 | stop/skip | ✅ | |
 | Struct construction | ✅ | Calls _alloc_StructName |
-| Field access (single) | ✅ | Before any call |
+| Field access | ✅ | Survives `bl` calls (P0 fix) |
+| Field access after calls | ✅ | Fixed in P0 (stack-layout bug) |
 | Field assign | ✅ | |
 
-### Blocked by Heap Bug
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Field access after calls | ❌ | Heap corruption |
-| Lists | ❌ | Same heap pattern |
-| Maps | ❌ | Same heap pattern |
-| Enums | ❌ | Uses heap alloc |
+### Not Yet Implemented in IR backend
+These work in the direct codegen but not yet in the IR pipeline. P3
+(generics) and P4.2 (cross-block regalloc) are the prerequisites for
+landing them cleanly without re-introducing the kind of latent bug P0
+just fixed.
 
-### Not Yet Implemented
 | Feature | Depends On |
 |---------|-----------|
+| Lists / Maps / Enums | Same heap path as structs — likely close to working now; needs targeted tests in `tests/ir/` |
 | through-in (collection iteration) | Lists |
-| RAII (scope-end free) | Heap bug fix |
-| String interpolation | String concat builtin |
+| RAII (scope-end free) | Liveness propagation — pending P4.2 |
+| String interpolation | `_str_concat` builtin emission from IR |
 | match (pattern matching) | Enums |
 
 ---

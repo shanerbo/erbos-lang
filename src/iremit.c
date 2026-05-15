@@ -2,6 +2,19 @@
 #include <string.h>
 #include "iremit.h"
 
+// Frame layout (positive offsets from x29 == sp):
+//   [x29, #0..15]                              saved {x29, x30}
+//   [x29, #16 .. #16 + local_slots*8)          IR locals (IR_STORE_LOCAL/LOAD_LOCAL)
+//   [x29, #16 + local_slots*8 ..)              regalloc spill slots
+//
+// regalloc.c hands back vreg_to_spill[v] = (slot_idx + 1) * SPILL_BASE,
+// where SPILL_BASE == 16. We translate that to an actual frame offset by
+// adding the locals area size at emit time so locals and spills never overlap.
+
+// Module-level state set by iremit_func before any helper runs.
+static int g_local_base = 16;
+static int g_locals_bytes = 0;
+
 // Get physical register number for a vreg
 static int phys(RegAllocResult *a, VReg v) {
     if (v < 0) return 0;
@@ -12,9 +25,17 @@ static int is_spilled(RegAllocResult *a, VReg v) {
     return v >= 0 && a->vreg_to_phys[v] < 0;
 }
 
+// Translate the spill index from regalloc into a real positive frame offset
+// that lives strictly above the local area.
 static int spill_off(RegAllocResult *a, VReg v) {
-    return a->vreg_to_spill[v];
+    int raw = a->vreg_to_spill[v];          // 16, 32, 48, ...
+    return g_local_base + g_locals_bytes + (raw - 16);
 }
+
+// Locals and spills live ABOVE the saved {x29, x30} pair at [x29, #0..15].
+// The function prologue does `stp x29,x30,[sp,#-stack_size]!; mov x29,sp` —
+// after that x29 == sp, so all in-frame addressing must use POSITIVE offsets
+// from x29 (or sp). We start at #16 to skip past the saved fp/lr.
 
 // Ensure vreg value is in a physical register. If spilled, load into scratch (x9).
 // Returns the physical register number to use.
@@ -24,9 +45,9 @@ static int ensure_reg(FILE *out, RegAllocResult *a, VReg v) {
     // Load from spill slot into x9
     int off = spill_off(a, v);
     if (off <= 255)
-        fprintf(out, "    ldr x9, [x29, #-%d]\n", off);
+        fprintf(out, "    ldr x9, [x29, #%d]\n", off);
     else
-        fprintf(out, "    sub x9, x29, #%d\n    ldr x9, [x9]\n", off);
+        fprintf(out, "    add x9, x29, #%d\n    ldr x9, [x9]\n", off);
     return 9; // x9
 }
 
@@ -34,9 +55,9 @@ static int ensure_reg(FILE *out, RegAllocResult *a, VReg v) {
 static void store_spill(FILE *out, RegAllocResult *a, VReg v, int from_reg) {
     int off = spill_off(a, v);
     if (off <= 255)
-        fprintf(out, "    str x%d, [x29, #-%d]\n", from_reg, off);
+        fprintf(out, "    str x%d, [x29, #%d]\n", from_reg, off);
     else
-        fprintf(out, "    sub x10, x29, #%d\n    str x%d, [x10]\n", off, from_reg);
+        fprintf(out, "    add x10, x29, #%d\n    str x%d, [x10]\n", off, from_reg);
 }
 
 // Emit result to dst vreg (physical or spill)
@@ -54,10 +75,16 @@ static void emit_to_dst(FILE *out, RegAllocResult *a, VReg dst, int src_reg) {
 void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
     int local_base = 16;
     int locals_size = (func->local_slots > 0 ? func->local_slots : 1) * 8;
-    int stack_size = local_base + locals_size + 256; // generous padding
+    int spill_bytes = alloc->spill_count * 8;
+    int stack_size = local_base + locals_size + spill_bytes + 256; // 256 bytes scratch padding
     if (stack_size % 16 != 0) stack_size += 8;
 
-    // Prologue
+    g_local_base = local_base;
+    g_locals_bytes = locals_size;
+
+    // Prologue: pre-decrement sp by stack_size and save fp/lr at the bottom.
+    // After `mov x29, sp`, x29 == sp; everything in the frame uses POSITIVE
+    // offsets from x29. Layout documented at the top of this file.
     fprintf(out, "_%s:\n", func->name);
     fprintf(out, "    stp x29, x30, [sp, #-%d]!\n", stack_size);
     fprintf(out, "    mov x29, sp\n");
@@ -209,18 +236,18 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
                     int ra = ensure_reg(out, alloc, inst->a);
                     int off = local_base + (int)inst->imm * 8;
                     if (off <= 255)
-                        fprintf(out, "    str x%d, [x29, #-%d]\n", ra, off);
+                        fprintf(out, "    str x%d, [x29, #%d]\n", ra, off);
                     else
-                        fprintf(out, "    sub x10, x29, #%d\n    str x%d, [x10]\n", off, ra);
+                        fprintf(out, "    add x10, x29, #%d\n    str x%d, [x10]\n", off, ra);
                     break;
                 }
                 case IR_LOAD_LOCAL: {
                     int d = is_spilled(alloc, inst->dst) ? 11 : phys(alloc, inst->dst);
                     int off = local_base + (int)inst->imm * 8;
                     if (off <= 255)
-                        fprintf(out, "    ldr x%d, [x29, #-%d]\n", d, off);
+                        fprintf(out, "    ldr x%d, [x29, #%d]\n", d, off);
                     else
-                        fprintf(out, "    sub x10, x29, #%d\n    ldr x%d, [x10]\n", off, d);
+                        fprintf(out, "    add x10, x29, #%d\n    ldr x%d, [x10]\n", off, d);
                     if (is_spilled(alloc, inst->dst))
                         store_spill(out, alloc, inst->dst, 11);
                     break;
