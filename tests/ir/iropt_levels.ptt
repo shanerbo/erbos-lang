@@ -1,0 +1,35 @@
+// Regression test for the P5.0 iropt scaffold: -O0, -O1, -O2 must
+// all produce a correct binary that prints the expected sequence.
+// Today the iropt pass table is empty, so every level emits
+// byte-identical assembly. As P5.1-P5.5 land, -O1 and higher will
+// progressively shrink the emitted code; correctness is what this
+// test guards.
+//
+// Expected output:
+//   42
+//   hello
+//   3
+
+Box<T> is { value T }
+
+Box<T>.set(self ref Box<T>, v T) {
+  self.value be v
+}
+
+Box<T>.get(self Box<T>) T {
+  give self.value
+}
+
+spark {
+  bi is Box<int>()
+  bi.set(42)
+  yell(bi.get())
+
+  bs is Box<str>()
+  bs.set("hello")
+  yell(bs.get())
+
+  through (i from 0 to 3 by 1) {
+    yell(i)
+  }
+}

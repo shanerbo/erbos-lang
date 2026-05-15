@@ -1,6 +1,6 @@
 CC = cc
 CFLAGS = -Wall -Wextra -std=c11
-SRC = src/main.c src/lexer.c src/parser.c src/monomorph.c src/checker.c src/optimizer.c src/runtime_emit.c src/irgen.c src/regalloc.c src/iremit.c
+SRC = src/main.c src/lexer.c src/parser.c src/monomorph.c src/checker.c src/optimizer.c src/runtime_emit.c src/irgen.c src/iropt.c src/regalloc.c src/iremit.c
 OUT = erbos
 
 all: $(OUT)
@@ -73,28 +73,34 @@ test-fail: $(OUT)
 
 .PHONY: all clean test test-pass test-fail test-runtime test-framework test-ir
 
-# Build and run a .ptt source through the experimental IR pipeline.
-# Compares stdout against a sibling .expected file.
+# Build and run every tests/ir/*.ptt source through the IR pipeline at
+# each optimization level (-O0/-O1/-O2). Each level must produce
+# byte-identical output against the sibling .expected file: no pass
+# is allowed to change observable program behaviour. As P5.1-P5.5
+# land, this matrix is what guarantees their correctness across
+# levels.
 test-ir: $(OUT)
-	@echo "=== IR backend regression tests ==="
+	@echo "=== IR backend regression tests (matrix: -O0/-O1/-O2) ==="
 	@fail=0; \
 	for f in tests/ir/*.ptt; do \
 		b=$$(basename $$f .ptt); \
 		out_dir=tests/ir; \
-		./$(OUT) ir "$$f" > /dev/null 2>&1 || { echo "  FAIL: $$b (IR codegen)"; fail=1; continue; }; \
-		as -o "$$out_dir/$$b.o" "$$out_dir/$$b.s" 2>/dev/null || { echo "  FAIL: $$b (assemble)"; fail=1; continue; }; \
-		ld -o "$$out_dir/$$b" "$$out_dir/$$b.o" -lSystem -syslibroot $$(xcrun --show-sdk-path) -e _start 2>/dev/null || { echo "  FAIL: $$b (link)"; fail=1; continue; }; \
-		actual=$$("$$out_dir/$$b" 2>/dev/null); \
 		expected=$$(cat "$$f.expected"); \
-		if [ "$$actual" = "$$expected" ]; then \
-			echo "  OK:   $$b"; \
-		else \
-			echo "  FAIL: $$b (output mismatch)"; \
-			echo "    expected: $$(echo "$$expected" | tr '\n' '|')"; \
-			echo "    actual:   $$(echo "$$actual" | tr '\n' '|')"; \
-			fail=1; \
-		fi; \
-		rm -f "$$out_dir/$$b" "$$out_dir/$$b.o" "$$out_dir/$$b.s"; \
+		for level in -O0 -O1 -O2; do \
+			./$(OUT) $$level ir "$$f" > /dev/null 2>&1 || { echo "  FAIL: $$b $$level (IR codegen)"; fail=1; continue; }; \
+			as -o "$$out_dir/$$b.o" "$$out_dir/$$b.s" 2>/dev/null || { echo "  FAIL: $$b $$level (assemble)"; fail=1; rm -f "$$out_dir/$$b.s"; continue; }; \
+			ld -o "$$out_dir/$$b" "$$out_dir/$$b.o" -lSystem -syslibroot $$(xcrun --show-sdk-path) -e _start 2>/dev/null || { echo "  FAIL: $$b $$level (link)"; fail=1; rm -f "$$out_dir/$$b.s" "$$out_dir/$$b.o"; continue; }; \
+			actual=$$("$$out_dir/$$b" 2>/dev/null); \
+			if [ "$$actual" = "$$expected" ]; then \
+				echo "  OK:   $$b $$level"; \
+			else \
+				echo "  FAIL: $$b $$level (output mismatch)"; \
+				echo "    expected: $$(echo "$$expected" | tr '\n' '|')"; \
+				echo "    actual:   $$(echo "$$actual" | tr '\n' '|')"; \
+				fail=1; \
+			fi; \
+			rm -f "$$out_dir/$$b" "$$out_dir/$$b.o" "$$out_dir/$$b.s"; \
+		done; \
 	done; \
 	[ $$fail -eq 0 ] || (echo "Some IR backend tests failed"; exit 1)
 

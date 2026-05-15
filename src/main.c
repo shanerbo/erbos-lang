@@ -8,6 +8,7 @@
 #include "checker.h"
 #include "optimizer.h"
 #include "irgen.h"
+#include "iropt.h"
 #include "regalloc.h"
 #include "iremit.h"
 #include "runtime_emit.h"
@@ -28,12 +29,32 @@ static char *read_file(const char *path) {
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr,
-            "usage: erbos <file.ptt>      # build to binary\n"
-            "       erbos run <file.ptt>  # build and run, then clean up\n"
-            "       erbos test <file.ptt> # same as run; the test framework runs in the binary\n"
-            "       erbos ir <file.ptt>   # emit the .s only, don't assemble\n");
+            "usage: erbos [-O0|-O1|-O2] <file.ptt>      # build to binary\n"
+            "       erbos [-O0|-O1|-O2] run <file.ptt>  # build and run, then clean up\n"
+            "       erbos [-O0|-O1|-O2] test <file.ptt> # same as run; the test framework runs in the binary\n"
+            "       erbos [-O0|-O1|-O2] ir <file.ptt>   # emit the .s only, don't assemble\n"
+            "\n"
+            "  -O0  skip iropt entirely (no IR-level transformations)\n"
+            "  -O1  default — every iropt pass runs (currently scaffold-only; P5.x passes land here)\n"
+            "  -O2  reserved for tuning; identical to -O1 today\n");
         return 1;
     }
+
+    // First pass: extract any -O0/-O1/-O2 anywhere in argv. Default
+    // is -O1 if no flag is given. The flag may appear before or
+    // after the subcommand (`-O0 run file.ptt` and `run -O0 file.ptt`
+    // are equivalent), since CLI ergonomics shouldn't depend on
+    // memorising flag-vs-subcommand order. After this pass, argv is
+    // compacted to remove the consumed flag(s).
+    IROptLevel opt_level = IROPT_O1;
+    int j = 1;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-O0"))      opt_level = IROPT_O0;
+        else if (!strcmp(argv[i], "-O1")) opt_level = IROPT_O1;
+        else if (!strcmp(argv[i], "-O2")) opt_level = IROPT_O2;
+        else                              argv[j++] = argv[i];
+    }
+    argc = j;
 
     // Subcommand parsing. The IR backend is the only backend now;
     // `run` / `test` add execute-and-cleanup, `ir` stops after .s
@@ -52,7 +73,7 @@ int main(int argc, char **argv) {
     } else if (argc >= 3 && strcmp(argv[1], "ir") == 0) {
         ir_only = 1;
         input = argv[2];
-    } else {
+    } else if (argc >= 2) {
         input = argv[1];
     }
     if (!input) {
@@ -175,6 +196,7 @@ int main(int argc, char **argv) {
     // Returns the number of IR functions emitted.
     #define EMIT_IR_TO_FILE(asm_path_arg) ({                                    \
         IRProgram *ir = irgen_generate(program);                                \
+        iropt_run(ir, opt_level);                                               \
         FILE *ir_out = fopen((asm_path_arg), "w");                              \
         fprintf(ir_out, ".global _start\n.align 2\n");                          \
         fprintf(ir_out, ".section __TEXT,__text\n\n");                          \
