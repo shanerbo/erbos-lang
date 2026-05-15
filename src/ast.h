@@ -63,6 +63,17 @@ struct Node {
             int param_count;
             char *return_type;
             Node *body;
+
+            // Generic-method support (P3 foundation):
+            //   - When a method is declared on a generic receiver
+            //     (Map<K,V>.set), receiver_type_args carries ["K","V"].
+            //   - Free functions and methods on non-generic types leave
+            //     receiver_type_args=NULL/0.
+            //   - The monomorphization pass clones the AST per concrete
+            //     instantiation and substitutes type-vars; no codegen
+            //     change is required after that pass.
+            char **receiver_type_args;
+            int receiver_type_arg_count;
         } func_def;
 
         // NODE_STRUCT_DEF
@@ -71,6 +82,16 @@ struct Node {
             char **field_names;
             char **field_types;
             int field_count;
+
+            // Generic-struct support (P3 foundation):
+            //   - For a non-generic struct (`Point is { x int, y int }`),
+            //     type_params is NULL and type_param_count is 0.
+            //   - For `Map<K, V> is { ... }`, type_params=["K","V"].
+            //   - Field types may textually reference these names; the
+            //     monomorphization pass substitutes them per concrete
+            //     instantiation.
+            char **type_params;
+            int type_param_count;
         } struct_def;
 
         // NODE_BLOCK
