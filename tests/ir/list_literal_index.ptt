@@ -1,0 +1,17 @@
+// Regression test: list literal allocation + index access through
+// the IR backend. Verifies P4.3a's NODE_LIST_LIT and NODE_INDEX
+// handlers in irgen.c.
+//
+// Expected output:
+//   10
+//   20
+//   30
+//   60
+
+spark {
+  xs is [10, 20, 30]
+  yell(xs[0])
+  yell(xs[1])
+  yell(xs[2])
+  yell(xs[0] + xs[1] + xs[2])
+}

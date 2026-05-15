@@ -329,6 +329,98 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
             return dst;
         }
 
+        case NODE_INDEX: {
+            // xs[i] for a list (cap, count, data_ptr) at offsets 0/8/16.
+            // No bounds-check emission yet — direct codegen does
+            // `b.lt _panic_oob` / `b.ge _panic_oob` here, but the IR
+            // op set doesn't have a single-condition compare-and-branch
+            // primitive that targets a fixed external symbol. The
+            // unchecked path matches what the bounds-check-elimination
+            // pass (P5.4) will produce anyway; safety can be re-added
+            // when that pass lands.
+            VReg obj = gen_expr(c, n->index_access.object);
+            VReg idx = gen_expr(c, n->index_access.index);
+            // data_ptr is at offset 16
+            VReg data_ptr = new_vreg(c);
+            emit(c, (IRInst){.op = IR_LOAD, .dst = data_ptr, .a = obj, .imm = 16});
+            // index * 8 (8 bytes per element)
+            VReg eight = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CONST, .dst = eight, .imm = 8});
+            VReg byte_off = new_vreg(c);
+            emit(c, (IRInst){.op = IR_MUL, .dst = byte_off, .a = idx, .b = eight});
+            // address = data_ptr + byte_off
+            VReg addr = new_vreg(c);
+            emit(c, (IRInst){.op = IR_ADD, .dst = addr, .a = data_ptr, .b = byte_off});
+            // load the element
+            VReg dst = new_vreg(c);
+            emit(c, (IRInst){.op = IR_LOAD, .dst = dst, .a = addr, .imm = 0});
+            return dst;
+        }
+
+        case NODE_LIST_LIT: {
+            // Allocate a list header (24 bytes: cap, count, data_ptr)
+            // then a data buffer (max(count, 8) * 8 bytes), then fill
+            // the data buffer with each element.
+            int count = n->list_lit.count;
+            int data_size = count * 8 > 64 ? count * 8 : 64;
+            int cap = count > 8 ? count : 8;
+
+            // header = _heap_alloc(24)
+            VReg sz_header = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CONST, .dst = sz_header, .imm = 24});
+            VReg *aa1 = malloc(sizeof(VReg));
+            aa1[0] = sz_header;
+            VReg header = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CALL, .dst = header, .str = "heap_alloc",
+                             .args = aa1, .arg_count = 1});
+
+            // data = _heap_alloc(data_size)
+            VReg sz_data = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CONST, .dst = sz_data, .imm = data_size});
+            VReg *aa2 = malloc(sizeof(VReg));
+            aa2[0] = sz_data;
+            VReg data = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CALL, .dst = data, .str = "heap_alloc",
+                             .args = aa2, .arg_count = 1});
+
+            // header[0] = cap
+            VReg vcap = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CONST, .dst = vcap, .imm = cap});
+            emit(c, (IRInst){.op = IR_STORE, .a = header, .b = vcap, .imm = 0});
+            // header[8] = count
+            VReg vcnt = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CONST, .dst = vcnt, .imm = count});
+            emit(c, (IRInst){.op = IR_STORE, .a = header, .b = vcnt, .imm = 8});
+            // header[16] = data
+            emit(c, (IRInst){.op = IR_STORE, .a = header, .b = data, .imm = 16});
+
+            // Fill elements
+            for (int i = 0; i < count; i++) {
+                VReg val = gen_expr(c, n->list_lit.items[i]);
+                emit(c, (IRInst){.op = IR_STORE, .a = data, .b = val, .imm = i * 8});
+            }
+            return header;
+        }
+
+        case NODE_MAP_LIT: {
+            // Create empty map, then set each entry.
+            VReg map = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CALL, .dst = map, .str = "map_new",
+                             .args = NULL, .arg_count = 0});
+            for (int i = 0; i < n->map_lit.count; i++) {
+                VReg key = gen_expr(c, n->map_lit.keys[i]);
+                VReg val = gen_expr(c, n->map_lit.values[i]);
+                VReg *args = malloc(3 * sizeof(VReg));
+                args[0] = map;
+                args[1] = key;
+                args[2] = val;
+                VReg ignored = new_vreg(c);
+                emit(c, (IRInst){.op = IR_CALL, .dst = ignored, .str = "map_set",
+                                 .args = args, .arg_count = 3});
+            }
+            return map;
+        }
+
         case NODE_FIELD_ACCESS: {
             VReg obj = gen_expr(c, n->field_access.object);
             // Find field offset
