@@ -1,0 +1,18 @@
+// Regression test: collection iteration through the IR backend.
+// Verifies P4.3b's NODE_THROUGH_IN handler in irgen.c.
+//
+// Expected output:
+//   10
+//   20
+//   30
+//   60
+
+spark {
+  xs is [10, 20, 30]
+  total is 0
+  through (v in xs) {
+    yell(v)
+    total be total + v
+  }
+  yell(total)
+}

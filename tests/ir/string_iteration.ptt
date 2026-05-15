@@ -1,0 +1,15 @@
+// Regression test: string literals + collection iteration through
+// the IR backend. Verifies P4.3b (through-in) and the IR_LOAD_STR
+// + string-pool data emission added alongside it.
+//
+// Expected output:
+//   alpha
+//   beta
+//   gamma
+
+spark {
+  names is ["alpha", "beta", "gamma"]
+  through (s in names) {
+    yell(s)
+  }
+}

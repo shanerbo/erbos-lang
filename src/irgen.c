@@ -608,6 +608,91 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
             break;
         }
 
+        // === through (x in collection) ===
+        case NODE_THROUGH_IN: {
+            VReg coll = gen_expr(c, n->through_in.collection);
+            // Stash collection ptr + index in hidden locals so the
+            // values survive across basic blocks. Same pattern as
+            // NODE_THROUGH_RANGE's to/step slots.
+            int coll_slot = c->slot_next++;
+            int idx_slot = c->slot_next++;
+            emit(c, (IRInst){.op = IR_STORE_LOCAL, .a = coll, .imm = coll_slot});
+            VReg zero = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CONST, .dst = zero, .imm = 0});
+            emit(c, (IRInst){.op = IR_STORE_LOCAL, .a = zero, .imm = idx_slot});
+
+            int cond_lbl = new_label(c);
+            int body_lbl = new_label(c);
+            int inc_lbl = new_label(c);
+            int end_lbl = new_label(c);
+
+            int prev_start = c->loop_start;
+            int prev_end = c->loop_end;
+            c->loop_start = inc_lbl;
+            c->loop_end = end_lbl;
+
+            emit(c, (IRInst){.op = IR_BR, .label = cond_lbl});
+
+            // Condition: idx < count(coll). Header layout:
+            //   [cap | count | data_ptr], so count is at offset 8.
+            IRBlock *cond_b = new_block(c);
+            cond_b->label = cond_lbl;
+            switch_block(c, cond_b);
+            VReg coll_v = new_vreg(c);
+            emit(c, (IRInst){.op = IR_LOAD_LOCAL, .dst = coll_v, .imm = coll_slot});
+            VReg count = new_vreg(c);
+            emit(c, (IRInst){.op = IR_LOAD, .dst = count, .a = coll_v, .imm = 8});
+            VReg idx_v = new_vreg(c);
+            emit(c, (IRInst){.op = IR_LOAD_LOCAL, .dst = idx_v, .imm = idx_slot});
+            VReg cmp = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CMP_LT, .dst = cmp, .a = idx_v, .b = count});
+            emit(c, (IRInst){.op = IR_BR_COND, .a = cmp, .label = body_lbl, .label2 = end_lbl});
+
+            // Body: load data_ptr[idx*8] into the user's loop var.
+            IRBlock *body_b = new_block(c);
+            body_b->label = body_lbl;
+            switch_block(c, body_b);
+            VReg coll_v2 = new_vreg(c);
+            emit(c, (IRInst){.op = IR_LOAD_LOCAL, .dst = coll_v2, .imm = coll_slot});
+            VReg data_ptr = new_vreg(c);
+            emit(c, (IRInst){.op = IR_LOAD, .dst = data_ptr, .a = coll_v2, .imm = 16});
+            VReg idx_v2 = new_vreg(c);
+            emit(c, (IRInst){.op = IR_LOAD_LOCAL, .dst = idx_v2, .imm = idx_slot});
+            VReg eight = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CONST, .dst = eight, .imm = 8});
+            VReg byte_off = new_vreg(c);
+            emit(c, (IRInst){.op = IR_MUL, .dst = byte_off, .a = idx_v2, .b = eight});
+            VReg elem_addr = new_vreg(c);
+            emit(c, (IRInst){.op = IR_ADD, .dst = elem_addr, .a = data_ptr, .b = byte_off});
+            VReg elem = new_vreg(c);
+            emit(c, (IRInst){.op = IR_LOAD, .dst = elem, .a = elem_addr, .imm = 0});
+            set_local(c, n->through_in.var_name, elem);
+            gen_block(c, n->through_in.body);
+            emit(c, (IRInst){.op = IR_BR, .label = inc_lbl});
+
+            // Increment idx by 1.
+            IRBlock *inc_b = new_block(c);
+            inc_b->label = inc_lbl;
+            switch_block(c, inc_b);
+            VReg idx_v3 = new_vreg(c);
+            emit(c, (IRInst){.op = IR_LOAD_LOCAL, .dst = idx_v3, .imm = idx_slot});
+            VReg one = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CONST, .dst = one, .imm = 1});
+            VReg next = new_vreg(c);
+            emit(c, (IRInst){.op = IR_ADD, .dst = next, .a = idx_v3, .b = one});
+            emit(c, (IRInst){.op = IR_STORE_LOCAL, .a = next, .imm = idx_slot});
+            emit(c, (IRInst){.op = IR_BR, .label = cond_lbl});
+
+            // End.
+            IRBlock *end_b = new_block(c);
+            end_b->label = end_lbl;
+            switch_block(c, end_b);
+
+            c->loop_start = prev_start;
+            c->loop_end = prev_end;
+            break;
+        }
+
         // === INFI (while/infinite loop) ===
         case NODE_INFI: {
             int cond_lbl = new_label(c);

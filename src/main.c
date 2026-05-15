@@ -185,7 +185,11 @@ int main(int argc, char **argv) {
             free(alloc.vreg_to_spill);
         }
         // _start calls spark
-        fprintf(ir_out, "_start:\n    bl _spark\n    mov x16, #1\n    mov x0, #0\n    svc #0x80\n");
+        fprintf(ir_out, "_start:\n    bl _spark\n    mov x16, #1\n    mov x0, #0\n    svc #0x80\n\n");
+        // Emit the data section that holds string literals collected by
+        // IR_LOAD_STR. Must come after all functions so the @PAGE
+        // references resolve.
+        iremit_finalize_data(ir_out);
         fclose(ir_out);
         printf("IR pipeline: generated %s (%d functions)\n", asm_path, ir->func_count);
         free(src);

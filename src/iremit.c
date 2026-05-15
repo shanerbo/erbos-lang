@@ -28,6 +28,44 @@ static int g_csr_slot_base = 0;
 // in another. iremit_func sets this before emitting any block.
 static const char *g_func_name = NULL;
 
+// String pool: every IR_LOAD_STR gets registered here with a unique
+// index so iremit can later emit a data section (`_strN: .asciz "..."`)
+// that the load-string sequence's `adrp _strN@PAGE` instructions can
+// point at. iremit_func and iremit_finalize are the only writers.
+typedef struct {
+    char **items;
+    int count;
+    int cap;
+} StringPool;
+static StringPool g_string_pool;
+
+// Add a string to the pool (deduplicating by content). Returns the
+// index assigned; the caller emits `_str<index>` to reference it.
+static int string_pool_intern(const char *s) {
+    if (!s) s = "";
+    for (int i = 0; i < g_string_pool.count; i++)
+        if (!strcmp(g_string_pool.items[i], s)) return i;
+    if (g_string_pool.count >= g_string_pool.cap) {
+        g_string_pool.cap = g_string_pool.cap ? g_string_pool.cap * 2 : 8;
+        g_string_pool.items = realloc(g_string_pool.items, g_string_pool.cap * sizeof(char *));
+    }
+    g_string_pool.items[g_string_pool.count] = (char *)s;
+    return g_string_pool.count++;
+}
+
+void iremit_finalize_data(FILE *out) {
+    if (g_string_pool.count == 0) return;
+    fprintf(out, ".section __DATA,__data\n");
+    for (int i = 0; i < g_string_pool.count; i++) {
+        // Escape any embedded characters that the assembler dislikes.
+        // For Potato source today, strings only contain printable
+        // ASCII without quotes, so verbatim emission is enough; if
+        // that ever changes, escape backslash and quote here.
+        fprintf(out, "_str%d: .asciz \"%s\"\n", i, g_string_pool.items[i]);
+    }
+    g_string_pool.count = 0;
+}
+
 // Emit the epilogue's `ldp x29, x30, [sp], #stack_size` sequence,
 // splitting into separate `add sp, sp, #N` instructions when
 // stack_size exceeds the single-immediate ldp range (504 bytes).
@@ -202,6 +240,18 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
                         fprintf(out, "    mov x%d, #%lld\n", d, (long long)inst->imm);
                     else
                         fprintf(out, "    mov x%d, #%lld\n", d, (long long)(inst->imm & 0xFFFF));
+                    if (is_spilled(alloc, inst->dst))
+                        store_spill(out, alloc, inst->dst, 9);
+                    break;
+                }
+                case IR_LOAD_STR: {
+                    // Intern the string into the pool (caller may have
+                    // referenced the same literal multiple times) and
+                    // emit a 2-instruction pointer load via @PAGE/@PAGEOFF.
+                    int idx = string_pool_intern(inst->str);
+                    int d = is_spilled(alloc, inst->dst) ? 9 : phys(alloc, inst->dst);
+                    fprintf(out, "    adrp x%d, _str%d@PAGE\n", d, idx);
+                    fprintf(out, "    add x%d, x%d, _str%d@PAGEOFF\n", d, d, idx);
                     if (is_spilled(alloc, inst->dst))
                         store_spill(out, alloc, inst->dst, 9);
                     break;
