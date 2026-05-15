@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include "iremit.h"
 
 // Frame layout (positive offsets from x29 == sp):
@@ -234,12 +235,30 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
             switch (inst->op) {
                 case IR_CONST: {
                     int d = is_spilled(alloc, inst->dst) ? 9 : phys(alloc, inst->dst);
-                    if (inst->imm >= 0 && inst->imm < 65536)
-                        fprintf(out, "    mov x%d, #%lld\n", d, (long long)inst->imm);
-                    else if (inst->imm < 0 && inst->imm > -65536)
-                        fprintf(out, "    mov x%d, #%lld\n", d, (long long)inst->imm);
-                    else
-                        fprintf(out, "    mov x%d, #%lld\n", d, (long long)(inst->imm & 0xFFFF));
+                    int64_t v = (int64_t)inst->imm;
+                    // ARM64 `mov x_, #imm` accepts any 16-bit chunk via
+                    // movz/movk. For values that fit in [0, 65535] we
+                    // emit a single `mov`; for negative small values
+                    // (>-65536), `mov` accepts the negative directly;
+                    // for everything else (including 0x100000 used by
+                    // the str/int yell heuristic), build the value
+                    // 16 bits at a time with movz + up to three movk's.
+                    if (v >= 0 && v < 65536) {
+                        fprintf(out, "    mov x%d, #%lld\n", d, (long long)v);
+                    } else if (v < 0 && v > -65536) {
+                        fprintf(out, "    mov x%d, #%lld\n", d, (long long)v);
+                    } else {
+                        uint64_t u = (uint64_t)v;
+                        fprintf(out, "    movz x%d, #%llu\n", d,
+                                (unsigned long long)(u & 0xFFFF));
+                        for (int sh = 16; sh < 64; sh += 16) {
+                            unsigned long long part = (u >> sh) & 0xFFFF;
+                            if (part != 0) {
+                                fprintf(out, "    movk x%d, #%llu, lsl #%d\n",
+                                        d, part, sh);
+                            }
+                        }
+                    }
                     if (is_spilled(alloc, inst->dst))
                         store_spill(out, alloc, inst->dst, 9);
                     break;

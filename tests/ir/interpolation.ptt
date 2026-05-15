@@ -1,0 +1,18 @@
+// Regression test: string interpolation through the IR backend.
+// Verifies P4.3c's NODE_STR_LIT-with-{var} handler in irgen.c plus
+// the fix to the _int_to_str runtime helper (which was clobbering
+// callee-save x19/x20 without saving them, fine for the direct
+// codegen but a crash for the IR backend's call-aware regalloc).
+//
+// Expected output:
+//   hello world
+//   age is 42
+//   world is 42
+
+spark {
+  name is "world"
+  yell("hello {name}")
+  age is 42
+  yell("age is {age}")
+  yell("{name} is {age}")
+}

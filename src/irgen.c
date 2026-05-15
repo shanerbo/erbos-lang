@@ -102,9 +102,101 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
             return dst;
         }
         case NODE_STR_LIT: {
-            VReg dst = new_vreg(c);
-            emit(c, (IRInst){.op = IR_LOAD_STR, .dst = dst, .str = n->str_lit.value});
-            return dst;
+            const char *s = n->str_lit.value;
+            // Detect interpolation: any `{` triggers the segmented build.
+            int has_interp = 0;
+            for (int k = 0; s[k]; k++) {
+                if (s[k] == '{') { has_interp = 1; break; }
+            }
+            if (!has_interp) {
+                VReg dst = new_vreg(c);
+                emit(c, (IRInst){.op = IR_LOAD_STR, .dst = dst, .str = (char *)s});
+                return dst;
+            }
+            // Interpolation. Build the result by walking the literal,
+            // alternating between fixed segments (loaded as strs and
+            // concatenated onto the accumulator) and `{var}` slots
+            // (looked up, optionally _int_to_str-converted using the
+            // same `>0x100000 means already-str pointer` heuristic the
+            // direct codegen uses, then concatenated).
+            //
+            // Mirror of src/codegen.c:153-212.
+            VReg acc = new_vreg(c);
+            emit(c, (IRInst){.op = IR_LOAD_STR, .dst = acc, .str = ""});
+
+            int i = 0;
+            while (s[i]) {
+                if (s[i] == '{') {
+                    // {varname}
+                    i++;
+                    char varname[64];
+                    int vi = 0;
+                    while (s[i] && s[i] != '}' && vi < 63) { varname[vi++] = s[i++]; }
+                    varname[vi] = '\0';
+                    if (s[i] == '}') i++;
+                    VReg v = get_local(c, varname);
+                    // String-or-int heuristic: cmp v >= 0x100000.
+                    VReg threshold = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_CONST, .dst = threshold, .imm = 0x100000});
+                    VReg is_str = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_CMP_GE, .dst = is_str, .a = v, .b = threshold});
+                    // If int, call _int_to_str; else use v as-is.
+                    int skip_lbl = new_label(c);
+                    int call_lbl = new_label(c);
+                    int join_lbl = new_label(c);
+                    int converted_slot = c->slot_next++;
+                    emit(c, (IRInst){.op = IR_BR_COND, .a = is_str, .label = skip_lbl, .label2 = call_lbl});
+
+                    // call_lbl: convert int -> str via _int_to_str(v)
+                    IRBlock *call_b = new_block(c);
+                    call_b->label = call_lbl;
+                    switch_block(c, call_b);
+                    VReg *aa1 = malloc(sizeof(VReg));
+                    aa1[0] = v;
+                    VReg conv = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_CALL, .dst = conv, .str = "int_to_str",
+                                     .args = aa1, .arg_count = 1});
+                    emit(c, (IRInst){.op = IR_STORE_LOCAL, .a = conv, .imm = converted_slot});
+                    emit(c, (IRInst){.op = IR_BR, .label = join_lbl});
+
+                    // skip_lbl: already a string pointer
+                    IRBlock *skip_b = new_block(c);
+                    skip_b->label = skip_lbl;
+                    switch_block(c, skip_b);
+                    emit(c, (IRInst){.op = IR_STORE_LOCAL, .a = v, .imm = converted_slot});
+                    emit(c, (IRInst){.op = IR_BR, .label = join_lbl});
+
+                    // join: load the converted/passed-through string and concat with acc.
+                    IRBlock *join_b = new_block(c);
+                    join_b->label = join_lbl;
+                    switch_block(c, join_b);
+                    VReg piece = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_LOAD_LOCAL, .dst = piece, .imm = converted_slot});
+                    VReg *cargs = malloc(2 * sizeof(VReg));
+                    cargs[0] = acc;
+                    cargs[1] = piece;
+                    VReg new_acc = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_CALL, .dst = new_acc, .str = "str_concat",
+                                     .args = cargs, .arg_count = 2});
+                    acc = new_acc;
+                } else {
+                    // Literal segment up to the next `{`
+                    char seg[256];
+                    int si = 0;
+                    while (s[i] && s[i] != '{' && si < 255) { seg[si++] = s[i++]; }
+                    seg[si] = '\0';
+                    VReg lit = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_LOAD_STR, .dst = lit, .str = strdup(seg)});
+                    VReg *cargs = malloc(2 * sizeof(VReg));
+                    cargs[0] = acc;
+                    cargs[1] = lit;
+                    VReg new_acc = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_CALL, .dst = new_acc, .str = "str_concat",
+                                     .args = cargs, .arg_count = 2});
+                    acc = new_acc;
+                }
+            }
+            return acc;
         }
         case NODE_BOOL_LIT: {
             VReg dst = new_vreg(c);

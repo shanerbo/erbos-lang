@@ -1176,10 +1176,20 @@ static void emit_str_concat(Gen *g) {
 }
 
 static void emit_int_to_str(Gen *g) {
-    // _int_to_str(x0=int) -> x0=heap string
+    // _int_to_str(x0=int) -> x0=heap string.
+    //
+    // ABI note: this helper uses x19/x20 to bridge a `bl _heap_alloc`
+    // call (preserving the temp-buffer pointer + length across the
+    // call). Earlier versions failed to save them in the prologue,
+    // which silently corrupted any caller that legitimately held a
+    // value in x19/x20 — fine for the original direct codegen (which
+    // never put values in callee-save regs across calls), but a
+    // crash for the IR backend's call-aware register allocator that
+    // does. Always save and restore.
     fprintf(g->out, "// built-in: _int_to_str(x0) -> str\n");
     fprintf(g->out, ".globl _int_to_str\n.p2align 2\n_int_to_str:\n");
     fprintf(g->out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
+    fprintf(g->out, "    stp x19, x20, [sp, #-16]!\n");
     fprintf(g->out, "    sub sp, sp, #32\n");
     fprintf(g->out, "    mov x2, x0\n    add x1, sp, #0\n    mov x3, #0\n");
     fprintf(g->out, "    cmp x2, #0\n    b.ne _its_loop\n");
@@ -1197,7 +1207,10 @@ static void emit_int_to_str(Gen *g) {
     fprintf(g->out, "    add x0, x3, #1\n    bl _heap_alloc\n");
     fprintf(g->out, "    mov x4, #0\n");
     fprintf(g->out, "_its_cp:\n    ldrb w5, [x19, x4]\n    strb w5, [x0, x4]\n    add x4, x4, #1\n    cmp x4, x20\n    b.le _its_cp\n");
-    fprintf(g->out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
+    // Epilogue: undo `sub sp, sp, #32`, restore x19/x20, then fp/lr.
+    fprintf(g->out, "    add sp, sp, #32\n");
+    fprintf(g->out, "    ldp x19, x20, [sp], #16\n");
+    fprintf(g->out, "    ldp x29, x30, [sp], #16\n    ret\n\n");
 }
 
 static void emit_str_builtins(Gen *g) {
