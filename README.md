@@ -156,6 +156,12 @@ c is rep b          // clone — shallow copy (pointer copy)
 | `eq` / `ne` / `gt` / `lt` / `ge` / `le` | comparisons |
 | `mod` | modulo |
 | `true` / `false` | booleans |
+| `nil` | null pointer |
+| `list` / `map` / `imap` | collection types (`list of int`, `map of str to int`, `imap of int to int`) |
+| `match` | pattern match on enum |
+| `use` / `as` | import module / alias |
+| `test` / `assert` | built-in test framework |
+| `task` | concurrency handle (runtime not yet integrated) |
 
 ---
 
@@ -192,7 +198,8 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 | Unknown function/type detection | ✅ |
 | Structs (heap-allocated) | ✅ |
 | Dynamic lists (push/pop/len, growable) | ✅ |
-| Ordered maps (set/get/keys/len, growable) | ✅ |
+| Ordered maps — string keys (set/get/keys/len) | ✅ |
+| Ordered maps — int keys (`imap`) | ✅ |
 | Conditionals (?{ / nah) | ✅ |
 | Loops (through range, through in, infi) | ✅ |
 | Move semantics (`is now`) | ✅ |
@@ -201,9 +208,14 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 | Bounds checking (panic on OOB index) | ✅ |
 | nomut enforcement | ✅ |
 | Negative numbers | ✅ |
+| `nil` for null pointers | ✅ |
 | Method syntax (obj.method()) | ✅ |
 | Scoped blocks ({} for lifetimes) | ✅ |
 | RAII (heap freed at scope end) | ✅ |
+| Enums + `match` pattern matching | ✅ |
+| Multi-file imports (`use std/math`) | ✅ |
+| Built-in test framework (`test`/`assert`) | ✅ |
+| Optimizer pass (constant folding, DCE, inlining) | ✅ |
 | `erbos run` (compile + execute + cleanup) | ✅ |
 
 ### Partial / Experimental
@@ -221,13 +233,11 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 |---------|--------|
 | Deep clone for `rep` | Requires type-aware copy |
 | Per-struct field resolution | Requires type tracking through variables |
-| Enums with data (algebraic types) | — |
-| Pattern matching | — |
-| Result/Option types | — |
+| Result/Option as built-in types | — |
 | Traits / interfaces | — |
 | Generics (monomorphization) | — |
-| Multi-file imports | — |
 | Operator overloading | — |
+| New SSA-based IR backend (see `docs/ir-pipeline.md`) | In progress |
 | Self-hosting | — |
 
 ---
@@ -257,7 +267,7 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 
 ### Potato vs Go
 **Wins:** No GC, move semantics prevent some leaks, word-based syntax.
-**Loses:** No goroutine integration in compiled output, single-file only.
+**Loses:** No goroutine integration in compiled output (the green-thread runtime in `src/runtime.c` is not yet wired into compiled binaries).
 
 ### Potato vs Python
 **Wins:** 100x+ faster, compiled, type safe at compile time, no runtime needed.
@@ -267,17 +277,20 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 
 ## Roadmap
 
+- [x] Enums with data (algebraic types)
+- [x] Pattern matching (`match`)
+- [x] Multi-file imports (`use`)
+- [x] Built-in test runner (`erbos test`)
 - [ ] Deep clone for `rep`
 - [ ] Per-struct type-aware field resolution
-- [ ] Enums with data (algebraic types)
-- [ ] Pattern matching
-- [ ] Result/Option types
+- [ ] Result/Option as built-in types
 - [ ] Traits / interfaces
 - [ ] Generics (monomorphization)
-- [ ] Multi-file imports
 - [ ] Operator overloading
 - [ ] Compile-time evaluation
-- [ ] Built-in tooling (fmt, test, build)
+- [ ] Built-in `fmt`
+- [ ] New SSA-based IR backend (see `docs/ir-pipeline.md`)
+- [ ] Green-thread runtime integration in compiled output
 - [ ] Self-hosting (compiler written in Potato)
 
 ---
@@ -316,10 +329,12 @@ Standard library: `std/math`, `std/queue`, `std/stack`
 ## Architecture
 
 ```
-source.ptt 🥔 → [Lexer] → [Parser] → [Type Checker] → [Codegen] → ARM64 .s → [as + ld] → binary
+source.ptt 🥔 → [Lexer] → [Parser] → [Checker] → [Optimizer] → [Codegen] → ARM64 .s → [as + ld] → binary
 ```
 
-Written in C. ~2500 lines. No dependencies.
+Written in C11. ~5,500 lines across `src/`. No external dependencies.
+
+A second, experimental backend (SSA-style IR + linear-scan register allocator) lives alongside the direct codegen and can be invoked with `erbos ir <file.ptt>`. See [`docs/ir-pipeline.md`](docs/ir-pipeline.md) for status and known issues.
 
 ---
 

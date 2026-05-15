@@ -31,7 +31,7 @@
 | `as` | import alias | `use path as name` |
 | `test` | define test block | `test "name" { }` |
 | `assert` | test assertion | `assert(x eq 5)` |
-| `task` | concurrency handle | `t is task()` |
+| `task` | concurrency handle (compiled-mode placeholder; see note) | `t is task()` |
 
 ## Symbols
 
@@ -48,3 +48,5 @@
 | `>` `<` `>=` `<=` `==` `!=` | comparisons |
 | `//` | single-line comment |
 | `/* */` | multi-line comment |
+
+> **Note on `task`:** the green-thread runtime in `src/runtime.c` is exercised by `make test-runtime` (C-level harness) but is not yet integrated into compiled `.ptt` output. In compiled mode `_task_fire` and `_task_collapse` are no-ops, so `t.fire(worker())` runs `worker()` synchronously.

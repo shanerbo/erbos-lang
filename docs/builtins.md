@@ -63,6 +63,15 @@ Maps are growable — no capacity limit. Ordered by insertion.
 |--------|-------------|---------|
 | `StructName()` | Heap-allocate struct | `Point()` |
 
+## Tasks (concurrency)
+
+| Syntax | Description | Example |
+|--------|-------------|---------|
+| `t is task()` | Create a task handle | `t is task()` |
+| `t.fire(fn(...))` | Schedule a call (currently runs synchronously in compiled output) | `t.fire(worker())` |
+
+> The green-thread runtime in `src/runtime.c` runs in `make test-runtime` only; it is not yet wired into compiled binaries.
+
 ## Testing
 
 | Function | Description | Example |
