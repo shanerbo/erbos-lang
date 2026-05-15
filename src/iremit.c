@@ -448,6 +448,30 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
                         store_spill(out, alloc, inst->dst, 11);
                     break;
                 }
+                case IR_ADDR_LOCAL: {
+                    // %dst = &local[slot] — materialise a pointer to
+                    // the first byte of the slot region. Used by the
+                    // P5.3 stackify pass to redirect non-escaping
+                    // heap allocations onto the stack frame without
+                    // having to rewrite the pointer-based field
+                    // accesses (those continue to use IR_LOAD/IR_STORE
+                    // against the resulting address).
+                    int d = is_spilled(alloc, inst->dst) ? 11 : phys(alloc, inst->dst);
+                    int off = local_base + (int)inst->imm * 8;
+                    // ARM64 `add Xd, Xn, #imm12` accepts unsigned imm12
+                    // up to 4095. Larger frames need the 2-instruction
+                    // movz/add sequence; we keep it simple with movk
+                    // since slot offsets are bounded by `stack_size`
+                    // which we already cap.
+                    if (off <= 4095) {
+                        fprintf(out, "    add x%d, x29, #%d\n", d, off);
+                    } else {
+                        fprintf(out, "    mov x10, #%d\n    add x%d, x29, x10\n", off, d);
+                    }
+                    if (is_spilled(alloc, inst->dst))
+                        store_spill(out, alloc, inst->dst, 11);
+                    break;
+                }
                 case IR_STORE: {
                     // mem[%a + imm] = %b
                     int ra = ensure_reg(out, alloc, inst->a);

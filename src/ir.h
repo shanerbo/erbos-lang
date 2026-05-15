@@ -34,6 +34,11 @@ typedef enum {
     IR_LOAD,        // %dst = mem[%addr + offset]
     IR_STORE_LOCAL, // local[slot] = %src
     IR_LOAD_LOCAL,  // %dst = local[slot]
+    IR_ADDR_LOCAL,  // %dst = &local[slot]  (P5.3 stackify; materialises a
+                    //                       pointer to the first byte of
+                    //                       a local-slot region so heap
+                    //                       allocations whose pointer doesn't
+                    //                       escape can use the stack frame)
     IR_BR,          // unconditional branch to label
     IR_BR_COND,    // branch if %cond != 0 to label_true, else label_false
     IR_LABEL,       // label:

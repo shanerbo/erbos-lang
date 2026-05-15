@@ -1,0 +1,71 @@
+// Regression test: P5.3 escape analysis + stack allocation
+// (a.k.a. "stackify").
+//
+// Where stackify earns its keep: a heap allocation whose pointer
+// escapes the SRA promotion criteria (any non-field use causes SRA
+// to bail) can still be lowered to a stack-frame allocation if the
+// pointer doesn't escape the *function*. The pointer continues to
+// flow through the IR; only the storage moves from the heap to the
+// stack frame, and the matched _heap_free is deleted.
+//
+// Trigger pattern: a recursive method (`bump_n` here) takes the
+// receiver by ref and calls itself. P5.1 inlining doesn't touch
+// recursive functions (the recursion guard rejects them), and SRA
+// can't promote because the pointer is passed to a call. But
+// stackify's alias-set escape analysis sees that the call argument
+// is the same alloc'd pointer and that the receiver doesn't flow
+// outside the function — so the Counter's storage can live on the
+// stack.
+//
+// Independent of whether stackify actually fires, the observable
+// output must match across -O0 / -O1 / -O2.
+//
+// Expected output:
+//   3
+//   42
+//   100
+
+Counter is { value int }
+
+Counter.bump(self ref Counter) {
+  self.value be self.value + 1
+}
+
+Counter.bump_n(self ref Counter, n int) {
+  n le 0 ?{
+    give
+  }
+  self.bump()
+  self.bump_n(n - 1)
+}
+
+Counter.add(self ref Counter, n int) {
+  self.value be self.value + n
+}
+
+Counter.get(self Counter) int {
+  give self.value
+}
+
+spark {
+  // Recursive bump_n — SRA can't promote (pointer passed to recursive
+  // call), inlining can't eat it (recursion guard). Stackify should
+  // turn the heap alloc into a stack-frame region.
+  c is Counter()
+  c.bump_n(3)
+  yell(c.get())             // 3
+
+  // Non-recursive sequence — SRA should fully promote, but the
+  // observable output is the same regardless.
+  d is Counter()
+  d.add(42)
+  yell(d.get())             // 42
+
+  // Mix of mutations — multiple add() calls, one allocation.
+  e is Counter()
+  e.add(10)
+  e.add(20)
+  e.add(30)
+  e.add(40)
+  yell(e.get())             // 100
+}

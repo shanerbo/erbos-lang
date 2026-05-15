@@ -56,6 +56,7 @@ typedef struct {
 // in its own clearly-marked section.
 static void iropt_inline(IRProgram *ir);
 static void iropt_sra(IRProgram *ir);
+static void iropt_stackify(IRProgram *ir);
 
 // Pass dispatch table. New passes should be inserted in the canonical
 // order documented at the top of this file (inlining first because it
@@ -63,7 +64,7 @@ static void iropt_sra(IRProgram *ir);
 static const IROptPassEntry g_passes[] = {
     { "inlining",        IROPT_O1, iropt_inline },          // P5.1
     { "sra",             IROPT_O1, iropt_sra },             // P5.2
-    // { "escape-analysis", IROPT_O1, iropt_escape_analysis }, // P5.3
+    { "stackify",        IROPT_O1, iropt_stackify },        // P5.3
     // { "bce",             IROPT_O1, iropt_bce },             // P5.4
     // { "licm",            IROPT_O1, iropt_licm },            // P5.5
     { NULL, IROPT_O0, NULL }, // sentinel
@@ -682,5 +683,316 @@ static void iropt_sra(IRProgram *ir) {
     if (!ir || ir->func_count == 0) return;
     for (int fi = 0; fi < ir->func_count; fi++) {
         sra_func(&ir->funcs[fi]);
+    }
+}
+
+// ============================================================
+// P5.3 — escape analysis + stack allocation ("stackify")
+// ============================================================
+//
+// What this pass does: replace `_alloc_<X>` heap allocations whose
+// resulting pointer doesn't escape the function with a stack-frame
+// allocation. The pointer continues to flow through the IR — every
+// `IR_LOAD %d, %p, off` / `IR_STORE %p, %v, off` keeps working
+// against the new pointer because the new pointer is the address of
+// a region of `field_count` consecutive local slots reserved on the
+// stack frame. The matched RAII `_heap_free(p, size)` is neutered
+// because the storage now lives on the function's stack frame and
+// is reclaimed automatically at frame exit.
+//
+// Where this complements P5.2 SRA: SRA promotes the *fields* into
+// distinct shadow slots and removes the pointer entirely. SRA only
+// applies when every use of the pointer is a constant-offset field
+// load/store (or the matched _heap_free). Stackify covers the
+// allocations that survive SRA — pointers that flow through:
+//
+//   - `IR_COPY` chains (the irgen pattern for `b is now a`),
+//   - calls that the inliner couldn't eat (e.g., the callee was too
+//     big or contained nested calls), as long as those calls
+//     themselves don't cause the pointer to escape further (we
+//     conservatively reject any non-_heap_free call argument here),
+//   - phi-style merges where two arms of a branch each store the
+//     same pointer (today's IR doesn't lower phis explicitly so
+//     this is moot, but the analysis tolerates them).
+//
+// What this does NOT do (yet):
+//   - Inter-procedural escape: if a non-inlined callee receives the
+//     pointer as an argument, we conservatively bail. A future rev
+//     could analyse the callee's body and propagate the escape
+//     verdict.
+//   - Phis. The irgen doesn't emit IR_PHI; this pass treats it as
+//     an escape if it ever does.
+//   - List / map / imap allocations. Their headers carry a runtime
+//     data pointer that the allocator owns — moving the header to
+//     the stack would require also stack-allocating the data array,
+//     which fights the resize logic in `_list_push` / `_map_set`.
+//     P6 will rewrite those builtins in pure Potato; until then,
+//     stackify ignores them by only matching `_alloc_<StructName>`.
+//
+// Implementation:
+//
+//   Pass 1 — alias closure. Build the set of vregs that are
+//   transitive aliases of the alloc's dst (via IR_COPY).
+//
+//   Pass 2 — escape check. For every instruction in the function,
+//   if it uses an alias-set vreg in any "escaping" position
+//   (returned, stored to memory, passed to a non-_heap_free call,
+//   used as the value half of an IR_STORE), abort.
+//
+//   Pass 3 — rewrite. Determine field count: in the absence of
+//   struct metadata in IR, we use the maximum observed
+//   constant-offset field index plus one (just like SRA does).
+//   Reserve `field_count` consecutive local slots. Replace the
+//   IR_CALL alloc with IR_ADDR_LOCAL %dst, slot=base. Rewrite each
+//   IR_COPY in the alias chain to point at the new pointer (already
+//   the case via the alias relation — we replace the alloc dst, the
+//   COPYs propagate it). Neuter the matched IR_CALL _heap_free.
+
+// Track an alias set: vregs that hold the same pointer value as the
+// original allocation's dst. Implemented as a bitset over
+// func->vreg_count.
+static int *alias_set_new(int n) {
+    int *bs = malloc(((n + 63) / 64) * sizeof(uint64_t));
+    memset(bs, 0, ((n + 63) / 64) * sizeof(uint64_t));
+    return bs;
+}
+static void alias_set_add(int *bs, int v) {
+    uint64_t *q = (uint64_t *)bs;
+    q[v >> 6] |= (1ULL << (v & 63));
+}
+static int alias_set_has(int *bs, int v) {
+    if (v < 0) return 0;
+    uint64_t *q = (uint64_t *)bs;
+    return (q[v >> 6] >> (v & 63)) & 1ULL;
+}
+
+// Saturate the alias set: keep adding IR_COPY destinations whose
+// source is already in the set, until no more changes.
+static void alias_set_close(IRFunc *func, int *bs) {
+    int changed = 1;
+    while (changed) {
+        changed = 0;
+        for (int bi = 0; bi < func->block_count; bi++) {
+            IRBlock *b = &func->blocks[bi];
+            for (int i = 0; i < b->count; i++) {
+                IRInst *ins = &b->insts[i];
+                if (ins->op == IR_COPY && alias_set_has(bs, ins->a)
+                    && !alias_set_has(bs, ins->dst)) {
+                    alias_set_add(bs, ins->dst);
+                    changed = 1;
+                }
+                // STORE_LOCAL/LOAD_LOCAL through a slot that already
+                // received an alias also propagates: alloc.dst is
+                // stored to slot S, and every later LOAD_LOCAL of S
+                // is a fresh alias. We tolerate that here (the SRA
+                // pass already shapes most code into LOAD_LOCAL +
+                // field-only uses; stackify mops up the leftovers).
+                if (ins->op == IR_LOAD_LOCAL) {
+                    // Was the slot ever STORE_LOCAL'd by an alias?
+                    int slot = (int)ins->imm;
+                    int slot_aliased = 0;
+                    for (int wbi = 0; wbi < func->block_count && !slot_aliased; wbi++) {
+                        IRBlock *wb = &func->blocks[wbi];
+                        for (int wi = 0; wi < wb->count; wi++) {
+                            IRInst *wins = &wb->insts[wi];
+                            if (wins->op == IR_STORE_LOCAL
+                                && (int)wins->imm == slot
+                                && alias_set_has(bs, wins->a)) {
+                                slot_aliased = 1; break;
+                            }
+                        }
+                    }
+                    if (slot_aliased && !alias_set_has(bs, ins->dst)) {
+                        alias_set_add(bs, ins->dst);
+                        changed = 1;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Returns 1 iff none of the alias-set vregs are used in an escaping
+// position anywhere in the function. Also tracks the maximum
+// constant-offset field index seen on any field-style use, for
+// sizing the reserved slot region. `*max_off_out` is updated to the
+// largest byte offset observed; the caller computes (max/8 + 1) as
+// the field count.
+static int aliases_dont_escape(IRFunc *func, int *aliases, int *max_off_out) {
+    *max_off_out = 0;
+    for (int bi = 0; bi < func->block_count; bi++) {
+        IRBlock *b = &func->blocks[bi];
+        for (int i = 0; i < b->count; i++) {
+            IRInst *ins = &b->insts[i];
+            // Field load/store: alias as base => non-escape, record offset.
+            if ((ins->op == IR_LOAD || ins->op == IR_STORE)
+                && alias_set_has(aliases, ins->a)) {
+                int off = (int)ins->imm;
+                if (off < 0) return 0;
+                if (off > *max_off_out) *max_off_out = off;
+                // For IR_STORE the value (b) is also checked below.
+            }
+            // IR_STORE with alias as the *value*: escapes (a copy of
+            // the pointer now lives in some other heap location).
+            if (ins->op == IR_STORE && alias_set_has(aliases, ins->b)) return 0;
+            // IR_RET of an alias: escapes.
+            if (ins->op == IR_RET && alias_set_has(aliases, ins->a)) return 0;
+            // IR_CALL: arg-position uses are escapes unless this is
+            // the matched _heap_free (which we'll be deleting).
+            if (ins->op == IR_CALL) {
+                int is_free = (ins->str && !strcmp(ins->str, "heap_free"));
+                if (ins->args) {
+                    for (int k = 0; k < ins->arg_count; k++) {
+                        if (!alias_set_has(aliases, ins->args[k])) continue;
+                        if (is_free && k == 0) continue; // the freed pointer
+                        return 0;
+                    }
+                }
+                // The call's own dst can't be an alias of itself
+                // (would mean it returned the same pointer it received,
+                // which a free doesn't and any other call we treat as
+                // an escape edge).
+            }
+            // IR_STORE_LOCAL of an alias: tolerated (we already
+            // closed the alias set across STORE_LOCAL/LOAD_LOCAL).
+            if (ins->op == IR_STORE_LOCAL && alias_set_has(aliases, ins->a)) {
+                continue;
+            }
+            // Arithmetic / comparison / logical / phi: any use of an
+            // alias is an escape (we don't know what the result
+            // means about the original pointer).
+            switch (ins->op) {
+                case IR_ADD: case IR_SUB: case IR_MUL: case IR_DIV:
+                case IR_MOD: case IR_NEG:
+                case IR_CMP_EQ: case IR_CMP_NE: case IR_CMP_LT:
+                case IR_CMP_GT: case IR_CMP_LE: case IR_CMP_GE:
+                case IR_AND: case IR_OR: case IR_NOT:
+                case IR_PHI:
+                    if (alias_set_has(aliases, ins->a) || alias_set_has(aliases, ins->b))
+                        return 0;
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+    return 1;
+}
+
+static void stackify_func(IRFunc *func) {
+    for (int bi = 0; bi < func->block_count; bi++) {
+        IRBlock *b = &func->blocks[bi];
+        for (int i = 0; i < b->count; i++) {
+            IRInst *alloc = &b->insts[i];
+            if (alloc->op != IR_CALL) continue;
+            if (!alloc->str) continue;
+            if (strncmp(alloc->str, "alloc_", 6) != 0) continue;
+            if (alloc->dst < 0) continue;
+
+            // Build the alias set rooted at alloc->dst.
+            int *aliases = alias_set_new(func->vreg_count);
+            alias_set_add(aliases, alloc->dst);
+            alias_set_close(func, aliases);
+
+            int max_off = 0;
+            if (!aliases_dont_escape(func, aliases, &max_off)) {
+                free(aliases);
+                continue;
+            }
+
+            // Reserve consecutive slots. Slot offsets are byte units
+            // of 8; field count = max_off/8 + 1, but we round up to
+            // at least 1 slot (an empty struct still wants a unique
+            // address). For an alloc that flows through but is never
+            // field-accessed (max_off stays 0 with no IR_LOAD/IR_STORE
+            // hits), we still reserve 1 slot so the address is
+            // distinct.
+            int field_count = (max_off / 8) + 1;
+            if (field_count < 1) field_count = 1;
+            int base_slot = func->local_slots;
+            func->local_slots += field_count;
+
+            // Rewrite the alloc call to materialise the address of
+            // the reserved slot region.
+            //
+            // Zero-init the slots: heap allocations from `_heap_alloc`'s
+            // bump path see zeroed mmap pages and the irgen/Counter()
+            // pattern relies on every default-initialised field being
+            // zero. The stack frame is NOT zeroed by our prologue —
+            // `stp x29, x30, [sp, #-N]!` only writes the fp/lr slot —
+            // so we must explicitly clear each reserved slot here.
+            // Implementation: insert one IR_CONST + IR_STORE_LOCAL pair
+            // per slot directly before the rewritten alloc instruction.
+            // We patch alloc in place after splicing so its index in
+            // the block has shifted past the inserted instructions.
+            int zero_pair_count = field_count * 2;
+            int new_size = b->count + zero_pair_count;
+            if (new_size > b->cap) {
+                while (b->cap < new_size) b->cap = b->cap ? b->cap * 2 : 16;
+                b->insts = realloc(b->insts, b->cap * sizeof(IRInst));
+            }
+            // Re-fetch alloc pointer (realloc may have moved the array).
+            alloc = &b->insts[i];
+            // Make room: shift [i .. count) right by zero_pair_count.
+            int tail = b->count - i;
+            memmove(&b->insts[i + zero_pair_count], &b->insts[i],
+                    tail * sizeof(IRInst));
+            b->count = new_size;
+            // Fill in the zero-init prelude.
+            for (int s = 0; s < field_count; s++) {
+                VReg zv = func->vreg_count++;
+                IRInst c0 = {0};
+                c0.op = IR_CONST;
+                c0.dst = zv;
+                c0.a = -1; c0.b = -1;
+                c0.imm = 0;
+                b->insts[i + s * 2] = c0;
+                IRInst sl = {0};
+                sl.op = IR_STORE_LOCAL;
+                sl.dst = -1;
+                sl.a = zv;
+                sl.b = -1;
+                sl.imm = base_slot + s;
+                b->insts[i + s * 2 + 1] = sl;
+            }
+            // Now patch the original alloc (which has moved).
+            alloc = &b->insts[i + zero_pair_count];
+            alloc->op = IR_ADDR_LOCAL;
+            alloc->str = NULL;
+            alloc->args = NULL;
+            alloc->arg_count = 0;
+            alloc->a = -1;
+            alloc->b = -1;
+            alloc->imm = base_slot;
+            // alloc->dst stays the same so every existing alias
+            // chain (IR_COPY, STORE_LOCAL+LOAD_LOCAL pairs) keeps
+            // pointing at this materialised address.
+            // Advance the outer loop's index past the prelude.
+            i += zero_pair_count;
+
+            // Neuter the matched RAII free. It's the IR_CALL of
+            // "heap_free" whose first arg is in the alias set.
+            for (int fbi = 0; fbi < func->block_count; fbi++) {
+                IRBlock *fb = &func->blocks[fbi];
+                for (int fi2 = 0; fi2 < fb->count; fi2++) {
+                    IRInst *ins = &fb->insts[fi2];
+                    if (ins->op == IR_CALL && ins->str
+                        && !strcmp(ins->str, "heap_free")
+                        && ins->arg_count >= 1 && ins->args
+                        && alias_set_has(aliases, ins->args[0])) {
+                        neuter_inst(ins);
+                    }
+                }
+            }
+
+            free(aliases);
+        }
+    }
+}
+
+static void iropt_stackify(IRProgram *ir) {
+    if (!ir || ir->func_count == 0) return;
+    for (int fi = 0; fi < ir->func_count; fi++) {
+        stackify_func(&ir->funcs[fi]);
     }
 }

@@ -14,7 +14,7 @@
 | P5.0 | `src/iropt.c` scaffold + `-O0`/`-O1`/`-O2` flag wiring | ✅ done |
 | P5.1 | Aggressive inlining (loops, branches, locals) | ✅ done |
 | P5.2 | Scalar replacement of aggregates (SRA) | ✅ done |
-| P5.3 | Escape analysis + stack allocation | pending |
+| P5.3 | Escape analysis + stack allocation | ✅ done |
 | P5.4 | Bounds-check elimination | pending |
 | P5.5 | Loop-invariant code motion (LICM) | pending |
 | P6 | Rewrite `std/map.ptt` in pure Potato; delete C-emitted builtins | pending |
