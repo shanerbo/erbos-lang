@@ -679,15 +679,46 @@ static Node *parse_enum_def(Parser *p) {
     return n;
 }
 
+// Parse an optional <T1, T2, ...> type-parameter list immediately after a
+// type name. Caller is positioned just after the IDENT; if the next token
+// is not TOK_LT this is a no-op and returns 0/NULL via out params.
+//
+// Returns the number of type parameters parsed (0 if none).
+static int parse_type_params(Parser *p, char ***out_names) {
+    *out_names = NULL;
+    if (!at(p, TOK_LT)) return 0;
+    p->pos++; // consume '<'
+    int cap = 4, count = 0;
+    char **names = malloc(cap * sizeof(char *));
+    while (!at(p, TOK_GT) && !at(p, TOK_EOF)) {
+        if (count >= cap) {
+            cap *= 2;
+            names = realloc(names, cap * sizeof(char *));
+        }
+        names[count++] = eat(p, TOK_IDENT)->value;
+        if (at(p, TOK_COMMA)) p->pos++;
+    }
+    eat(p, TOK_GT);
+    *out_names = names;
+    return count;
+}
+
 static Node *parse_struct_def(Parser *p) {
     int line = cur(p)->line;
     char *name = eat(p, TOK_IDENT)->value;
+
+    // Optional generic-parameter list: `Map<K, V> is { ... }`.
+    char **type_params = NULL;
+    int type_param_count = parse_type_params(p, &type_params);
+
     eat(p, TOK_IS);
     eat(p, TOK_LBRACE);
     skip_newlines(p);
 
     Node *n = alloc_node(NODE_STRUCT_DEF, line);
     n->struct_def.name = name;
+    n->struct_def.type_params = type_params;
+    n->struct_def.type_param_count = type_param_count;
     int cap = 8;
     n->struct_def.field_names = malloc(cap * sizeof(char *));
     n->struct_def.field_types = malloc(cap * sizeof(char *));
@@ -818,6 +849,49 @@ Node *parser_parse(Parser *p) {
             t->test_def.name = eat(p, TOK_STR_LIT)->value;
             t->test_def.body = parse_block(p);
             list_push(&program->program.tests, t);
+        }
+        // Generic struct or method head: IDENT < IDENT (, IDENT)* >
+        // followed by either `is {` (struct) or `. IDENT (` (method).
+        // We resolve which by looking past the matching `>`.
+        else if (at(p, TOK_IDENT) && peek_at(p, 1)->type == TOK_LT &&
+                 peek_at(p, 2)->type == TOK_IDENT) {
+            // Walk forward to find matching `>`. Type-param lists never
+            // contain nested angle brackets in P3.b (parametric type
+            // arguments inside type-param decls would be P3.c work),
+            // so a single forward scan suffices.
+            int look = 2;
+            while (p->tokens[p->pos + look].type != TOK_GT &&
+                   p->tokens[p->pos + look].type != TOK_EOF &&
+                   p->tokens[p->pos + look].type != TOK_NEWLINE) {
+                look++;
+            }
+            // peek_at relative offsets after the closing '>':
+            //   look+1 = token immediately after '>'
+            TokenType after = p->tokens[p->pos + look + 1].type;
+            if (p->tokens[p->pos + look].type == TOK_GT && after == TOK_IS &&
+                p->tokens[p->pos + look + 2].type == TOK_LBRACE) {
+                // Generic struct: Foo<...> is { ... }
+                list_push(&program->program.structs, parse_struct_def(p));
+            } else if (p->tokens[p->pos + look].type == TOK_GT && after == TOK_DOT &&
+                       p->tokens[p->pos + look + 2].type == TOK_IDENT &&
+                       p->tokens[p->pos + look + 3].type == TOK_LPAREN) {
+                // Generic method: Foo<...>.bar(self ref Foo<...>, ...) ...
+                char *recv = eat(p, TOK_IDENT)->value;
+                char **recv_args = NULL;
+                int recv_arg_count = parse_type_params(p, &recv_args);
+                eat(p, TOK_DOT);
+                Node *m = parse_func_def(p);
+                m->func_def.receiver_type = recv;
+                m->func_def.receiver_type_args = recv_args;
+                m->func_def.receiver_type_arg_count = recv_arg_count;
+                list_push(&program->program.funcs, m);
+            } else {
+                // Not a generic decl head — fall through to the free
+                // function path so a leading `<` in a function body
+                // (e.g. as part of a return-type signature once that
+                // arrives) doesn't get consumed by mistake.
+                list_push(&program->program.funcs, parse_func_def(p));
+            }
         }
         // Method def: IDENT . IDENT ( ... )   e.g.  Counter.bump(self ref Counter) { ... }
         else if (at(p, TOK_IDENT) && peek_at(p, 1)->type == TOK_DOT &&
