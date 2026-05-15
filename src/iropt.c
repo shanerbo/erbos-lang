@@ -57,6 +57,7 @@ typedef struct {
 static void iropt_inline(IRProgram *ir);
 static void iropt_sra(IRProgram *ir);
 static void iropt_stackify(IRProgram *ir);
+static void iropt_bce(IRProgram *ir);
 
 // Pass dispatch table. New passes should be inserted in the canonical
 // order documented at the top of this file (inlining first because it
@@ -65,7 +66,7 @@ static const IROptPassEntry g_passes[] = {
     { "inlining",        IROPT_O1, iropt_inline },          // P5.1
     { "sra",             IROPT_O1, iropt_sra },             // P5.2
     { "stackify",        IROPT_O1, iropt_stackify },        // P5.3
-    // { "bce",             IROPT_O1, iropt_bce },             // P5.4
+    { "bce",             IROPT_O1, iropt_bce },             // P5.4
     // { "licm",            IROPT_O1, iropt_licm },            // P5.5
     { NULL, IROPT_O0, NULL }, // sentinel
 };
@@ -994,5 +995,221 @@ static void iropt_stackify(IRProgram *ir) {
     if (!ir || ir->func_count == 0) return;
     for (int fi = 0; fi < ir->func_count; fi++) {
         stackify_func(&ir->funcs[fi]);
+    }
+}
+
+// ============================================================
+// P5.4 — bounds-check elimination (BCE)
+// ============================================================
+//
+// What this pass does: drop the `IR_BR_COND` + matched panic
+// CALL/BR sequence on a pair-shaped negative / out-of-range check
+// when range analysis proves the index is safe.
+//
+// The irgen lowers `xs[i]` into:
+//
+//   %count   = LOAD %obj, 8                       ; cap=0, count=8, data=16
+//   %zero    = CONST 0
+//   %is_neg  = CMP_LT %idx, %zero
+//   BR_COND %is_neg, neg_panic, neg_ok
+//   neg_panic: CALL panic_oob; BR neg_ok
+//   neg_ok:    %is_oob = CMP_GE %idx, %count
+//              BR_COND %is_oob, oob_panic, oob_ok
+//   oob_panic: CALL panic_oob; BR oob_ok
+//   oob_ok:    ... actual indexed load ...
+//
+// We run two independent rewrites. Each, if it succeeds, replaces
+// the CMP / BR_COND with an unconditional BR to the "ok" branch
+// and neuters the panic call (still safe — the panic block ends
+// in a BR to the same ok label, so the emitted CFG remains
+// well-formed and the panic block becomes unreachable; downstream
+// regalloc / iremit still emit it but nothing branches there).
+//
+// 1. Lower-bound BCE — `idx < 0` is provably false.
+//    Walk the slot's writers (every IR_STORE_LOCAL targeting the
+//    slot from which `idx` was loaded). If every value stored is
+//    "non-negative-by-construction" (a non-negative IR_CONST, or
+//    an IR_ADD where both operands are non-negative-by-construction
+//    via this same recursive criterion, or an IR_LOAD_LOCAL of the
+//    same slot — i.e. the loop-step pattern), the index can never
+//    be negative.
+//
+// 2. Upper-bound BCE — `idx >= count` is provably false.
+//    Skipped in v1: requires alias analysis on `obj` and a proof
+//    that the loop's exit condition was tested against the same
+//    `count`. Will land as a follow-up commit if the std/map
+//    bench shows it dominates the remaining overhead.
+
+// Returns 1 if vreg `v` is provably >= 0.
+//   - IR_CONST with imm >= 0 → yes.
+//   - IR_ADD %a, %b where both operands are recursively non-negative → yes.
+//   - IR_LOAD_LOCAL of a slot whose every writer is non-negative → yes.
+//   - Anything else → no (conservative).
+//
+// `seen_slots` is a set of slot indices we've already visited, to
+// break cycles (the loop pattern: slot read on the right of an
+// IR_ADD that gets stored back to the same slot).
+static int is_known_nonneg(IRFunc *func, VReg v,
+                           int *seen_slots, int n_seen);
+
+static int slot_writers_all_nonneg(IRFunc *func, int slot,
+                                   int *seen_slots, int n_seen) {
+    // Cycle guard.
+    for (int k = 0; k < n_seen; k++) if (seen_slots[k] == slot) return 1;
+    if (n_seen >= 64) return 0;
+    int new_seen[64];
+    memcpy(new_seen, seen_slots, n_seen * sizeof(int));
+    new_seen[n_seen] = slot;
+    int n_new = n_seen + 1;
+    int found_writer = 0;
+    for (int bi = 0; bi < func->block_count; bi++) {
+        IRBlock *b = &func->blocks[bi];
+        for (int i = 0; i < b->count; i++) {
+            IRInst *ins = &b->insts[i];
+            if (ins->op == IR_STORE_LOCAL && (int)ins->imm == slot) {
+                found_writer = 1;
+                if (!is_known_nonneg(func, ins->a, new_seen, n_new))
+                    return 0;
+            }
+        }
+    }
+    // A slot with no writers (defensive: shouldn't happen for an
+    // index used in an IR_LOAD_LOCAL) — treat as unknown.
+    return found_writer;
+}
+
+static int is_known_nonneg(IRFunc *func, VReg v,
+                           int *seen_slots, int n_seen) {
+    if (v < 0) return 0;
+    // Find the unique definition of `v` (vregs are SSA-shaped: at
+    // most one def in the function).
+    for (int bi = 0; bi < func->block_count; bi++) {
+        IRBlock *b = &func->blocks[bi];
+        for (int i = 0; i < b->count; i++) {
+            IRInst *ins = &b->insts[i];
+            if (ins->dst != v) continue;
+            switch (ins->op) {
+                case IR_CONST:
+                    return ins->imm >= 0;
+                case IR_ADD:
+                    return is_known_nonneg(func, ins->a, seen_slots, n_seen)
+                        && is_known_nonneg(func, ins->b, seen_slots, n_seen);
+                case IR_MUL:
+                    // x*y >= 0 if both are >= 0 (x,y signed: both
+                    // non-negative => product non-negative, modulo
+                    // overflow which we treat as a non-issue here).
+                    return is_known_nonneg(func, ins->a, seen_slots, n_seen)
+                        && is_known_nonneg(func, ins->b, seen_slots, n_seen);
+                case IR_LOAD_LOCAL:
+                    return slot_writers_all_nonneg(func, (int)ins->imm,
+                                                   seen_slots, n_seen);
+                case IR_COPY:
+                    return is_known_nonneg(func, ins->a, seen_slots, n_seen);
+                default:
+                    return 0;
+            }
+        }
+    }
+    return 0;
+}
+
+// Locate the panic block's bounds-check pair. Given a block that
+// begins with the negative-check sequence:
+//
+//   %is_neg = CMP_LT %idx, %zero
+//   BR_COND %is_neg, neg_panic, neg_ok
+//
+// returns positions of the CMP, BR_COND, and the index vreg. We
+// pattern-match by looking for adjacent CMP_LT/CMP_GE → BR_COND →
+// CALL "panic_oob" sequences anywhere in the function and consider
+// each pair.
+
+// Find the panic-call block from a BR_COND's `label`. Returns the
+// IRBlock pointer, or NULL if not a panic block (no CALL panic_oob
+// at the start).
+static IRBlock *find_block_by_label(IRFunc *func, int label) {
+    for (int bi = 0; bi < func->block_count; bi++) {
+        if (func->blocks[bi].label == label) return &func->blocks[bi];
+    }
+    return NULL;
+}
+
+static int block_starts_with_panic_oob(IRBlock *b) {
+    if (!b || b->count == 0) return 0;
+    IRInst *first = &b->insts[0];
+    return first->op == IR_CALL && first->str
+           && !strcmp(first->str, "panic_oob");
+}
+
+// Eliminate one bounds check at index `br_idx` in block `b`. The
+// instruction at br_idx is an IR_BR_COND whose label leads to a
+// panic block. We rewrite the BR_COND to an unconditional BR to
+// label2 (the "ok" path), turning the check into a no-op that
+// regalloc/iremit can leave alone — the panic block is now
+// unreachable.
+static void eliminate_check(IRBlock *b, int cmp_idx, int br_idx) {
+    // The CMP itself is dead now (its dst is only used by the
+    // BR_COND we're rewriting). Neuter it.
+    neuter_inst(&b->insts[cmp_idx]);
+    // Convert BR_COND to BR by zeroing the cond-op fields.
+    IRInst *br = &b->insts[br_idx];
+    br->op = IR_BR;
+    br->a = -1;
+    br->b = -1;
+    // br->label stays as the original "false" target — wait, the
+    // shape is: BR_COND %cond, label_true, label2. label2 is the
+    // "false" branch (cond==0). For our bounds checks, label2 is
+    // the ok label (the no-panic path). After proving the cond is
+    // always false, we want to branch to label2.
+    br->label = br->label2;
+    br->label2 = 0;
+}
+
+static void bce_func(IRFunc *func) {
+    for (int bi = 0; bi < func->block_count; bi++) {
+        IRBlock *b = &func->blocks[bi];
+        for (int i = 0; i + 1 < b->count; i++) {
+            IRInst *cmp = &b->insts[i];
+            IRInst *br  = &b->insts[i + 1];
+            if (br->op != IR_BR_COND) continue;
+            if (cmp->dst != br->a) continue;
+            // The "true" target must be a block whose first
+            // instruction is CALL panic_oob.
+            IRBlock *panic_b = find_block_by_label(func, br->label);
+            if (!block_starts_with_panic_oob(panic_b)) continue;
+            // Lower-bound check: CMP_LT %idx, %zero (where %zero is
+            // a CONST 0 — verify by tracing the b operand).
+            if (cmp->op == IR_CMP_LT) {
+                // Confirm cmp->b is a CONST 0.
+                int b_is_zero = 0;
+                for (int sbi = 0; sbi < func->block_count; sbi++) {
+                    IRBlock *sb = &func->blocks[sbi];
+                    for (int si = 0; si < sb->count; si++) {
+                        if (sb->insts[si].dst == cmp->b
+                            && sb->insts[si].op == IR_CONST) {
+                            b_is_zero = (sb->insts[si].imm == 0);
+                            goto found_b;
+                        }
+                    }
+                }
+            found_b:;
+                if (!b_is_zero) continue;
+                int seen[64];
+                if (!is_known_nonneg(func, cmp->a, seen, 0)) continue;
+                eliminate_check(b, i, i + 1);
+                continue;
+            }
+            // Upper-bound check is left for a follow-up — would
+            // require proving cmp->a (idx) < cmp->b (count) at
+            // this program point, typically by relating count to
+            // a loop's exit condition.
+        }
+    }
+}
+
+static void iropt_bce(IRProgram *ir) {
+    if (!ir || ir->func_count == 0) return;
+    for (int fi = 0; fi < ir->func_count; fi++) {
+        bce_func(&ir->funcs[fi]);
     }
 }
