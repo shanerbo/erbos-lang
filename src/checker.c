@@ -325,6 +325,35 @@ static Type check_expr(Checker *c, Node *n) {
             if (!strcmp(name, "list_pop")) return make_type(TYPE_INT);
             if (!strcmp(name, "str_concat")) return make_type(TYPE_STR);
             if (!strcmp(name, "int_to_str")) return make_type(TYPE_STR);
+            // Raw memory primitives (P6.0) — callable from Potato so
+            // pure-Potato std/list, std/map, etc. can implement
+            // array-backed collections without going through the
+            // hardcoded `list of T` / `map of K to V` keywords.
+            //
+            //   heap_alloc(size int) int      — returns pointer (held in int)
+            //   heap_free(p int, size int)    — void
+            //   mem_load(p int, off int) int  — *(int*)(p + off)
+            //   mem_store(p int, off int, v int) — *(int*)(p + off) = v
+            //
+            // Pointers are represented as int64_t (a Potato `int`); the
+            // language has no separate pointer type. Use sparingly — these
+            // are unsafe and exist exclusively for stdlib internals.
+            if (!strcmp(name, "heap_alloc")) {
+                for (int j = 0; j < n->call.arg_count; j++) check_expr(c, n->call.args[j]);
+                return make_type(TYPE_INT);
+            }
+            if (!strcmp(name, "heap_free")) {
+                for (int j = 0; j < n->call.arg_count; j++) check_expr(c, n->call.args[j]);
+                return make_type(TYPE_VOID);
+            }
+            if (!strcmp(name, "mem_load")) {
+                for (int j = 0; j < n->call.arg_count; j++) check_expr(c, n->call.args[j]);
+                return make_type(TYPE_INT);
+            }
+            if (!strcmp(name, "mem_store")) {
+                for (int j = 0; j < n->call.arg_count; j++) check_expr(c, n->call.args[j]);
+                return make_type(TYPE_VOID);
+            }
             // User function
             FuncInfo *fi = find_func(c, name);
             if (!fi) {

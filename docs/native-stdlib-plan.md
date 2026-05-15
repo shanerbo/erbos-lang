@@ -17,7 +17,11 @@
 | P5.3 | Escape analysis + stack allocation | ✅ done |
 | P5.4 | Bounds-check elimination (lower-bound; upper-bound deferred) | ✅ done |
 | P5.5 | Loop-invariant code motion (LICM) | ✅ done |
-| P6 | Rewrite `std/map.ptt` in pure Potato; delete C-emitted builtins | pending |
+| P6.0 | Raw memory primitives callable from Potato | ✅ done |
+| P6.1 | Pure-Potato `std/list.ptt` | pending |
+| P6.2 | Pure-Potato `std/map.ptt` | pending |
+| P6.3 | Keyword desugaring (`list of T` → `List<T>` etc.) | pending |
+| P6.4 | Delete C-emitted list/map/imap builtins | pending |
 
 After P3 the language can *express* `Map<K, V>` as pure Potato. P4 and P5
 are the performance work that earns parity with the C-emitted built-in
