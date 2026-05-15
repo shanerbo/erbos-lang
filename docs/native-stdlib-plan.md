@@ -12,8 +12,8 @@
 | P4.2 | Cross-block, call-aware register allocation | ✅ done |
 | P4.3 | Switch IR to default backend; retire direct codegen | ✅ done (P4.3a–P4.3g) |
 | P5.0 | `src/iropt.c` scaffold + `-O0`/`-O1`/`-O2` flag wiring | ✅ done |
-| P5.1 | Aggressive inlining (loops, branches, locals) | pending |
-| P5.2 | Scalar replacement of aggregates (SRA) | pending |
+| P5.1 | Aggressive inlining (loops, branches, locals) | ✅ done |
+| P5.2 | Scalar replacement of aggregates (SRA) | ✅ done |
 | P5.3 | Escape analysis + stack allocation | pending |
 | P5.4 | Bounds-check elimination | pending |
 | P5.5 | Loop-invariant code motion (LICM) | pending |

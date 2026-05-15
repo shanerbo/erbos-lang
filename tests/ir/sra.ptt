@@ -1,0 +1,87 @@
+// Regression test: P5.2 scalar replacement of aggregates (SRA).
+//
+// At -O1 / -O2 the SRA pass runs after inlining. For a non-escaping
+// struct allocation whose pointer never leaves the function, every
+// field load/store should rewrite to a shadow stack slot and the
+// `_alloc_<X>` + matched `_heap_free` should be deleted.
+//
+// The cross-block case is the important one: after inlining, a
+// struct allocated in the entry block can have its field accesses
+// scattered across loop bodies and conditionals (different IR
+// blocks). Per-block SRA would neuter the alloc but leave dangling
+// field reads against an uninitialised slot. Function-wide SRA
+// must rewrite every field access on the loaded pointer no matter
+// which block holds it.
+//
+// Expected output:
+//   42
+//   5
+//   15
+//   100
+//   200
+
+Box<T> is { value T }
+
+Box<T>.set(self ref Box<T>, v T) {
+  self.value be v
+}
+
+Box<T>.get(self Box<T>) T {
+  give self.value
+}
+
+Counter is { count int }
+
+Counter.bump(self ref Counter) {
+  self.count be self.count + 1
+}
+
+Counter.add(self ref Counter, n int) {
+  self.count be self.count + n
+}
+
+Counter.value(self Counter) int {
+  give self.count
+}
+
+Pair is {
+  a int
+  b int
+}
+
+spark {
+  // Straight-line: alloc + field write + field read all in entry block.
+  // (Per-block SRA already handled this; included for completeness.)
+  b is Box<int>()
+  b.set(42)
+  yell(b.get())             // 42
+
+  // Cross-block: the alloc + STORE_LOCAL of the pointer lives in
+  // the entry block; the inlined `c.bump()` field load/store sits
+  // inside the loop body block. Function-wide SRA is required.
+  c is Counter()
+  through (i from 0 to 5 by 1) {
+    c.bump()
+  }
+  yell(c.value())           // 5
+
+  // Cross-block again with branched paths: SRA must rewrite both
+  // arms of the conditional.
+  d is Counter()
+  through (j from 0 to 10 by 1) {
+    j mod 2 eq 0 ?{
+      d.add(2)
+    } nah {
+      d.add(1)
+    }
+  }
+  yell(d.value())           // 5*2 + 5*1 = 15
+
+  // Multiple non-overlapping allocations — each gets its own
+  // independent shadow-slot rewrite.
+  p is Pair()
+  p.a be 100
+  p.b be 200
+  yell(p.a)                 // 100
+  yell(p.b)                 // 200
+}
