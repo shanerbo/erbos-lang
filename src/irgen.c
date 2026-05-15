@@ -456,27 +456,69 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
 
         case NODE_INDEX: {
             // xs[i] for a list (cap, count, data_ptr) at offsets 0/8/16.
-            // No bounds-check emission yet — direct codegen does
-            // `b.lt _panic_oob` / `b.ge _panic_oob` here, but the IR
-            // op set doesn't have a single-condition compare-and-branch
-            // primitive that targets a fixed external symbol. The
-            // unchecked path matches what the bounds-check-elimination
-            // pass (P5.4) will produce anyway; safety can be re-added
-            // when that pass lands.
+            // Bounds-check: panic if i < 0 or i >= count. Two CFG
+            // blocks per check (panic and ok); the panic block calls
+            // _panic_oob and falls back to a branch to the ok block
+            // for CFG-completeness even though _panic_oob exits the
+            // process. The bounds-check-elimination pass (P5.4) can
+            // remove these when the index range is provably safe.
             VReg obj = gen_expr(c, n->index_access.object);
             VReg idx = gen_expr(c, n->index_access.index);
-            // data_ptr is at offset 16
+
+            // count = obj[8]
+            VReg count = new_vreg(c);
+            emit(c, (IRInst){.op = IR_LOAD, .dst = count, .a = obj, .imm = 8});
+            // negative-index check: idx < 0 ?
+            VReg zero = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CONST, .dst = zero, .imm = 0});
+            VReg is_neg = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CMP_LT, .dst = is_neg, .a = idx, .b = zero});
+            int neg_panic_lbl = new_label(c);
+            int neg_ok_lbl = new_label(c);
+            emit(c, (IRInst){.op = IR_BR_COND, .a = is_neg,
+                             .label = neg_panic_lbl, .label2 = neg_ok_lbl});
+
+            IRBlock *neg_panic_b = new_block(c);
+            neg_panic_b->label = neg_panic_lbl;
+            switch_block(c, neg_panic_b);
+            VReg ignored1 = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CALL, .dst = ignored1, .str = "panic_oob",
+                             .args = NULL, .arg_count = 0});
+            emit(c, (IRInst){.op = IR_BR, .label = neg_ok_lbl});
+
+            IRBlock *neg_ok_b = new_block(c);
+            neg_ok_b->label = neg_ok_lbl;
+            switch_block(c, neg_ok_b);
+
+            // upper-bound check: idx >= count ?
+            VReg is_oob = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CMP_GE, .dst = is_oob, .a = idx, .b = count});
+            int oob_panic_lbl = new_label(c);
+            int oob_ok_lbl = new_label(c);
+            emit(c, (IRInst){.op = IR_BR_COND, .a = is_oob,
+                             .label = oob_panic_lbl, .label2 = oob_ok_lbl});
+
+            IRBlock *oob_panic_b = new_block(c);
+            oob_panic_b->label = oob_panic_lbl;
+            switch_block(c, oob_panic_b);
+            VReg ignored2 = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CALL, .dst = ignored2, .str = "panic_oob",
+                             .args = NULL, .arg_count = 0});
+            emit(c, (IRInst){.op = IR_BR, .label = oob_ok_lbl});
+
+            IRBlock *oob_ok_b = new_block(c);
+            oob_ok_b->label = oob_ok_lbl;
+            switch_block(c, oob_ok_b);
+
+            // data_ptr = obj[16]; addr = data_ptr + idx*8; load.
             VReg data_ptr = new_vreg(c);
             emit(c, (IRInst){.op = IR_LOAD, .dst = data_ptr, .a = obj, .imm = 16});
-            // index * 8 (8 bytes per element)
             VReg eight = new_vreg(c);
             emit(c, (IRInst){.op = IR_CONST, .dst = eight, .imm = 8});
             VReg byte_off = new_vreg(c);
             emit(c, (IRInst){.op = IR_MUL, .dst = byte_off, .a = idx, .b = eight});
-            // address = data_ptr + byte_off
             VReg addr = new_vreg(c);
             emit(c, (IRInst){.op = IR_ADD, .dst = addr, .a = data_ptr, .b = byte_off});
-            // load the element
             VReg dst = new_vreg(c);
             emit(c, (IRInst){.op = IR_LOAD, .dst = dst, .a = addr, .imm = 0});
             return dst;

@@ -9,7 +9,9 @@
 typedef struct {
     char *name;
     Type type;
-    int is_ref;  // 1 if param is ref (mutable borrow)
+    int is_ref;     // 1 if param is ref (mutable borrow)
+    int is_nomut;   // 1 if declared `nomut x is ...`
+    int is_moved;   // 1 if ownership has moved out (`b is now a`)
 } Symbol;
 
 typedef struct {
@@ -35,6 +37,11 @@ typedef struct {
     int func_count;
     StructInfo *structs;
     int struct_count;
+    // Import aliases (e.g. `use std/math` -> "math"); referenced as
+    // bare IDENTs in method-call positions, so the checker has to
+    // know about them to avoid flagging them as undefined.
+    char **import_aliases;
+    int import_count;
     // Current function context
     Type cur_return_type;
     int found_give;
@@ -67,15 +74,58 @@ static int types_equal(Type a, Type b) {
 
 static void set_sym(Checker *c, const char *name, Type t) {
     for (int i = 0; i < c->count; i++)
-        if (!strcmp(c->syms[i].name, name)) { c->syms[i].type = t; return; }
+        if (!strcmp(c->syms[i].name, name)) {
+            c->syms[i].type = t;
+            // Reassigning a moved-out symbol re-binds it; clear the
+            // moved flag so subsequent reads are valid.
+            c->syms[i].is_moved = 0;
+            return;
+        }
     if (c->count >= MAX_SYMS) { fprintf(stderr, "error: too many variables (max %d)\n", MAX_SYMS); exit(1); }
-    c->syms[c->count++] = (Symbol){(char *)name, t, -1}; // -1 = local (always mutable)
+    c->syms[c->count++] = (Symbol){(char *)name, t, -1, 0, 0}; // -1 = local
+}
+
+static void set_sym_with_flags(Checker *c, const char *name, Type t, int is_nomut) {
+    for (int i = 0; i < c->count; i++)
+        if (!strcmp(c->syms[i].name, name)) {
+            c->syms[i].type = t;
+            c->syms[i].is_nomut = is_nomut;
+            c->syms[i].is_moved = 0;
+            return;
+        }
+    if (c->count >= MAX_SYMS) { fprintf(stderr, "error: too many variables (max %d)\n", MAX_SYMS); exit(1); }
+    c->syms[c->count++] = (Symbol){(char *)name, t, -1, is_nomut, 0};
 }
 
 static void set_sym_ref(Checker *c, const char *name, Type t, int is_ref) {
     for (int i = 0; i < c->count; i++)
-        if (!strcmp(c->syms[i].name, name)) { c->syms[i].type = t; c->syms[i].is_ref = is_ref; return; }
-    c->syms[c->count++] = (Symbol){(char *)name, t, is_ref};
+        if (!strcmp(c->syms[i].name, name)) {
+            c->syms[i].type = t;
+            c->syms[i].is_ref = is_ref;
+            return;
+        }
+    c->syms[c->count++] = (Symbol){(char *)name, t, is_ref, 0, 0};
+}
+
+static void mark_moved_sym(Checker *c, const char *name) {
+    for (int i = c->count - 1; i >= 0; i--)
+        if (!strcmp(c->syms[i].name, name)) { c->syms[i].is_moved = 1; return; }
+}
+
+// Reserved for future use — the move check is currently inlined into
+// NODE_IDENT's symbol-table walk because the same pass already needs
+// to look up the symbol.
+__attribute__((unused))
+static int is_moved_sym(Checker *c, const char *name) {
+    for (int i = c->count - 1; i >= 0; i--)
+        if (!strcmp(c->syms[i].name, name)) return c->syms[i].is_moved;
+    return 0;
+}
+
+static int is_nomut_sym(Checker *c, const char *name) {
+    for (int i = c->count - 1; i >= 0; i--)
+        if (!strcmp(c->syms[i].name, name)) return c->syms[i].is_nomut;
+    return 0;
 }
 
 static int get_sym_is_ref(Checker *c, const char *name) {
@@ -166,7 +216,41 @@ static Type check_expr(Checker *c, Node *n) {
         case NODE_INT_LIT: return make_type(TYPE_INT);
         case NODE_STR_LIT: return make_type(TYPE_STR);
         case NODE_BOOL_LIT: return make_type(TYPE_BOOL);
-        case NODE_IDENT: return get_sym(c, n->ident.name);
+        case NODE_IDENT: {
+            // Unknown identifiers used to be caught only by the direct
+            // codegen ("error: undefined variable 'x'") — when the IR
+            // backend became the default, those errors silently
+            // disappeared. Catch them here so both paths reject the
+            // same set of programs. Likewise for use-after-move.
+            for (int i = c->count - 1; i >= 0; i--)
+                if (!strcmp(c->syms[i].name, n->ident.name)) {
+                    if (c->syms[i].is_moved) {
+                        fprintf(stderr, "error:%d: use of moved variable '%s'\n",
+                            n->line, n->ident.name);
+                        exit(1);
+                    }
+                    return c->syms[i].type;
+                }
+            // Names that resolve to types (struct/enum) are fine in
+            // expression position because they're constructor calls
+            // dispatched in NODE_CALL / NODE_METHOD_CALL above. Only
+            // bare identifier refs that match no symbol AND no type
+            // get reported.
+            if (is_struct(c, n->ident.name)) return make_struct(n->ident.name);
+            // Import aliases (e.g. `math` from `use std/math`) are
+            // valid in method-call object position; the NODE_METHOD_CALL
+            // case dispatches them as `_<alias>_<func>` calls. The bare
+            // alias still has no value type, but accept it here so a
+            // method call like `math.max(...)` doesn't error before the
+            // method-call case can intercept it.
+            for (int i = 0; i < c->import_count; i++) {
+                if (c->import_aliases[i] && !strcmp(c->import_aliases[i], n->ident.name))
+                    return make_type(TYPE_UNKNOWN);
+            }
+            fprintf(stderr, "error:%d: undefined variable '%s'\n",
+                n->line, n->ident.name);
+            exit(1);
+        }
         case NODE_BINARY: {
             Type left = check_expr(c, n->binary.left);
             Type right = check_expr(c, n->binary.right);
@@ -387,6 +471,40 @@ static Type check_expr(Checker *c, Node *n) {
                 }
             } else {
                 n->field_access.struct_name = NULL;
+                // Untyped receiver: same ambiguity check the direct
+                // codegen does at emit time. If the field name maps
+                // to two different offsets across the registered
+                // structs, refuse to pick one — the user must annotate
+                // the receiver.
+                int unique_offset = -1;
+                int matches = 0;
+                const char *first = NULL;
+                const char *second = NULL;
+                for (int i = 0; i < c->struct_count; i++) {
+                    StructInfo *si = &c->structs[i];
+                    for (int j = 0; j < si->field_count; j++) {
+                        if (si->field_names[j] && !strcmp(si->field_names[j], n->field_access.field)) {
+                            int off = j * 8;
+                            if (matches == 0) {
+                                unique_offset = off;
+                                first = si->name;
+                            } else if (off != unique_offset && !second) {
+                                second = si->name;
+                            }
+                            matches++;
+                            break;
+                        }
+                    }
+                }
+                if (second) {
+                    fprintf(stderr, "error:%d: ambiguous field '%s' on receiver of unknown type "
+                        "(it could be '%s.%s' at one offset and '%s.%s' at another). "
+                        "Annotate the receiver with an explicit type.\n",
+                        n->line, n->field_access.field,
+                        first, n->field_access.field,
+                        second, n->field_access.field);
+                    exit(1);
+                }
             }
             return make_type(TYPE_INT);
         }
@@ -487,10 +605,25 @@ static void check_stmt(Checker *c, Node *n) {
                 t = make_map_of(parse_type_str(c, n->var_decl.key_type_name),
                                 parse_type_str(c, n->var_decl.val_type_name));
             }
-            set_sym(c, n->var_decl.name, t);
+            // `b is now a` transfers ownership: mark `a` as moved so any
+            // subsequent `a` reference produces a use-after-move error.
+            if (n->var_decl.is_move && n->var_decl.value->type == NODE_IDENT) {
+                mark_moved_sym(c, n->var_decl.value->ident.name);
+            }
+            // Bind the new variable; carry its `nomut` flag so future
+            // assigns can be rejected.
+            set_sym_with_flags(c, n->var_decl.name, t, n->var_decl.is_nomut);
             break;
         }
         case NODE_ASSIGN: {
+            // Reject assignments to nomut bindings. The direct codegen
+            // catches this at emit time; re-check here so the IR
+            // backend rejects the same set of programs.
+            if (is_nomut_sym(c, n->assign.name)) {
+                fprintf(stderr, "error:%d: cannot reassign nomut variable '%s'\n",
+                    n->line, n->assign.name);
+                exit(1);
+            }
             Type existing = get_sym(c, n->assign.name);
             Type new_t = check_expr(c, n->assign.value);
             if (existing.kind != TYPE_UNKNOWN && new_t.kind != TYPE_UNKNOWN && !types_equal(existing, new_t)) {
@@ -601,6 +734,10 @@ static void check_stmt(Checker *c, Node *n) {
 
 void checker_run(Node *program) {
     Checker c = {0};
+
+    // Register import aliases so identifier checks know about them.
+    c.import_aliases = program->program.use_aliases;
+    c.import_count = program->program.use_count;
 
     // Register structs
     c.struct_count = program->program.structs.count;

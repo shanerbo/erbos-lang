@@ -1382,6 +1382,12 @@ static void emit_map_builtins(Gen *g) {
     fprintf(g->out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
     fprintf(g->out, "    stp x19, x20, [sp, #-16]!\n");
     fprintf(g->out, "    stp x21, x22, [sp, #-16]!\n");
+    // ABI fix: this helper uses x23/x24 internally too. Earlier
+    // versions clobbered them without saving — invisible to the direct
+    // codegen (which never put values in x23/x24 across calls) but
+    // catastrophic for the IR backend's call-aware regalloc, which
+    // does. Save and restore them like x19..x22.
+    fprintf(g->out, "    stp x23, x24, [sp, #-16]!\n");
     fprintf(g->out, "    mov x19, x0\n");
     fprintf(g->out, "    ldr x20, [x19, #8]\n");    // count
     fprintf(g->out, "    ldr x24, [x19, #16]\n");   // map data_ptr
@@ -1412,6 +1418,7 @@ static void emit_map_builtins(Gen *g) {
     fprintf(g->out, "    b _mk_loop\n");
     fprintf(g->out, "_mk_done:\n");
     fprintf(g->out, "    mov x0, x21\n");
+    fprintf(g->out, "    ldp x23, x24, [sp], #16\n");
     fprintf(g->out, "    ldp x21, x22, [sp], #16\n");
     fprintf(g->out, "    ldp x19, x20, [sp], #16\n");
     fprintf(g->out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
