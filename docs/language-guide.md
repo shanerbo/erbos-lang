@@ -325,4 +325,14 @@ Run: `erbos test file.ptt`
 ./erbos program.ptt          # compile to binary
 ./erbos run program.ptt      # compile + run + cleanup
 ./erbos test tests.ptt       # run test blocks
+./erbos ir program.ptt       # emit assembly only (program.s), don't link
+```
+
+The `-O0` / `-O1` / `-O2` flags select an optimization level; `-O1` is
+the default. They can appear anywhere relative to the subcommand:
+
+```bash
+./erbos -O0 run program.ptt  # skip iropt entirely
+./erbos run -O1 program.ptt  # explicit default
+./erbos -O2 program.ptt      # reserved for tuning; same as -O1 today
 ```

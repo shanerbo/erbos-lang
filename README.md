@@ -46,6 +46,15 @@ make
 # Or compile to binary
 ./erbos hello.ptt
 ./hello
+
+# Optimization levels — the IR pipeline accepts -O0 / -O1 / -O2 in any
+# position relative to the subcommand. Default is -O1.
+./erbos -O0 run hello.ptt   # skip iropt entirely
+./erbos -O1 run hello.ptt   # default, every iropt pass runs
+./erbos -O2 run hello.ptt   # reserved for tuning (currently same as -O1)
+
+# Inspect generated assembly without assembling/linking:
+./erbos ir hello.ptt        # writes hello.s
 ```
 
 ---
@@ -336,13 +345,14 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 - [x] Generics + monomorphization
 - [x] Cross-block / call-aware register allocation in the IR backend
 - [x] Switch IR to default backend; retire the direct codegen
+- [x] iropt scaffold + `-O0`/`-O1`/`-O2` CLI flags
 - [ ] Deep clone for `rep`
 - [ ] Result/Option as built-in types
 - [ ] Traits / interfaces
 - [ ] Operator overloading
 - [ ] Compile-time evaluation
 - [ ] Built-in `fmt`
-- [ ] Optimization passes (inlining, SRA, escape analysis, BCE, LICM)
+- [ ] Optimization passes: inlining, SRA, escape analysis, BCE, LICM
 - [ ] Pure-Potato `std/map`, `std/list` (replacing C-emitted builtins)
 - [ ] Green-thread runtime integration in compiled output
 - [ ] Self-hosting (compiler written in Potato)
@@ -386,10 +396,17 @@ Standard library: `std/math`, `std/queue`, `std/stack`
 
 ```
 source.ptt 🥔 → [Lexer] → [Parser] → [Monomorph] → [Checker] → [Optimizer]
-              → [IRGen] → [RegAlloc] → [IREmit] → ARM64 .s → [as + ld] → binary
+              → [IRGen] → [IROpt] → [RegAlloc] → [IREmit] → ARM64 .s → [as + ld] → binary
 ```
 
-Written in C11. ~7,300 lines across `src/`. No external dependencies.
+Written in C11. ~7,500 lines across `src/`. No external dependencies.
+
+The **IROpt** stage (`src/iropt.c`) is the optimization-pass framework
+gated by the `-O0`/`-O1`/`-O2` flags. The dispatch table is currently
+empty — `-O0` and `-O1` produce byte-identical output today — but the
+five planned passes (inlining, SRA, escape analysis, bounds-check
+elimination, loop-invariant code motion) plug in as one entry each as
+they land.
 
 The **Monomorph** pass (`src/monomorph.c`) instantiates every concrete generic form (`Box<int>`, `Map<str, int>`, …) before type checking, so the rest of the pipeline only ever sees fully-specialised types. Names are mangled inside-out: `List<Pair<str, int>>` becomes the symbol `_List__Pair__str__int`.
 

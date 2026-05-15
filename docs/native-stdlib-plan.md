@@ -11,7 +11,7 @@
 | P4.1 | Fix IR heap-corruption bug (subsumed by P0) | ✅ done |
 | P4.2 | Cross-block, call-aware register allocation | ✅ done |
 | P4.3 | Switch IR to default backend; retire direct codegen | ✅ done (P4.3a–P4.3g) |
-| P5.0 | `src/iropt.c` scaffold + `-O0`/`-O1`/`-O2` flag wiring | pending |
+| P5.0 | `src/iropt.c` scaffold + `-O0`/`-O1`/`-O2` flag wiring | ✅ done |
 | P5.1 | Aggressive inlining (loops, branches, locals) | pending |
 | P5.2 | Scalar replacement of aggregates (SRA) | pending |
 | P5.3 | Escape analysis + stack allocation | pending |
@@ -22,6 +22,15 @@
 After P3 the language can *express* `Map<K, V>` as pure Potato. P4 and P5
 are the performance work that earns parity with the C-emitted built-in
 collections; P6 is the payoff.
+
+> **Note on the body below.** The phase descriptions starting at "Phase 1
+> — Methods that dispatch to user code" reflect the *original* plan as
+> written before any phase shipped, including references to file paths
+> (`src/codegen.c:399-432`, etc.) that no longer exist after P4.3g
+> retired the direct codegen. The body is preserved as a planning
+> record; the status table above is the source of truth for what's
+> currently shipped. Each P5.x commit adds an entry to the dispatch
+> table in `src/iropt.c`.
 
 ## Goal
 

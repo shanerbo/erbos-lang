@@ -141,13 +141,14 @@ ops, list/map/imap builtins, panic + assert handlers) live in
 
 ```
 Source (.ptt) → Lexer → Parser → Monomorph → Checker → Optimizer
-              → IR Generator → Register Allocator → ARM64 Emitter
-                  (irgen.c)        (regalloc.c)        (iremit.c)
+              → IR Generator → IROpt → Register Allocator → ARM64 Emitter
+                  (irgen.c)   (iropt.c)  (regalloc.c)         (iremit.c)
 ```
 
 ### Key Files
 - `src/ir.h` — IR data structures (opcodes, instructions, blocks, functions)
 - `src/irgen.c` — AST → IR translation, RAII heap-free bookkeeping
+- `src/iropt.c` — Optimization-pass framework, gated by `-O0`/`-O1`/`-O2`
 - `src/regalloc.c` — Cross-block, call-aware linear-scan register allocator
 - `src/iremit.c` — IR → ARM64 assembly emission, prologue/epilogue, string pool
 - `src/runtime_emit.c` — C-emitted runtime helpers (yell, heap, str/list/map/imap, panics, asserts)
@@ -168,13 +169,24 @@ Source (.ptt) → Lexer → Parser → Monomorph → Checker → Optimizer
 - **RAII heap-free** — per-local `is_heap` / `is_moved` / `alloc_size`
   parallel arrays; emit_scope_cleanup walks live heap locals at scope end,
   at returns, and at function fall-off.
+- **Optimization passes are data, not code** — `iropt.c` keeps a small
+  table of `(name, min_level, fn)` triples; `iropt_run(ir, level)`
+  walks it and runs every pass whose `min_level` ≤ requested level.
+  Today the table is empty, so `-O0` and `-O1` produce byte-identical
+  output. As P5.1–P5.5 land, each adds one row to the table.
 
 ### How to Test
 ```bash
-./erbos run file.ptt       # default: build, run, clean up via the IR pipeline
+./erbos run file.ptt       # default: build, run, clean up (uses -O1)
 ./erbos test file.ptt      # same; the test framework runs in the binary
 ./erbos ir file.ptt        # generates .s file only (no assemble/link)
-# Then manually: as + ld + run
 
-make test                  # full regression — 80 OK lines as of P4.3g
+# Optimization-level matrix — `make test` runs every IR backend
+# regression test at -O0, -O1, and -O2; all three must produce
+# byte-identical stdout against the .expected file.
+./erbos -O0 run file.ptt   # skip iropt entirely
+./erbos -O1 run file.ptt   # default
+./erbos -O2 run file.ptt   # reserved for tuning; identical to -O1 today
+
+make test                  # full regression — 103 OK lines as of P5.0
 ```
