@@ -1,0 +1,22 @@
+// Two structs both define `count` at different offsets; an untyped
+// receiver must error because codegen can't pick the right offset.
+Foo is {
+  count int
+  extra int
+}
+
+Bar is {
+  extra int
+  count int
+}
+
+ambiguous_load(p int) int {
+  // p has type int — codegen has no way to know which struct's `count`
+  // this should resolve to. Must error rather than silently pick one.
+  give p.count
+}
+
+spark {
+  f is Foo()
+  yell(ambiguous_load(0))
+}

@@ -487,15 +487,26 @@ static void check_stmt(Checker *c, Node *n) {
             break;
         }
         case NODE_FIELD_ASSIGN: {
-            check_expr(c, n->field_assign.object);
+            Type obj_t = check_expr(c, n->field_assign.object);
             check_expr(c, n->field_assign.value);
+            // Tag the assignment with the receiver's struct name when known,
+            // so codegen can pick the right field offset deterministically
+            // instead of falling through to a name-based global search.
+            if (obj_t.kind == TYPE_STRUCT && obj_t.struct_name) {
+                n->field_assign.struct_name = (char *)obj_t.struct_name;
+                if (!struct_has_field(c, obj_t.struct_name, n->field_assign.field)) {
+                    fprintf(stderr, "error:%d: struct '%s' has no field '%s'\n",
+                        n->line, obj_t.struct_name, n->field_assign.field);
+                    exit(1);
+                }
+            }
             // Enforce ref: if object is a non-ref param, block mutation
             if (n->field_assign.object->type == NODE_IDENT) {
                 const char *obj_name = n->field_assign.object->ident.name;
                 int ref_status = get_sym_is_ref(c, obj_name);
-                Type obj_t = get_sym(c, obj_name);
+                Type obj_t2 = get_sym(c, obj_name);
                 // ref_status: -1=local(ok), 0=param non-ref(error for structs), 1=param ref(ok)
-                if (ref_status == 0 && obj_t.kind == TYPE_STRUCT) {
+                if (ref_status == 0 && obj_t2.kind == TYPE_STRUCT) {
                     fprintf(stderr, "error:%d: cannot mutate '%s' — parameter is not ref\n", n->line, obj_name);
                     exit(1);
                 }

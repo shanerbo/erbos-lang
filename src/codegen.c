@@ -497,18 +497,47 @@ static void emit_expr(Gen *g, Node *n) {
                 }
             }
             if (!found) {
-                // Fallback: global search (for untyped/int params)
-                for (int i = 0; i < g->struct_count && !found; i++) {
+                // Untyped receiver (BST/linked-list "struct stored as int" pattern).
+                // Accept the global search ONLY if the field name has a unique
+                // offset across every struct; otherwise the access is ambiguous
+                // and the user must annotate the receiver with an explicit type.
+                int unique_offset = -1;
+                int matches = 0;
+                const char *first_match_struct = NULL;
+                const char *second_match_struct = NULL;
+                for (int i = 0; i < g->struct_count; i++) {
                     for (int j = 0; j < g->struct_field_counts[i]; j++) {
                         if (!strcmp(g->struct_field_names[i][j], n->field_access.field)) {
-                            fprintf(g->out, "    ldr x0, [x0, #%d]\n", j * 8);
-                            found = 1;
+                            int off = j * 8;
+                            if (matches == 0) {
+                                unique_offset = off;
+                                first_match_struct = g->struct_names[i];
+                            } else if (off != unique_offset) {
+                                if (!second_match_struct) second_match_struct = g->struct_names[i];
+                            }
+                            matches++;
                             break;
                         }
                     }
                 }
+                if (matches == 0) {
+                    // No struct has this field at all — emit a single load at
+                    // offset 0 to preserve historical behaviour for synthetic
+                    // accesses (NODE_FIELD_ACCESS appearing in interpolation
+                    // resolution before any struct context is established).
+                    fprintf(g->out, "    ldr x0, [x0]\n");
+                } else if (second_match_struct) {
+                    fprintf(stderr, "error:%d: ambiguous field '%s' on receiver of unknown type "
+                        "(it could be '%s.%s' at one offset and '%s.%s' at another). "
+                        "Annotate the receiver with an explicit type.\n",
+                        n->line, n->field_access.field,
+                        first_match_struct, n->field_access.field,
+                        second_match_struct, n->field_access.field);
+                    exit(1);
+                } else {
+                    fprintf(g->out, "    ldr x0, [x0, #%d]\n", unique_offset);
+                }
             }
-            if (!found) fprintf(g->out, "    ldr x0, [x0]\n");
             break;
         }
         case NODE_INDEX: {
@@ -645,18 +674,62 @@ static void emit_stmt(Gen *g, Node *n) {
             fprintf(g->out, "    str x0, [sp, #-16]!\n");
             emit_expr(g, n->field_assign.object);
             fprintf(g->out, "    ldr x1, [sp], #16\n");
-            // Find field offset
             int found = 0;
-            for (int i = 0; i < g->struct_count && !found; i++) {
-                for (int j = 0; j < g->struct_field_counts[i]; j++) {
-                    if (!strcmp(g->struct_field_names[i][j], n->field_assign.field)) {
-                        fprintf(g->out, "    str x1, [x0, #%d]\n", j * 8);
-                        found = 1;
-                        break;
+            // Type-aware: when the checker resolved a static struct type,
+            // pick that struct's field offset deterministically.
+            if (n->field_assign.struct_name) {
+                for (int i = 0; i < g->struct_count && !found; i++) {
+                    if (!strcmp(g->struct_names[i], n->field_assign.struct_name)) {
+                        for (int j = 0; j < g->struct_field_counts[i]; j++) {
+                            if (!strcmp(g->struct_field_names[i][j], n->field_assign.field)) {
+                                fprintf(g->out, "    str x1, [x0, #%d]\n", j * 8);
+                                found = 1;
+                                break;
+                            }
+                        }
                     }
                 }
             }
-            if (!found) fprintf(g->out, "    str x1, [x0]\n");
+            if (!found) {
+                // Untyped receiver (e.g. struct stored as int for BST/linked-list
+                // patterns). Accept the global search ONLY if the field name
+                // resolves to a single offset across all structs; otherwise
+                // it is ambiguous and the user must annotate the receiver.
+                int unique_offset = -1;
+                int matches = 0;
+                const char *first_match_struct = NULL;
+                const char *second_match_struct = NULL;
+                for (int i = 0; i < g->struct_count; i++) {
+                    for (int j = 0; j < g->struct_field_counts[i]; j++) {
+                        if (!strcmp(g->struct_field_names[i][j], n->field_assign.field)) {
+                            int off = j * 8;
+                            if (matches == 0) {
+                                unique_offset = off;
+                                first_match_struct = g->struct_names[i];
+                            } else if (off != unique_offset) {
+                                if (!second_match_struct) second_match_struct = g->struct_names[i];
+                            }
+                            matches++;
+                            break;
+                        }
+                    }
+                }
+                if (matches == 0) {
+                    fprintf(stderr, "error:%d: assignment to unknown field '%s'\n",
+                        n->line, n->field_assign.field);
+                    exit(1);
+                }
+                if (second_match_struct) {
+                    fprintf(stderr, "error:%d: ambiguous field '%s' on receiver of unknown type "
+                        "(it could be '%s.%s' at one offset and '%s.%s' at another). "
+                        "Annotate the receiver with an explicit type.\n",
+                        n->line, n->field_assign.field,
+                        first_match_struct, n->field_assign.field,
+                        second_match_struct, n->field_assign.field);
+                    exit(1);
+                }
+                fprintf(g->out, "    str x1, [x0, #%d]\n", unique_offset);
+            }
             break;
         }
         case NODE_GIVE:

@@ -1,0 +1,39 @@
+// Per-struct field resolution: two structs with same-named fields at
+// different offsets must each access their own offset.
+//
+// Pre-P2 bug: field reads used the receiver's static type, but field
+// writes did a global name search and picked the first matching struct's
+// offset. Two structs sharing a field name corrupted each other's data.
+
+Foo is {
+  count int
+  extra int
+}
+
+Bar is {
+  extra int
+  count int
+}
+
+test "two structs with same field name at different offsets" {
+  f is Foo()
+  b is Bar()
+  f.count be 100
+  f.extra be 101
+  b.count be 999
+  b.extra be 998
+  assert(f.count eq 100)
+  assert(f.extra eq 101)
+  assert(b.count eq 999)
+  assert(b.extra eq 998)
+}
+
+test "shared field name; same offset across structs" {
+  // Both structs put `id` at offset 0 — global fallback must succeed.
+  f is Foo()
+  b is Bar()
+  f.count be 11
+  b.extra be 22
+  assert(f.count eq 11)
+  assert(b.extra eq 22)
+}

@@ -93,7 +93,7 @@ struct Node {
         struct { char *name; Node *value; } assign;
 
         // NODE_FIELD_ASSIGN (obj.field = value)
-        struct { Node *object; char *field; Node *value; } field_assign;
+        struct { Node *object; char *field; Node *value; char *struct_name; } field_assign;
 
         // NODE_IF
         struct {
