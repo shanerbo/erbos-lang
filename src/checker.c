@@ -519,8 +519,13 @@ void checker_run(Node *program) {
     }
 
     // Register functions
+    if (program->program.funcs.count > MAX_FUNCS) {
+        fprintf(stderr, "error: too many functions (%d), max is %d\n",
+            program->program.funcs.count, MAX_FUNCS);
+        exit(1);
+    }
     c.func_count = program->program.funcs.count;
-    for (int i = 0; i < c.func_count && i < MAX_FUNCS; i++) {
+    for (int i = 0; i < c.func_count; i++) {
         Node *f = program->program.funcs.items[i];
         c.funcs[i].name = f->func_def.name;
         c.funcs[i].param_count = f->func_def.param_count;

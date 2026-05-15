@@ -1208,7 +1208,7 @@ static void emit_map_builtins(Gen *g) {
     fprintf(g->out, "_ms_copied:\n");
     // Free old data
     fprintf(g->out, "    mov x0, x23\n");
-    fprintf(g->out, "    lsr x1, x22, #0\n    lsl x1, x22, #4\n");
+    fprintf(g->out, "    lsl x1, x22, #4\n");      // old size = count * 16
     fprintf(g->out, "    bl _heap_free\n");
     // Update data_ptr
     fprintf(g->out, "    mov x23, x5\n");
@@ -1429,8 +1429,7 @@ static void emit_list_builtins(Gen *g) {
     fprintf(g->out, "_lp_copied:\n");
     // Free old data
     fprintf(g->out, "    mov x0, x6\n");
-    fprintf(g->out, "    lsr x1, x3, #0\n");      // old size (count*8 approx)
-    fprintf(g->out, "    lsl x1, x3, #3\n");
+    fprintf(g->out, "    lsl x1, x3, #3\n");      // old size = count * 8
     fprintf(g->out, "    bl _heap_free\n");
     // Update data_ptr
     fprintf(g->out, "    str x5, [x19, #16]\n");
@@ -1631,11 +1630,6 @@ void codegen(Node *program, const char *output_path) {
     fprintf(g.out, "_pass_prefix: .asciz \"pass: \"\n");
 
     fclose(g.out);
-}
-
-void codegen_tests(Node *program, const char *output_path) {
-    (void)program;
-    (void)output_path;
 }
 
 void codegen_emit_builtins(FILE *out) {

@@ -31,16 +31,16 @@ int main(int argc, char **argv) {
     }
 
     // Check for "erbos run file.ptt" or "erbos test file.ptt" or "erbos ir file.ptt"
+    // (test mode currently behaves identically to run mode at the driver level —
+    //  the test framework is invoked from inside the compiled program.)
     int run_mode = 0;
-    int test_mode __attribute__((unused)) = 0;
     int ir_mode = 0;
     const char *input;
     if (argc >= 3 && strcmp(argv[1], "run") == 0) {
         run_mode = 1;
         input = argv[2];
     } else if (argc >= 3 && strcmp(argv[1], "test") == 0) {
-        test_mode = 1;
-        run_mode = 1; // test mode also runs
+        run_mode = 1;
         input = argv[2];
     } else if (argc >= 3 && strcmp(argv[1], "ir") == 0) {
         ir_mode = 1;

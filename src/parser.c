@@ -39,6 +39,7 @@ static void list_push(NodeList *l, Node *n) {
 static Node *parse_expr(Parser *p);
 static Node *parse_stmt(Parser *p);
 static Node *parse_block(Parser *p);
+static Node *parse_if_continuation(Parser *p, Node *first_cond, int line);
 
 // --- Expression parsing ---
 
@@ -311,6 +312,49 @@ static Node *parse_through(Parser *p) {
     }
 }
 
+// Parse an `?{ ... }` block plus zero or more `<expr> ?{ ... }` else-ifs and an
+// optional trailing `nah { ... }`. Caller is expected to have already parsed
+// the leading condition expression (`first_cond`) and the `?` token has not yet
+// been consumed.
+static Node *parse_if_continuation(Parser *p, Node *first_cond, int line) {
+    eat(p, TOK_QUESTION);
+    Node *n = alloc_node(NODE_IF, line);
+    int cap = 4;
+    n->if_stmt.conds = malloc(cap * sizeof(Node *));
+    n->if_stmt.bodies = malloc(cap * sizeof(Node *));
+    n->if_stmt.branch_count = 0;
+    n->if_stmt.nah_body = NULL;
+    n->if_stmt.conds[0] = first_cond;
+    n->if_stmt.bodies[0] = parse_block(p);
+    n->if_stmt.branch_count = 1;
+    while (1) {
+        int saved = p->pos;
+        skip_newlines(p);
+        if (at(p, TOK_NAH)) { p->pos++; n->if_stmt.nah_body = parse_block(p); break; }
+        if (at(p, TOK_EOF) || at(p, TOK_RBRACE)) { p->pos = saved; break; }
+        // Heuristic: this is an else-if only if a `?` appears before the next newline
+        int test_pos = p->pos;
+        int found_q = 0;
+        while (p->tokens[test_pos].type != TOK_NEWLINE && p->tokens[test_pos].type != TOK_EOF && p->tokens[test_pos].type != TOK_RBRACE) {
+            if (p->tokens[test_pos].type == TOK_QUESTION) { found_q = 1; break; }
+            test_pos++;
+        }
+        if (!found_q) { p->pos = saved; break; }
+        Node *c = parse_expr(p);
+        eat(p, TOK_QUESTION);
+        Node *b = parse_block(p);
+        if (n->if_stmt.branch_count >= cap) {
+            cap *= 2;
+            n->if_stmt.conds = realloc(n->if_stmt.conds, cap * sizeof(Node *));
+            n->if_stmt.bodies = realloc(n->if_stmt.bodies, cap * sizeof(Node *));
+        }
+        n->if_stmt.conds[n->if_stmt.branch_count] = c;
+        n->if_stmt.bodies[n->if_stmt.branch_count] = b;
+        n->if_stmt.branch_count++;
+    }
+    return n;
+}
+
 static Node *parse_stmt(Parser *p) {
     skip_newlines(p);
     int line = cur(p)->line;
@@ -547,83 +591,14 @@ static Node *parse_stmt(Parser *p) {
             }
             // Check if it's a condition
             if (at(p, TOK_QUESTION)) {
-                goto parse_if_from_expr;
+                return parse_if_continuation(p, expr, line);
             }
             return expr;
-            parse_if_from_expr: (void)0;
-            {
-                eat(p, TOK_QUESTION);
-                Node *n = alloc_node(NODE_IF, line);
-                int cap = 4;
-                n->if_stmt.conds = malloc(cap * sizeof(Node *));
-                n->if_stmt.bodies = malloc(cap * sizeof(Node *));
-                n->if_stmt.branch_count = 0;
-                n->if_stmt.nah_body = NULL;
-                n->if_stmt.conds[0] = expr;
-                n->if_stmt.bodies[0] = parse_block(p);
-                n->if_stmt.branch_count = 1;
-                // Check for else-if or nah (may be after newlines)
-                while (1) {
-                    int saved = p->pos;
-                    skip_newlines(p);
-                    if (at(p, TOK_NAH)) { p->pos++; n->if_stmt.nah_body = parse_block(p); break; }
-                    // Check if next is a condition ending in ?{ (else-if)
-                    if (at(p, TOK_EOF) || at(p, TOK_RBRACE)) { p->pos = saved; break; }
-                    // Try to see if this looks like an else-if: parse expr, expect ?
-                    // If not, restore position and break
-                    int test_pos = p->pos;
-                    // Heuristic: if we can't find ? before newline/rbrace, it's not else-if
-                    int found_q = 0;
-                    while (p->tokens[test_pos].type != TOK_NEWLINE && p->tokens[test_pos].type != TOK_EOF && p->tokens[test_pos].type != TOK_RBRACE) {
-                        if (p->tokens[test_pos].type == TOK_QUESTION) { found_q = 1; break; }
-                        test_pos++;
-                    }
-                    if (!found_q) { p->pos = saved; break; }
-                    Node *c = parse_expr(p);
-                    eat(p, TOK_QUESTION);
-                    Node *b = parse_block(p);
-                    if (n->if_stmt.branch_count >= cap) { cap *= 2; n->if_stmt.conds = realloc(n->if_stmt.conds, cap * sizeof(Node *)); n->if_stmt.bodies = realloc(n->if_stmt.bodies, cap * sizeof(Node *)); }
-                    n->if_stmt.conds[n->if_stmt.branch_count] = c;
-                    n->if_stmt.bodies[n->if_stmt.branch_count] = b;
-                    n->if_stmt.branch_count++;
-                }
-                return n;
-            }
         }
         // Otherwise parse as expression
         Node *expr = parse_expr(p);
         if (at(p, TOK_QUESTION)) {
-            eat(p, TOK_QUESTION);
-            Node *n = alloc_node(NODE_IF, line);
-            int cap = 4;
-            n->if_stmt.conds = malloc(cap * sizeof(Node *));
-            n->if_stmt.bodies = malloc(cap * sizeof(Node *));
-            n->if_stmt.branch_count = 0;
-            n->if_stmt.nah_body = NULL;
-            n->if_stmt.conds[0] = expr;
-            n->if_stmt.bodies[0] = parse_block(p);
-            n->if_stmt.branch_count = 1;
-            while (1) {
-                int saved = p->pos;
-                skip_newlines(p);
-                if (at(p, TOK_NAH)) { p->pos++; n->if_stmt.nah_body = parse_block(p); break; }
-                if (at(p, TOK_EOF) || at(p, TOK_RBRACE)) { p->pos = saved; break; }
-                int test_pos = p->pos;
-                int found_q = 0;
-                while (p->tokens[test_pos].type != TOK_NEWLINE && p->tokens[test_pos].type != TOK_EOF && p->tokens[test_pos].type != TOK_RBRACE) {
-                    if (p->tokens[test_pos].type == TOK_QUESTION) { found_q = 1; break; }
-                    test_pos++;
-                }
-                if (!found_q) { p->pos = saved; break; }
-                Node *c = parse_expr(p);
-                eat(p, TOK_QUESTION);
-                Node *b = parse_block(p);
-                if (n->if_stmt.branch_count >= cap) { cap *= 2; n->if_stmt.conds = realloc(n->if_stmt.conds, cap * sizeof(Node *)); n->if_stmt.bodies = realloc(n->if_stmt.bodies, cap * sizeof(Node *)); }
-                n->if_stmt.conds[n->if_stmt.branch_count] = c;
-                n->if_stmt.bodies[n->if_stmt.branch_count] = b;
-                n->if_stmt.branch_count++;
-            }
-            return n;
+            return parse_if_continuation(p, expr, line);
         }
         return expr;
     }
@@ -631,37 +606,7 @@ static Node *parse_stmt(Parser *p) {
     // Bare expression
     Node *expr = parse_expr(p);
     if (at(p, TOK_QUESTION)) {
-        eat(p, TOK_QUESTION);
-        Node *n = alloc_node(NODE_IF, line);
-        int cap = 4;
-        n->if_stmt.conds = malloc(cap * sizeof(Node *));
-        n->if_stmt.bodies = malloc(cap * sizeof(Node *));
-        n->if_stmt.branch_count = 0;
-        n->if_stmt.nah_body = NULL;
-        n->if_stmt.conds[0] = expr;
-        n->if_stmt.bodies[0] = parse_block(p);
-        n->if_stmt.branch_count = 1;
-        while (1) {
-            int saved = p->pos;
-            skip_newlines(p);
-            if (at(p, TOK_NAH)) { p->pos++; n->if_stmt.nah_body = parse_block(p); break; }
-            if (at(p, TOK_EOF) || at(p, TOK_RBRACE)) { p->pos = saved; break; }
-            int test_pos = p->pos;
-            int found_q = 0;
-            while (p->tokens[test_pos].type != TOK_NEWLINE && p->tokens[test_pos].type != TOK_EOF && p->tokens[test_pos].type != TOK_RBRACE) {
-                if (p->tokens[test_pos].type == TOK_QUESTION) { found_q = 1; break; }
-                test_pos++;
-            }
-            if (!found_q) { p->pos = saved; break; }
-            Node *c = parse_expr(p);
-            eat(p, TOK_QUESTION);
-            Node *b = parse_block(p);
-            if (n->if_stmt.branch_count >= cap) { cap *= 2; n->if_stmt.conds = realloc(n->if_stmt.conds, cap * sizeof(Node *)); n->if_stmt.bodies = realloc(n->if_stmt.bodies, cap * sizeof(Node *)); }
-            n->if_stmt.conds[n->if_stmt.branch_count] = c;
-            n->if_stmt.bodies[n->if_stmt.branch_count] = b;
-            n->if_stmt.branch_count++;
-        }
-        return n;
+        return parse_if_continuation(p, expr, line);
     }
     return expr;
 }
