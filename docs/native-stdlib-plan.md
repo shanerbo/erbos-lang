@@ -1,5 +1,28 @@
 # Plan: native `std/map` (and the language work it requires)
 
+## Status
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| P0 | IR-backend stack-frame heap bug; methods spike | ✅ done |
+| P1 | Methods on user types (full) | ✅ done |
+| P2 | Per-struct field resolution | ✅ done |
+| P3 | Generics + monomorphization | ✅ done |
+| P4.1 | Fix IR heap-corruption bug (subsumed by P0) | ✅ done |
+| P4.2 | Cross-block, call-aware register allocation | ⏳ in progress |
+| P4.3 | Switch IR to default backend; retire direct codegen | pending |
+| P5.0 | `src/iropt.c` scaffold + `-O0`/`-O1`/`-O2` flag wiring | pending |
+| P5.1 | Aggressive inlining (loops, branches, locals) | pending |
+| P5.2 | Scalar replacement of aggregates (SRA) | pending |
+| P5.3 | Escape analysis + stack allocation | pending |
+| P5.4 | Bounds-check elimination | pending |
+| P5.5 | Loop-invariant code motion (LICM) | pending |
+| P6 | Rewrite `std/map.ptt` in pure Potato; delete C-emitted builtins | pending |
+
+After P3 the language can *express* `Map<K, V>` as pure Potato. P4 and P5
+are the performance work that earns parity with the C-emitted built-in
+collections; P6 is the payoff.
+
 ## Goal
 
 Replace the C-emitted `_map_*` builtins with a **pure Potato** implementation

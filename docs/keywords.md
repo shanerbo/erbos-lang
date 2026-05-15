@@ -46,6 +46,7 @@
 | `.` | field access, method call, module access; method-def head `Type.name(self ...)` |
 | `+` `-` `*` `/` `%` | arithmetic |
 | `>` `<` `>=` `<=` `==` `!=` | comparisons |
+| `<` `>` | also bound generic-type parameters in declarations and constructors (`Box<T>`, `Map<str, int>()`); disambiguated from comparison by surrounding context |
 | `//` | single-line comment |
 | `/* */` | multi-line comment |
 

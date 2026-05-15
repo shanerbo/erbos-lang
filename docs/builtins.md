@@ -62,6 +62,9 @@ Maps are growable — no capacity limit. Ordered by insertion.
 | Syntax | Description | Example |
 |--------|-------------|---------|
 | `StructName()` | Heap-allocate struct | `Point()` |
+| `StructName<T1, ...>()` | Heap-allocate a generic instantiation | `Box<int>()`, `Map<str, int>()` |
+| `Type.method(self [ref] Type, ...)` | Define a method on a struct or enum (see [language guide](language-guide.md#methods)) | `Counter.bump(self ref Counter) { ... }` |
+| `Type<T>.method(self [ref] Type<T>, ...)` | Define a method on a generic type | `Box<T>.set(self ref Box<T>, v T) { ... }` |
 
 ## Tasks (concurrency)
 

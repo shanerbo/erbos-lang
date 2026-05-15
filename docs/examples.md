@@ -90,6 +90,73 @@ spark {
 }
 ```
 
+## Methods
+```
+Counter is { value int }
+
+Counter.bump(self ref Counter) {
+  self.value be self.value + 1
+}
+
+Counter.get(self Counter) int {
+  give self.value
+}
+
+spark {
+  c is Counter()
+  c.bump()
+  c.bump()
+  c.bump()
+  yell(c.get())   // 3
+}
+```
+
+## Generics
+```
+Box<T> is {
+  value T
+}
+
+Box<T>.set(self ref Box<T>, v T) {
+  self.value be v
+}
+
+Box<T>.get(self Box<T>) T {
+  give self.value
+}
+
+Pair<K, V> is {
+  key K
+  value V
+}
+
+Pair<K, V>.set_key(self ref Pair<K, V>, k K) {
+  self.key be k
+}
+
+Pair<K, V>.set_value(self ref Pair<K, V>, v V) {
+  self.value be v
+}
+
+spark {
+  // Each instantiation produces its own emitted code:
+  //   Box<int>      -> _Box__int
+  //   Box<str>      -> _Box__str
+  //   Pair<str,int> -> _Pair__str__int
+  bi is Box<int>()
+  bi.set(42)
+  yell(bi.get())   // 42
+
+  bs is Box<str>()
+  bs.set("hello")
+  yell(bs.get())   // hello
+
+  p is Pair<str, int>()
+  p.set_key("alice")
+  p.set_value(95)
+}
+```
+
 ## BST (Binary Search Tree)
 ```
 TreeNode is {

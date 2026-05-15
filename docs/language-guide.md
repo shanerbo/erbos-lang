@@ -144,6 +144,66 @@ Rules:
   their built-in symbols. User methods on user types take precedence over
   any same-named free function.
 
+## Generics
+
+Structs and methods can be parametric. Type parameters appear in
+angle brackets immediately after the type name in the declaration head:
+
+```
+Box<T> is {
+  value T
+}
+
+Box<T>.set(self ref Box<T>, v T) {
+  self.value be v
+}
+
+Box<T>.get(self Box<T>) T {
+  give self.value
+}
+
+Pair<K, V> is {
+  key K
+  value V
+}
+
+spark {
+  // Two distinct instantiations of the same template.
+  bi is Box<int>()
+  bi.set(42)
+  bs is Box<str>()
+  bs.set("hello")
+  yell(bi.get())   // 42
+  yell(bs.get())   // hello
+
+  p is Pair<str, int>()
+  // ...
+}
+```
+
+Rules:
+
+- Type parameters are bound by the surrounding declaration. Inside
+  `Box<T>.set`, the name `T` refers to whatever the caller instantiated
+  the box with.
+- Constructors at use sites carry their type arguments explicitly:
+  `Box<int>()`, `Pair<str, int>()`, `Map<str, int>()`. Plain
+  `Box()` is an error — the compiler does not currently infer type
+  arguments from context.
+- The compiler **monomorphizes**: each unique concrete form (`Box<int>`,
+  `Box<str>`, `Pair<str, int>`, …) becomes its own emitted struct
+  layout and its own emitted methods. There are no v-tables and no
+  runtime type tags.
+- Symbols are mangled by replacing the angle-bracket form with
+  underscores: `Box<int>` → `_Box__int`, `Map<str, int>` →
+  `_Map__str__int`, `List<Pair<str, int>>` → `_List__Pair__str__int`.
+- Nested generics are supported (`List<Pair<str, int>>` is fine);
+  parametric types may appear anywhere a type name is expected — in
+  struct fields, method parameter types, return types, and variable
+  declarations.
+- Instantiating an undeclared template is a compile error
+  (`cannot instantiate 'Foo<int>' — no generic type named 'Foo' is in scope`).
+
 ## Lists
 
 ```

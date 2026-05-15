@@ -101,6 +101,53 @@ p is Point()
 p.x be 10
 ```
 
+### Methods
+```
+Counter is { value int }
+
+Counter.bump(self ref Counter) {
+  self.value be self.value + 1
+}
+
+Counter.get(self Counter) int {
+  give self.value
+}
+
+spark {
+  c is Counter()
+  c.bump()
+  c.bump()
+  yell(c.get())   // 2
+}
+```
+
+### Generics
+```
+Box<T> is { value T }
+
+Box<T>.set(self ref Box<T>, v T) {
+  self.value be v
+}
+
+Box<T>.get(self Box<T>) T {
+  give self.value
+}
+
+spark {
+  bi is Box<int>()
+  bi.set(42)
+  bs is Box<str>()
+  bs.set("hello")
+  yell(bi.get())   // 42
+  yell(bs.get())   // hello
+}
+```
+
+Generic structs and methods (`Map<K, V>`, `Pair<K, V>`, etc.) are
+monomorphized at compile time — each concrete instantiation gets its
+own emitted code with a mangled symbol (`Box<int>` → `_Box__int`,
+`Pair<str, int>` → `_Pair__str__int`). No v-tables, no runtime cost.
+
 ### Collections
 ```
 nums is [1, 2, 3]         // list literal
@@ -162,6 +209,7 @@ c is rep b          // clone — shallow copy (pointer copy)
 | `use` / `as` | import module / alias |
 | `test` / `assert` | built-in test framework |
 | `task` | concurrency handle (runtime not yet integrated) |
+| `<T>` / `<K, V>` | generic type parameters on struct or method |
 
 ---
 
@@ -211,6 +259,8 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 | `nil` for null pointers | ✅ |
 | Method syntax (obj.method()) | ✅ |
 | User-defined methods on structs and enums (`Type.name(self ...)`) | ✅ |
+| Per-struct field resolution (typed receivers; ambiguity is a compile error) | ✅ |
+| Generics + monomorphization (`Box<T>`, `Map<K, V>`, …) | ✅ |
 | Scoped blocks ({} for lifetimes) | ✅ |
 | RAII (heap freed at scope end) | ✅ |
 | Enums + `match` pattern matching | ✅ |
@@ -224,21 +274,22 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 |---------|--------|
 | Clone (`is rep`) | Shallow copy (pointer copy). Deep clone not implemented. |
 | `ref` enforcement | Non-ref struct params cannot be mutated (compile error). |
-| Struct field access | Resolves field by name across all structs, not per-type. Works if field names are unique. |
 | Green thread runtime | Separate C library (`src/runtime.c`). Not integrated into compiled `.ptt` output. |
 | Channels | Separate C library (`src/channel.c`). Not integrated into compiled output. |
 | String comparison (eq/ne) | Uses `_str_eq` when checker detects both operands are str. |
+| Experimental SSA IR backend (`erbos ir <file>`) | Stack-frame layout fixed, struct field access works across calls. Lists / maps / enums on this path still need targeted tests; cross-block regalloc is the next piece (see `docs/ir-pipeline.md` and `docs/native-stdlib-plan.md`). |
 
 ### Planned (v0.2+)
 | Feature | Status |
 |---------|--------|
 | Deep clone for `rep` | Requires type-aware copy |
-| Per-struct field resolution | Requires type tracking through variables |
 | Result/Option as built-in types | — |
 | Traits / interfaces | — |
-| Generics (monomorphization) | — |
 | Operator overloading | — |
-| New SSA-based IR backend (see `docs/ir-pipeline.md`) | In progress |
+| Cross-block / call-aware register allocation in IR backend | P4.2 |
+| Switch IR to default backend; retire direct codegen | P4.3 |
+| Optimization passes (inlining, SRA, escape analysis, BCE, LICM) | P5 |
+| Pure-Potato `std/map` (replacing the C-emitted `_map_*` builtins) | P6 |
 | Self-hosting | — |
 
 ---
@@ -256,15 +307,15 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 | **Performance** | Native ARM64 | Native | Native | Native + GC | Slow |
 | **Concurrency** | Green threads | async/await | threads | Goroutines | GIL |
 | **Error handling** | Planned (Result types) | Result<T,E> | Exceptions | error return | Exceptions |
-| **Generics** | Planned | Monomorphized | Templates | Type params | Duck typing |
+| **Generics** | Monomorphized | Monomorphized | Templates | Type params | Duck typing |
 
 ### Potato vs Rust
 **Wins:** Simpler syntax, no lifetime annotations, faster to learn, instant compilation.
 **Loses:** No borrow checker, no ecosystem.
 
 ### Potato vs C++
-**Wins:** No headers, no UB, no preprocessor, readable syntax, compile-time move checking.
-**Loses:** No templates, no operator overloading, less control.
+**Wins:** No headers, no UB, no preprocessor, readable syntax, compile-time move checking, monomorphized generics without template metaprogramming.
+**Loses:** No operator overloading, less control.
 
 ### Potato vs Go
 **Wins:** No GC, move semantics prevent some leaks, word-based syntax.
@@ -282,17 +333,23 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 - [x] Pattern matching (`match`)
 - [x] Multi-file imports (`use`)
 - [x] Built-in test runner (`erbos test`)
+- [x] User-defined methods on structs and enums
+- [x] Per-struct type-aware field resolution
+- [x] Generics + monomorphization
 - [ ] Deep clone for `rep`
-- [ ] Per-struct type-aware field resolution
 - [ ] Result/Option as built-in types
 - [ ] Traits / interfaces
-- [ ] Generics (monomorphization)
 - [ ] Operator overloading
 - [ ] Compile-time evaluation
 - [ ] Built-in `fmt`
-- [ ] New SSA-based IR backend (see `docs/ir-pipeline.md`)
+- [ ] Cross-block / call-aware register allocation in the IR backend
+- [ ] Switch IR to default backend; retire the direct codegen
+- [ ] Optimization passes (inlining, SRA, escape analysis, BCE, LICM)
+- [ ] Pure-Potato `std/map`, `std/list` (replacing C-emitted builtins)
 - [ ] Green-thread runtime integration in compiled output
 - [ ] Self-hosting (compiler written in Potato)
+
+The full multi-phase plan is in [`docs/native-stdlib-plan.md`](docs/native-stdlib-plan.md).
 
 ---
 
@@ -330,12 +387,14 @@ Standard library: `std/math`, `std/queue`, `std/stack`
 ## Architecture
 
 ```
-source.ptt 🥔 → [Lexer] → [Parser] → [Checker] → [Optimizer] → [Codegen] → ARM64 .s → [as + ld] → binary
+source.ptt 🥔 → [Lexer] → [Parser] → [Monomorph] → [Checker] → [Optimizer] → [Codegen] → ARM64 .s → [as + ld] → binary
 ```
 
-Written in C11. ~5,500 lines across `src/`. No external dependencies.
+Written in C11. ~7,200 lines across `src/`. No external dependencies.
 
-A second, experimental backend (SSA-style IR + linear-scan register allocator) lives alongside the direct codegen and can be invoked with `erbos ir <file.ptt>`. See [`docs/ir-pipeline.md`](docs/ir-pipeline.md) for status and known issues.
+The **Monomorph** pass (`src/monomorph.c`) instantiates every concrete generic form (`Box<int>`, `Map<str, int>`, …) before type checking, so the rest of the pipeline only ever sees fully-specialised types. Names are mangled inside-out: `List<Pair<str, int>>` becomes the symbol `_List__Pair__str__int`.
+
+A second, experimental backend (SSA-style IR + linear-scan register allocator) lives alongside the direct codegen and can be invoked with `erbos ir <file.ptt>`. See [`docs/ir-pipeline.md`](docs/ir-pipeline.md) for status and `docs/native-stdlib-plan.md` for the full plan to retire the C-emitted collection builtins in favour of pure-Potato `std/map` / `std/list`.
 
 ---
 
