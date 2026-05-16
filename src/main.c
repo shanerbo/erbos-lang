@@ -143,14 +143,23 @@ int main(int argc, char **argv) {
         imp_p.filename = import_path;
         Node *imp_prog = parser_parse(&imp_p);
 
-        // Merge: prefix function names with alias_
+        // Merge funcs.
+        //   - Free functions get prefixed with `<alias>_<name>` so the
+        //     caller writes `math.max(...)` and the call-site dispatch
+        //     resolves to `_math_max`.
+        //   - Methods (func_def.receiver_type != NULL) keep their
+        //     declared name; method dispatch is by receiver type, not
+        //     by alias. `use std/string as foo` still gives `String.len`
+        //     globally — `foo.len` would be nonsensical because there's
+        //     no `foo` *value* to call a method on.
         const char *alias = program->program.use_aliases[ui];
         char prefixed[256];
         for (int fi = 0; fi < imp_prog->program.funcs.count; fi++) {
             Node *f = imp_prog->program.funcs.items[fi];
-            snprintf(prefixed, sizeof(prefixed), "%s_%s", alias, f->func_def.name);
-            f->func_def.name = strdup(prefixed);
-            // Add to main program
+            if (!f->func_def.receiver_type) {
+                snprintf(prefixed, sizeof(prefixed), "%s_%s", alias, f->func_def.name);
+                f->func_def.name = strdup(prefixed);
+            }
             if (program->program.funcs.count >= program->program.funcs.cap) {
                 program->program.funcs.cap = program->program.funcs.cap ? program->program.funcs.cap * 2 : 4;
                 program->program.funcs.items = realloc(program->program.funcs.items, program->program.funcs.cap * sizeof(Node *));

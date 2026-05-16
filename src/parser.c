@@ -57,7 +57,42 @@ static Node *parse_primary(Parser *p) {
         Node *n = alloc_node(NODE_STR_LIT, line);
         n->str_lit.value = cur(p)->value;
         p->pos++;
-        return n;
+        // Allow postfix method calls on a string literal:
+        //   "hello".len(), "abc".equals("abc"), etc.
+        // Same chain logic as the IDENT-postfix path below.
+        Node *base = n;
+        while (at(p, TOK_DOT)) {
+            p->pos++;
+            char *field = eat(p, TOK_IDENT)->value;
+            if (at(p, TOK_LPAREN)) {
+                p->pos++;
+                Node *mc = alloc_node(NODE_METHOD_CALL, line);
+                mc->method_call.object = base;
+                mc->method_call.method = field;
+                int cap = 4;
+                mc->method_call.args = malloc(cap * sizeof(Node *));
+                mc->method_call.arg_count = 0;
+                if (!at(p, TOK_RPAREN)) {
+                    mc->method_call.args[mc->method_call.arg_count++] = parse_expr(p);
+                    while (at(p, TOK_COMMA)) {
+                        p->pos++;
+                        if (mc->method_call.arg_count >= cap) {
+                            cap *= 2;
+                            mc->method_call.args = realloc(mc->method_call.args, cap * sizeof(Node *));
+                        }
+                        mc->method_call.args[mc->method_call.arg_count++] = parse_expr(p);
+                    }
+                }
+                eat(p, TOK_RPAREN);
+                base = mc;
+            } else {
+                Node *fa = alloc_node(NODE_FIELD_ACCESS, line);
+                fa->field_access.object = base;
+                fa->field_access.field = field;
+                base = fa;
+            }
+        }
+        return base;
     }
     if (at(p, TOK_TRUE) || at(p, TOK_FALSE)) {
         Node *n = alloc_node(NODE_BOOL_LIT, line);

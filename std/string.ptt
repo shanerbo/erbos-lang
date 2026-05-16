@@ -1,0 +1,76 @@
+// std/string — String type and methods (P6.0b).
+//
+// `String` is the canonical string type after the P3.4 cutover.
+// String literals in source code lower to a `String` struct value
+// at compile time (a 4-quad header in rodata, owned=0). Concat
+// operations allocate fresh headers with owned=1.
+//
+// The struct layout is contractual with the codegen — iremit
+// emits literal headers in this exact field order and offsets:
+//   cap   at offset 0
+//   count at offset 8
+//   data  at offset 16
+//   owned at offset 24
+//
+// Most method bodies here are presently thin wrappers over the
+// existing C-runtime helpers (_str_eq, _str_concat, _str_len,
+// _char_at, _int_to_str, _yell_str). That keeps the rewrite
+// observably correct while we migrate the call sites; later
+// commits will fill in pure-Potato bodies where the perf delta
+// from the wrapper overhead matters.
+
+String is {
+  cap   int
+  count int
+  data  int
+  owned int
+}
+
+// Length in bytes.
+String.len(self String) int {
+  give self.count
+}
+
+// Equality. Calls into the C-runtime _str_eq for now; the
+// implementation already operates on String headers (P3.4).
+// (Method name is `equals` rather than `eq` to avoid colliding
+// with the `eq` operator keyword in method-call syntax.)
+String.equals(self String, other String) bool {
+  // _str_eq returns 1/0; cast to bool via the existing
+  // bool-from-int pipeline.
+  give str_eq(self, other) eq 1
+}
+
+// Concatenation. Returns a newly-allocated String (owned=1).
+String.concat(self String, other String) String {
+  give str_concat(self, other)
+}
+
+// Single-byte access. Returns the byte at `i` as an int (0-255).
+// Bounds-checked: panics on out-of-range index.
+String.byte_at(self String, i int) int {
+  i lt 0 ?{ panic_oob() }
+  i ge self.count ?{ panic_oob() }
+  give mem_load_byte(self.data, i)
+}
+
+// 1-character String containing the byte at `i`. Allocates.
+String.char_at(self String, i int) String {
+  give char_at(self, i)
+}
+
+// Empty-string check.
+String.empty(self String) bool {
+  give self.count eq 0
+}
+
+// Print to stdout with a trailing newline.
+String.yell(self String) {
+  yell_str(self)
+}
+
+// int.to_string — base-10 decimal representation. Wraps
+// _int_to_str for now; pure-Potato body lands later.
+int.to_string(self int) String {
+  give int_to_str(self)
+}

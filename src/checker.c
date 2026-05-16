@@ -67,6 +67,17 @@ static Type make_map_of(Type key, Type val) {
 }
 
 static int types_equal(Type a, Type b) {
+    // P3.4: TYPE_STR and TYPE_STRUCT("String") describe the same
+    // in-memory representation (a String header). The language-
+    // primitive type spelling and the user-declared struct
+    // spelling are interchangeable so existing code that
+    // declares `s str` keeps working alongside new code that
+    // uses `s String`.
+    int a_is_string = (a.kind == TYPE_STR) ||
+        (a.kind == TYPE_STRUCT && a.struct_name && !strcmp(a.struct_name, "String"));
+    int b_is_string = (b.kind == TYPE_STR) ||
+        (b.kind == TYPE_STRUCT && b.struct_name && !strcmp(b.struct_name, "String"));
+    if (a_is_string && b_is_string) return 1;
     if (a.kind != b.kind) return 0;
     if (a.kind == TYPE_STRUCT) return a.struct_name && b.struct_name && !strcmp(a.struct_name, b.struct_name);
     return 1;
@@ -314,7 +325,10 @@ static Type check_expr(Checker *c, Node *n) {
                 return make_type(TYPE_INT);
             }
             if (!strcmp(name, "str_len")) { if (n->call.arg_count > 0) check_expr(c, n->call.args[0]); return make_type(TYPE_INT); }
+            if (!strcmp(name, "str_eq")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_INT); }
             if (!strcmp(name, "char_at")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_STR); }
+            if (!strcmp(name, "yell_str")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_VOID); }
+            if (!strcmp(name, "panic_oob")) { return make_type(TYPE_VOID); }
             if (!strcmp(name, "list_set")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_VOID); }
             if (!strcmp(name, "imap_set")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_VOID); }
             if (!strcmp(name, "imap_get")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_INT); }
@@ -323,6 +337,14 @@ static Type check_expr(Checker *c, Node *n) {
             if (!strcmp(name, "map_keys")) return make_type(TYPE_LIST);
             if (!strcmp(name, "map_set") || !strcmp(name, "map_len") || !strcmp(name, "list_len") || !strcmp(name, "list_push")) return make_type(TYPE_VOID);
             if (!strcmp(name, "list_pop")) return make_type(TYPE_INT);
+            // P3.4: these helpers return String headers now. We
+            // type them as TYPE_STR for back-compat with the
+            // existing dispatch (the operators + interpolation
+            // path keys on TYPE_STR), but allow them to flow into
+            // String-typed positions too. types_equal treats
+            // TYPE_STR as compatible with TYPE_STRUCT("String")
+            // for the same-bytes-different-spelling situation —
+            // see types_equal in this file.
             if (!strcmp(name, "str_concat")) return make_type(TYPE_STR);
             if (!strcmp(name, "int_to_str")) return make_type(TYPE_STR);
             // Raw memory primitives (P6.0) — callable from Potato so
@@ -432,6 +454,12 @@ static Type check_expr(Checker *c, Node *n) {
             // P3.2: methods on primitive types (str, int, bool). We dispatch
             // via the same find_method machinery as struct receivers — the
             // receiver-type "name" is just the primitive's spelling.
+            //
+            // P6.0b: TYPE_STR receivers also look up methods under
+            // "String" (the canonical stdlib struct name). This is what
+            // lets `s.len()` resolve to `String.len` for any value of
+            // type str — same in-memory layout post-P3.4, just two
+            // spellings of the same thing.
             const char *receiver_type_name = NULL;
             if (receiver_was_struct) {
                 receiver_type_name = obj_t.struct_name;
@@ -444,6 +472,13 @@ static Type check_expr(Checker *c, Node *n) {
             }
             if (receiver_type_name) {
                 FuncInfo *user_method = find_method(c, receiver_type_name, m);
+                // For TYPE_STR receivers, fall through to the
+                // String-named struct's methods if the primitive
+                // didn't have a match.
+                if (!user_method && obj_t.kind == TYPE_STR) {
+                    user_method = find_method(c, "String", m);
+                    if (user_method) receiver_type_name = "String";
+                }
                 if (user_method) {
                     // Implicit `self` is the receiver; user-declared params follow.
                     int expected = user_method->param_count - 1; // minus self

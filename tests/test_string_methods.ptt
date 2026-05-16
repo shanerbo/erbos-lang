@@ -1,0 +1,63 @@
+// Regression test: P6.0b std/string methods.
+//
+// `use std/string` brings the `String` struct and its methods
+// (.len, .equals, .byte_at, .char_at, .empty, .yell, .concat)
+// into scope. String literals in source already lower to a
+// String struct value (P3.4), so any string variable can call
+// these methods directly.
+
+use std/string
+
+test "len returns byte count" {
+  s is "hello"
+  assert(s.len() eq 5)
+  assert("".len() eq 0)
+  assert("a".len() eq 1)
+}
+
+test "equals matches identical strings" {
+  a is "abc"
+  b is "abc"
+  c is "abd"
+  assert(a.equals(b))
+  assert(not a.equals(c))
+}
+
+test "equals fast-path on count mismatch" {
+  assert(not "ab".equals("abc"))
+  assert(not "abc".equals("ab"))
+}
+
+test "byte_at reads ASCII codepoints" {
+  s is "ABC"
+  assert(s.byte_at(0) eq 65)
+  assert(s.byte_at(1) eq 66)
+  assert(s.byte_at(2) eq 67)
+}
+
+test "empty distinguishes empty from nonempty" {
+  assert("".empty())
+  assert(not "x".empty())
+}
+
+test "concat returns merged String" {
+  a is "hello "
+  b is "world"
+  c is a.concat(b)
+  assert(c.len() eq 11)
+  assert(c.equals("hello world"))
+}
+
+test "int.to_string round-trips" {
+  // int.to_string takes the int as `self`. Parser doesn't yet
+  // support `(42).method()` syntax, so we go via a temp.
+  n is 42
+  s is n.to_string()
+  assert(s.equals("42"))
+  m is -7
+  s2 is m.to_string()
+  assert(s2.equals("-7"))
+  z is 0
+  s3 is z.to_string()
+  assert(s3.equals("0"))
+}
