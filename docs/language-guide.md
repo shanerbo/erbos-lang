@@ -169,18 +169,26 @@ Both of K to V is {
 }
 
 spark {
-  // Two distinct instantiations of the same template.
-  bi is Box of int ()
+  // Two distinct instantiations of the same template. With no
+  // value expression after `is`, the compiler auto-constructs:
+  bi is Box of int
   bi.set(42)
-  bs is Box of str ()
+  bs is Box of str
   bs.set("hello")
   yell(bi.get())   // 42
   yell(bs.get())   // hello
 
-  p is Both of str to int ()
+  p is Both of str to int
   // ...
 }
 ```
+
+Auto-construct also works for an explicit constructor call —
+`bi is Box of int ()` is equivalent. The trailing `()` is a
+nullary call on the type expression. Either spelling is
+acceptable; the no-parens form is preferred since it matches
+the legacy `xs is list of int` shape and reads as "xs is a list
+of int" rather than "xs is a list-of-int call result".
 
 Rules:
 

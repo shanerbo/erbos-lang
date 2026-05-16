@@ -653,7 +653,24 @@ static Node *parse_stmt(Parser *p) {
                 return n;
             }
 
-            // Explicit type: check for type keywords or list/map (but NOT if followed by '(' — that's a constructor)
+            // Explicit type. Several shapes are accepted:
+            //
+            // (a) Lowercase legacy keywords (`list of T`, `map of K to V`,
+            //     `imap of int to V`, `task`) — paths through the
+            //     existing branches below; auto-constructed if no value
+            //     follows.
+            //
+            // (b) Primitive-named types (`int`, `str`, `bool`).
+            //
+            // (c) User-generic / capitalized struct types in the
+            //     word-style form: `IDENT [of TYPE [to TYPE]]`. With no
+            //     value expression after, this auto-constructs to
+            //     `IDENT(...)` — same convenience as (a), so users
+            //     can write `xs is List of int` without trailing `()`.
+            //     Triggered only when the IDENT isn't immediately
+            //     followed by `(` (which would be a constructor call
+            //     parsed as a regular expression).
+            int explicit_type_consumed = 0;
             if (at(p, TOK_INT) || at(p, TOK_STR_TYPE) || at(p, TOK_BOOL) ||
                 ((at(p, TOK_LIST) || at(p, TOK_MAP) || at(p, TOK_IMAP) || at(p, TOK_TASK)) && peek_at(p, 1)->type != TOK_LPAREN)) {
                 if (at(p, TOK_TASK)) {
@@ -684,12 +701,48 @@ static Node *parse_stmt(Parser *p) {
                     n->var_decl.type_name = cur(p)->value;
                     p->pos++;
                 }
+                explicit_type_consumed = 1;
+            } else if (at(p, TOK_IDENT) && peek_at(p, 1)->type == TOK_OF &&
+                       peek_at(p, 2)->type != TOK_LPAREN) {
+                // Capitalised user-generic type form, no parens:
+                //   xs is List of int
+                //   m  is Map of int to int
+                //   sm is StringMap of int
+                // parse_type_name reads it as a single legacy
+                // <>-bracketed string for the monomorphizer ("List<int>"
+                // etc.), which we stash in type_name. Auto-construct
+                // below builds the constructor call.
+                //
+                // Restriction: only fires when there's no `(` after
+                // the type expression (would be the explicit-
+                // constructor form `Box of int (...)` which is
+                // already handled as a regular expression elsewhere).
+                // We snapshot the position, parse the type, and
+                // back out if a `(` shows up — letting parse_expr
+                // handle the constructor-call form.
+                int saved_pos = p->pos;
+                char *parsed_type = parse_type_name(p);
+                if (at(p, TOK_LPAREN)) {
+                    // Explicit constructor call follows; rewind so
+                    // parse_expr below sees the full
+                    // `IDENT of ... (...)` shape.
+                    p->pos = saved_pos;
+                    free(parsed_type);
+                } else {
+                    n->var_decl.type_name = parsed_type;
+                    explicit_type_consumed = 1;
+                }
             }
-            // If no value expression — auto-construct for list/map/task, error for others
+            // If no value expression — auto-construct.
             if (at(p, TOK_NEWLINE) || at(p, TOK_EOF)) {
-                if (n->var_decl.type_name && (!strcmp(n->var_decl.type_name, "list") ||
-                    !strcmp(n->var_decl.type_name, "map") || !strcmp(n->var_decl.type_name, "imap") || !strcmp(n->var_decl.type_name, "task"))) {
-                    // Auto-create constructor: list() / map() / task()
+                if (explicit_type_consumed && n->var_decl.type_name) {
+                    // Auto-create the constructor call. For lowercase
+                    // legacy keywords (list / map / imap / task) the
+                    // call name is the keyword spelling (irgen remaps
+                    // them to `_list_new` / `_map_new` etc.). For user
+                    // types the call name is the parsed type string,
+                    // which goes through monomorphization just like
+                    // any other constructor call.
                     Node *call = alloc_node(NODE_CALL, line);
                     call->call.name = n->var_decl.type_name;
                     call->call.args = NULL;

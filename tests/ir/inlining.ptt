@@ -36,11 +36,11 @@ Counter.value(self Counter) int {
 spark {
   // Single-instantiation Box of int — inlining should turn three
   // `bl _Box__int_get` calls into three direct loads.
-  bi is Box of int ()
+  bi is Box of int
   bi.set(42)
   yell(bi.get())
 
-  bs is Box of int ()
+  bs is Box of int
   bs.set(100)
   yell(bs.get())
 

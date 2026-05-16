@@ -21,11 +21,11 @@ Box.get(self Box of T) T {
 }
 
 spark {
-  bi is Box of int ()
+  bi is Box of int
   bi.set(42)
   yell(bi.get())
 
-  bs is Box of str ()
+  bs is Box of str
   bs.set("hello")
   yell(bs.get())
 

@@ -447,6 +447,13 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
                 }
                 return dst;
             }
+            // Type-only coercions (P6.3 prep). Both produce zero IR
+            // — the argument's vreg flows through unchanged, only
+            // the checker's view of its type is different.
+            else if ((!strcmp(call_name, "ptr_of") || !strcmp(call_name, "as_string"))
+                     && n->call.arg_count == 1) {
+                return gen_expr(c, n->call.args[0]);
+            }
             else if (!strcmp(call_name, "mem_store_byte") && n->call.arg_count == 3) {
                 VReg ptr = gen_expr(c, n->call.args[0]);
                 Node *off_node = n->call.args[1];

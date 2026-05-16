@@ -184,6 +184,27 @@ int main(int argc, char **argv) {
             }
             program->program.enums.items[program->program.enums.count++] = e;
         }
+        // Recursively absorb the imported file's own `use` directives
+        // into the parent program. This is what makes
+        // `use std/string_map` (which itself does `use std/string`)
+        // pull `String` into the parent program's struct table — no
+        // explicit re-import needed at the top of the user's file.
+        // Deduplicate: skip a path that's already present.
+        for (int rui = 0; rui < imp_prog->program.use_count; rui++) {
+            const char *rpath = imp_prog->program.use_paths[rui];
+            int already = 0;
+            for (int k = 0; k < program->program.use_count; k++) {
+                if (!strcmp(program->program.use_paths[k], rpath)) { already = 1; break; }
+            }
+            if (already) continue;
+            int idx2 = program->program.use_count++;
+            program->program.use_paths = realloc(program->program.use_paths,
+                program->program.use_count * sizeof(char *));
+            program->program.use_aliases = realloc(program->program.use_aliases,
+                program->program.use_count * sizeof(char *));
+            program->program.use_paths[idx2] = strdup(rpath);
+            program->program.use_aliases[idx2] = strdup(imp_prog->program.use_aliases[rui]);
+        }
         free(imp_src);
     }
 

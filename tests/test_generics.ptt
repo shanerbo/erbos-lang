@@ -50,21 +50,21 @@ Both.get_value(self Both of K to V) V {
 }
 
 test "generic Box of int" {
-  b is Box of int ()
+  b is Box of int
   b.set(42)
   assert(b.get() eq 42)
 }
 
 test "generic Box of str" {
-  b is Box of str ()
+  b is Box of str
   b.set("hello")
   // String comparison flows through _str_eq.
   assert(b.get() eq "hello")
 }
 
 test "two distinct instantiations of the same template" {
-  bi is Box of int ()
-  bs is Box of str ()
+  bi is Box of int
+  bs is Box of str
   bi.set(7)
   bs.set("seven")
   assert(bi.get() eq 7)
@@ -72,7 +72,7 @@ test "two distinct instantiations of the same template" {
 }
 
 test "two-parameter generic Both of str to int" {
-  p is Both of str to int ()
+  p is Both of str to int
   p.set_key("alice")
   p.set_value(95)
   assert(p.get_key() eq "alice")
@@ -80,7 +80,7 @@ test "two-parameter generic Both of str to int" {
 }
 
 test "two-parameter generic Both of int to int" {
-  p is Both of int to int ()
+  p is Both of int to int
   p.set_key(10)
   p.set_value(20)
   assert(p.get_key() eq 10)

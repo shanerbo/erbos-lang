@@ -329,6 +329,22 @@ static Type check_expr(Checker *c, Node *n) {
             if (!strcmp(name, "char_at")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_STR); }
             if (!strcmp(name, "yell_str")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_VOID); }
             if (!strcmp(name, "panic_oob")) { return make_type(TYPE_VOID); }
+            // Pointer-shape coercions (P6.3 prep): the language has
+            // no cast operator, so to store a `String` (or any
+            // pointer-shaped struct) into an int-typed slot, we
+            // expose `ptr_of(x)` as an identity primitive that
+            // re-types its argument as int. Same shape in reverse
+            // for the store-then-load round-trip via mem_load:
+            // `as_string(p)` re-types an int as a String. Both
+            // generate zero IR — they're type-system-only.
+            if (!strcmp(name, "ptr_of")) {
+                if (n->call.arg_count > 0) check_expr(c, n->call.args[0]);
+                return make_type(TYPE_INT);
+            }
+            if (!strcmp(name, "as_string")) {
+                if (n->call.arg_count > 0) check_expr(c, n->call.args[0]);
+                return make_struct("String");
+            }
             if (!strcmp(name, "list_set")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_VOID); }
             if (!strcmp(name, "imap_set")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_VOID); }
             if (!strcmp(name, "imap_get")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_INT); }

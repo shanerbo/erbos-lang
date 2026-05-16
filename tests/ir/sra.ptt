@@ -52,7 +52,7 @@ Pair is {
 spark {
   // Straight-line: alloc + field write + field read all in entry block.
   // (Per-block SRA already handled this; included for completeness.)
-  b is Box of int ()
+  b is Box of int
   b.set(42)
   yell(b.get())             // 42
 

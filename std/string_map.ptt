@@ -1,0 +1,60 @@
+// std/string_map — Map keyed by String values.
+//
+// Same layout as std/map's Map of K to V (24-byte header, 16-byte
+// entries), but uses String.equals for key comparison. Two String
+// values can be byte-identical but have distinct header pointers;
+// only equals knows that.
+//
+// Until the language gets generic K.equals dispatch, string-keyed
+// maps live as their own type.
+
+use std/string
+
+StringMap of V is {
+  cap   int
+  count int
+  data  int
+}
+
+StringMap.len(self StringMap of V) int {
+  give self.count
+}
+
+StringMap.set(self ref StringMap of V, k String, v V) {
+  // Linear-probe scan for existing key. Each entry stores the
+  // String header pointer in slot N*16, value in N*16+8.
+  through (i from 0 to self.count by 1) {
+    existing_ptr is mem_load(self.data, i * 16)
+    existing is as_string(existing_ptr)
+    k.equals(existing) ?{
+      mem_store(self.data, i * 16 + 8, v)
+      give
+    }
+  }
+  self.count ge self.cap ?{
+    new_cap is self.cap * 2
+    new_cap eq 0 ?{ new_cap be 8 }
+    new_data is heap_alloc(new_cap * 16)
+    through (i from 0 to self.count by 1) {
+      mem_store(new_data, i * 16, mem_load(self.data, i * 16))
+      mem_store(new_data, i * 16 + 8, mem_load(self.data, i * 16 + 8))
+    }
+    self.cap gt 0 ?{ heap_free(self.data, self.cap * 16) }
+    self.data be new_data
+    self.cap be new_cap
+  }
+  mem_store(self.data, self.count * 16, ptr_of(k))
+  mem_store(self.data, self.count * 16 + 8, v)
+  self.count be self.count + 1
+}
+
+StringMap.get(self StringMap of V, k String) V {
+  through (i from 0 to self.count by 1) {
+    existing_ptr is mem_load(self.data, i * 16)
+    existing is as_string(existing_ptr)
+    k.equals(existing) ?{
+      give mem_load(self.data, i * 16 + 8)
+    }
+  }
+  give 0
+}
