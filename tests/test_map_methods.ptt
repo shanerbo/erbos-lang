@@ -1,0 +1,60 @@
+// Regression test: P6.2 std/map — generic Map of K to V with
+// set/get/len for int-comparable keys (K is `int` or any
+// pointer-shaped value).
+//
+// Pure Potato: heap_alloc + mem_load/mem_store. Linear-probe
+// scan for lookup; capacity doubles on insert when full.
+// String-keyed maps are deferred — they need K.equals dispatch
+// which doesn't exist yet.
+
+use std/map
+
+test "len reflects inserted count" {
+  m is Map of int to int ()
+  assert(m.len() eq 0)
+  m.set(1, 10)
+  assert(m.len() eq 1)
+  m.set(2, 20)
+  m.set(3, 30)
+  assert(m.len() eq 3)
+}
+
+test "get returns inserted values" {
+  m is Map of int to int ()
+  m.set(1, 100)
+  m.set(2, 200)
+  m.set(3, 300)
+  assert(m.get(1) eq 100)
+  assert(m.get(2) eq 200)
+  assert(m.get(3) eq 300)
+}
+
+test "get on missing key returns 0" {
+  m is Map of int to int ()
+  m.set(1, 100)
+  assert(m.get(99) eq 0)
+  assert(m.get(0) eq 0)
+}
+
+test "re-set updates in place" {
+  m is Map of int to int ()
+  m.set(1, 100)
+  m.set(2, 200)
+  m.set(1, 999)
+  assert(m.len() eq 2)
+  assert(m.get(1) eq 999)
+  assert(m.get(2) eq 200)
+}
+
+test "growth past initial capacity" {
+  m is Map of int to int ()
+  // Initial cap is 8 — insert 50 distinct keys to force
+  // multiple doublings.
+  through (i from 0 to 50 by 1) {
+    m.set(i * 7, i * 100)
+  }
+  assert(m.len() eq 50)
+  assert(m.get(0) eq 0)
+  assert(m.get(7) eq 100)
+  assert(m.get(49 * 7) eq 4900)
+}
