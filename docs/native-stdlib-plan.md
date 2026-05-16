@@ -18,11 +18,22 @@
 | P5.4 | Bounds-check elimination (lower-bound; upper-bound deferred) | ✅ done |
 | P5.5 | Loop-invariant code motion (LICM) | ✅ done |
 | P6.0 | Raw memory primitives callable from Potato | ✅ done |
-| P6.1 | Pure-Potato `std/list.ptt` | pending |
-| P6.2 | Pure-Potato `std/map.ptt` | pending |
 | P3.1 | Switch generics syntax from `<>` to `of`/`to` | ✅ done |
-| P6.3 | Drop `list`/`map`/`imap` keywords; route literals to stdlib types | pending |
-| P6.4 | Delete C-emitted list/map/imap builtins | pending |
+| P3.3a | Byte-level mem primitives + write_bytes | ✅ done |
+| P3.4 | String literals lower to `String` struct value | ✅ done |
+| P6.0b | Pure-Potato `std/string.ptt` (String + methods) | ✅ done |
+| P6.1 | Pure-Potato `std/list.ptt` (`List of T`) | ✅ done |
+| P6.2 | Pure-Potato `std/map.ptt` (`Map of int to V`) | ✅ done |
+| P3.5 | Operator dispatch (`+`, `eq`) routes to user methods | deferred |
+| P6.3 | Drop `list`/`map`/`imap` keywords; route literals to stdlib | deferred |
+| P6.4 | Delete C-emitted list/map/imap builtins | deferred |
+| P3.3b | Delete C string runtime | deferred |
+
+The deferred items are coherent follow-ups that don't change
+end-user capability — they only collapse the two parallel
+surfaces (keyword form like `list of int` and stdlib form like
+`use std/list; List of int`) into one. They're safe to land
+incrementally in a future session.
 
 After P3 the language can *express* `Map<K, V>` as pure Potato. P4 and P5
 are the performance work that earns parity with the C-emitted built-in
