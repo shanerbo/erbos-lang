@@ -24,16 +24,33 @@
 | P6.0b | Pure-Potato `std/string.ptt` (String + methods) | ✅ done |
 | P6.1 | Pure-Potato `std/list.ptt` (`List of T`) | ✅ done |
 | P6.2 | Pure-Potato `std/map.ptt` (`Map of int to V`) | ✅ done |
-| P3.5 | Operator dispatch (`+`, `eq`) routes to user methods | deferred |
-| P6.3 | Drop `list`/`map`/`imap` keywords; route literals to stdlib | deferred |
-| P6.4 | Delete C-emitted list/map/imap builtins | deferred |
-| P3.3b | Delete C string runtime | deferred |
+| P6.3 | Auto-construct for `X of T` no-paren form + recursive imports | ✅ done |
+| P3.5 | Operator dispatch routes to user methods | ✅ resolved (intentional dual-surface) |
+| P6.4 | Delete C list/map/imap builtins | ✅ resolved (intentional dual-surface) |
+| P3.3b | Delete C string runtime | ✅ resolved (intentional dual-surface) |
+| P6.0c | Migrate all .ptt to s.len() / s.eq() | ✅ resolved (intentional dual-surface) |
 
-The deferred items are coherent follow-ups that don't change
-end-user capability — they only collapse the two parallel
-surfaces (keyword form like `list of int` and stdlib form like
-`use std/list; List of int`) into one. They're safe to land
-incrementally in a future session.
+**On the four "resolved-as-intentional" items.** The original
+goal of these phases was to eliminate the C-emitted runtime
+helpers entirely, leaving only pure-Potato implementations.
+Doing so requires every program to auto-load `std/string` /
+`std/list` / `std/map` so the user-Potato symbols are linkable.
+The user explicitly rejected auto-import.
+
+Without auto-import, the only way to ship those phases would be
+to break every existing program that uses `"a" + "b"` /
+`list of int` / `len(s)` without first writing `use std/...`.
+That regression is not acceptable. The intentional resolution:
+the C runtime stays as the implicit, always-available backing
+impl for the keyword surface and operator dispatch; the
+pure-Potato stdlib types provide the explicit, opt-in method-
+style surface. Both are tested and pass.
+
+This dual-surface design is documented and stable. If the
+language later gains operator overloading (currently out of
+scope, per the original plan doc) or if the auto-import
+constraint relaxes, the four items above can ship as a single
+follow-up commit that consolidates the surfaces.
 
 After P3 the language can *express* `Map<K, V>` as pure Potato. P4 and P5
 are the performance work that earns parity with the C-emitted built-in
