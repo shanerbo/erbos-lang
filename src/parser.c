@@ -1055,9 +1055,22 @@ Node *parser_parse(Parser *p) {
         // receiver type's `of T` clause appears inside the first param's
         // type string (`self ref Box of T`), and we recover the bound
         // type-parameter names from that string after parsing.
-        else if (at(p, TOK_IDENT) && peek_at(p, 1)->type == TOK_DOT &&
+        //
+        // Methods on primitive types (P3.2): the receiver token is a
+        // primitive type keyword (str / int / bool) instead of an
+        // identifier. We accept those and synthesize the receiver_type
+        // string from the keyword spelling. This is what allows
+        // `str.len(self str) int { ... }` to register `_str_len` as a
+        // method that `"hello".len()` dispatches to.
+        else if ((at(p, TOK_IDENT) || at(p, TOK_STR_TYPE) || at(p, TOK_INT) ||
+                  at(p, TOK_BOOL)) &&
+                 peek_at(p, 1)->type == TOK_DOT &&
                  peek_at(p, 2)->type == TOK_IDENT && peek_at(p, 3)->type == TOK_LPAREN) {
-            char *recv = eat(p, TOK_IDENT)->value;
+            char *recv;
+            if (at(p, TOK_STR_TYPE))      { recv = strdup("str");  p->pos++; }
+            else if (at(p, TOK_INT))      { recv = strdup("int");  p->pos++; }
+            else if (at(p, TOK_BOOL))     { recv = strdup("bool"); p->pos++; }
+            else                          { recv = eat(p, TOK_IDENT)->value; }
             eat(p, TOK_DOT);
             // parse_func_def reads from the method-name token onward.
             Node *m = parse_func_def(p);

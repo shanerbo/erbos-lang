@@ -409,14 +409,27 @@ static Type check_expr(Checker *c, Node *n) {
             // Save whether we knew the receiver type — used for the
             // "no such method" diagnostic if no built-in matches.
             int receiver_was_struct = (obj_t.kind == TYPE_STRUCT && obj_t.struct_name != NULL);
+            // P3.2: methods on primitive types (str, int, bool). We dispatch
+            // via the same find_method machinery as struct receivers — the
+            // receiver-type "name" is just the primitive's spelling.
+            const char *receiver_type_name = NULL;
             if (receiver_was_struct) {
-                FuncInfo *user_method = find_method(c, obj_t.struct_name, m);
+                receiver_type_name = obj_t.struct_name;
+            } else if (obj_t.kind == TYPE_STR) {
+                receiver_type_name = "str";
+            } else if (obj_t.kind == TYPE_INT) {
+                receiver_type_name = "int";
+            } else if (obj_t.kind == TYPE_BOOL) {
+                receiver_type_name = "bool";
+            }
+            if (receiver_type_name) {
+                FuncInfo *user_method = find_method(c, receiver_type_name, m);
                 if (user_method) {
                     // Implicit `self` is the receiver; user-declared params follow.
                     int expected = user_method->param_count - 1; // minus self
                     if (n->method_call.arg_count != expected) {
                         fprintf(stderr, "error:%d: method '%s.%s' expects %d arguments, got %d\n",
-                            n->line, obj_t.struct_name, m, expected, n->method_call.arg_count);
+                            n->line, receiver_type_name, m, expected, n->method_call.arg_count);
                         exit(1);
                     }
                     for (int j = 0; j < n->method_call.arg_count; j++) {
@@ -425,13 +438,13 @@ static Type check_expr(Checker *c, Node *n) {
                         if (arg_t.kind != TYPE_UNKNOWN && expected_t.kind != TYPE_UNKNOWN &&
                             !types_equal(arg_t, expected_t)) {
                             fprintf(stderr, "error:%d: argument %d of '%s.%s' expects '%s', got '%s'\n",
-                                n->line, j + 1, obj_t.struct_name, m,
+                                n->line, j + 1, receiver_type_name, m,
                                 type_name(expected_t), type_name(arg_t));
                             exit(1);
                         }
                     }
                     // Tag the call so codegen can emit the mangled symbol.
-                    n->method_call.resolved_struct_name = (char *)obj_t.struct_name;
+                    n->method_call.resolved_struct_name = (char *)receiver_type_name;
                     return user_method->return_type;
                 }
             }
@@ -805,11 +818,16 @@ void checker_run(Node *program) {
         c.funcs[i].param_types_str = f->func_def.param_types;
         c.funcs[i].param_is_ref = f->func_def.param_is_ref;
 
-        // Validate method shape: receiver type must exist as a struct or enum,
-        // and the method must declare at least one parameter (the receiver).
-        // The first parameter's declared type must match the receiver type.
+        // Validate method shape: receiver type must exist as a struct,
+        // an enum, or a primitive type (str / int / bool — methods on
+        // primitives shipped in P3.2). Method must declare at least one
+        // parameter (the receiver). First parameter's declared type
+        // must match the receiver type.
         if (f->func_def.receiver_type) {
-            if (!is_struct(&c, f->func_def.receiver_type)) {
+            int is_primitive_recv = (!strcmp(f->func_def.receiver_type, "str") ||
+                                     !strcmp(f->func_def.receiver_type, "int") ||
+                                     !strcmp(f->func_def.receiver_type, "bool"));
+            if (!is_primitive_recv && !is_struct(&c, f->func_def.receiver_type)) {
                 fprintf(stderr, "error:%d: method '%s.%s' attached to unknown type '%s'\n",
                     f->line, f->func_def.receiver_type, f->func_def.name,
                     f->func_def.receiver_type);
