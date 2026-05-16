@@ -502,6 +502,30 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
                         store_spill(out, alloc, inst->dst, 11);
                     break;
                 }
+                case IR_STORE_BYTE: {
+                    // *(byte*)(a + imm) = low byte of %b
+                    int ra = ensure_reg(out, alloc, inst->a);
+                    int rb;
+                    if (is_spilled(alloc, inst->b) && ra == 9) {
+                        fprintf(out, "    mov x10, x9\n");
+                        rb = ensure_reg(out, alloc, inst->b);
+                        ra = 10;
+                    } else {
+                        rb = ensure_reg(out, alloc, inst->b);
+                    }
+                    // strb takes the W form of the value reg.
+                    fprintf(out, "    strb w%d, [x%d, #%d]\n", rb, ra, (int)inst->imm);
+                    break;
+                }
+                case IR_LOAD_BYTE: {
+                    // %dst = zero-extended *(byte*)(a + imm)
+                    int ra = ensure_reg(out, alloc, inst->a);
+                    int d = is_spilled(alloc, inst->dst) ? 11 : phys(alloc, inst->dst);
+                    fprintf(out, "    ldrb w%d, [x%d, #%d]\n", d, ra, (int)inst->imm);
+                    if (is_spilled(alloc, inst->dst))
+                        store_spill(out, alloc, inst->dst, 11);
+                    break;
+                }
                 default:
                     break;
             }

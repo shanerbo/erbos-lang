@@ -428,6 +428,41 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
                 emit(c, (IRInst){.op = IR_CONST, .dst = dummy, .imm = 0});
                 return dummy;
             }
+            // Byte-level mem primitives (P3.3a). Mirror mem_load /
+            // mem_store but emit ldrb / strb which read/write a single
+            // byte. The dst of mem_load_byte is zero-extended into a
+            // 64-bit register; mem_store_byte writes only the low 8
+            // bits of the value.
+            else if (!strcmp(call_name, "mem_load_byte") && n->call.arg_count == 2) {
+                VReg ptr = gen_expr(c, n->call.args[0]);
+                Node *off_node = n->call.args[1];
+                VReg dst = new_vreg(c);
+                if (off_node->type == NODE_INT_LIT) {
+                    emit(c, (IRInst){.op = IR_LOAD_BYTE, .dst = dst, .a = ptr, .imm = off_node->int_lit.value});
+                } else {
+                    VReg off_v = gen_expr(c, off_node);
+                    VReg addr = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_ADD, .dst = addr, .a = ptr, .b = off_v});
+                    emit(c, (IRInst){.op = IR_LOAD_BYTE, .dst = dst, .a = addr, .imm = 0});
+                }
+                return dst;
+            }
+            else if (!strcmp(call_name, "mem_store_byte") && n->call.arg_count == 3) {
+                VReg ptr = gen_expr(c, n->call.args[0]);
+                Node *off_node = n->call.args[1];
+                VReg val = gen_expr(c, n->call.args[2]);
+                if (off_node->type == NODE_INT_LIT) {
+                    emit(c, (IRInst){.op = IR_STORE_BYTE, .a = ptr, .b = val, .imm = off_node->int_lit.value});
+                } else {
+                    VReg off_v = gen_expr(c, off_node);
+                    VReg addr = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_ADD, .dst = addr, .a = ptr, .b = off_v});
+                    emit(c, (IRInst){.op = IR_STORE_BYTE, .a = addr, .b = val, .imm = 0});
+                }
+                VReg dummy = new_vreg(c);
+                emit(c, (IRInst){.op = IR_CONST, .dst = dummy, .imm = 0});
+                return dummy;
+            }
             else if (!strcmp(call_name, "len")) {
                 if (n->call.arg_count == 1) {
                     Node *arg = n->call.args[0];

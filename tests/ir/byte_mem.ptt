@@ -1,0 +1,56 @@
+// Regression test: P3.3a byte-level memory primitives.
+//
+// Three new primitives:
+//   mem_load_byte(p int, off int) int        — *(byte*)(p+off), zero-extended
+//   mem_store_byte(p int, off int, v int)    — low byte of v -> (p+off)
+//   write_bytes(p int, n int)                — raw write(2) syscall
+//
+// These are the building blocks std/string.ptt will use to
+// manipulate UTF-8 byte buffers. They round-trip through the
+// IR's new IR_LOAD_BYTE / IR_STORE_BYTE opcodes (lowered to ARM64
+// `ldrb` / `strb`), and write_bytes wraps the macOS write syscall
+// without any null-terminator scanning or trailing newline.
+//
+// Output must match across -O0/-O1/-O2.
+//
+// Expected output:
+//   hello
+//   104
+//   101
+//   108
+//   108
+//   111
+//   255
+//   0
+
+spark {
+  // Build "hello\n" byte by byte and write it to stdout.
+  buf is heap_alloc(6)
+  mem_store_byte(buf, 0, 104)
+  mem_store_byte(buf, 1, 101)
+  mem_store_byte(buf, 2, 108)
+  mem_store_byte(buf, 3, 108)
+  mem_store_byte(buf, 4, 111)
+  mem_store_byte(buf, 5, 10)
+  write_bytes(buf, 6)
+
+  // Read every char back; mem_load_byte zero-extends a single byte
+  // into a 64-bit int, so each yell prints the ASCII value.
+  through (i from 0 to 5 by 1) {
+    yell(mem_load_byte(buf, i))
+  }
+
+  heap_free(buf, 6)
+
+  // Variable-offset path. mem_store_byte should mask down to one
+  // byte even when the source int has higher bits set: storing
+  // 0x1FF (511) writes 0xFF (255) into the byte.
+  buf2 is heap_alloc(8)
+  off is 0
+  mem_store_byte(buf2, off, 511)
+  off be 1
+  mem_store_byte(buf2, off, 0)
+  yell(mem_load_byte(buf2, 0))      // 255 (low byte of 511)
+  yell(mem_load_byte(buf2, 1))      // 0
+  heap_free(buf2, 8)
+}

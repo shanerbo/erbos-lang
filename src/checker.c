@@ -354,6 +354,26 @@ static Type check_expr(Checker *c, Node *n) {
                 for (int j = 0; j < n->call.arg_count; j++) check_expr(c, n->call.args[j]);
                 return make_type(TYPE_VOID);
             }
+            // Byte-level mem primitives (P3.3a) — for std/string and any
+            // other byte-array work in pure Potato. mem_load reads/writes
+            // 8 bytes at a time which is wrong for UTF-8 byte access;
+            // these read/write a single byte (zero-extended to int on
+            // load, low byte stored on write).
+            if (!strcmp(name, "mem_load_byte")) {
+                for (int j = 0; j < n->call.arg_count; j++) check_expr(c, n->call.args[j]);
+                return make_type(TYPE_INT);
+            }
+            if (!strcmp(name, "mem_store_byte")) {
+                for (int j = 0; j < n->call.arg_count; j++) check_expr(c, n->call.args[j]);
+                return make_type(TYPE_VOID);
+            }
+            // Direct byte-buffer write to stdout (P3.3a) — what
+            // String.yell will be implemented in terms of. Bypasses
+            // _yell_str's null-terminator scan; takes (ptr, len).
+            if (!strcmp(name, "write_bytes")) {
+                for (int j = 0; j < n->call.arg_count; j++) check_expr(c, n->call.args[j]);
+                return make_type(TYPE_VOID);
+            }
             // User function
             FuncInfo *fi = find_func(c, name);
             if (!fi) {

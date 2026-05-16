@@ -56,6 +56,24 @@ static void emit_yell_str(FILE *out) {
     fprintf(out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 }
 
+// P3.3a primitive: _write_bytes(x0=ptr, x1=len) -> void
+// Writes `len` bytes starting at `ptr` to stdout via the macOS
+// write(2) syscall. No null terminator scanning, no trailing
+// newline — pure raw byte output. Used as the building block for
+// pure-Potato String.yell once String becomes a stdlib struct.
+static void emit_write_bytes(FILE *out) {
+    fprintf(out, "// built-in: _write_bytes(x0=ptr, x1=len)\n");
+    fprintf(out, ".globl _write_bytes\n.p2align 2\n_write_bytes:\n");
+    fprintf(out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
+    // syscall write(fd=1, buf=x0_in, len=x1_in): x16=4, x0=fd, x1=buf, x2=len.
+    fprintf(out, "    mov x2, x1\n");        // len -> x2
+    fprintf(out, "    mov x1, x0\n");        // ptr -> x1
+    fprintf(out, "    mov x0, #1\n");        // fd=1 (stdout)
+    fprintf(out, "    mov x16, #4\n");       // SYS_write on Darwin
+    fprintf(out, "    svc #0x80\n");
+    fprintf(out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
+}
+
 static void emit_yell_dispatch(FILE *out) {
     fprintf(out, "// built-in: _yell (auto-dispatch int/str)\n");
     fprintf(out, ".globl _yell\n.p2align 2\n_yell:\n");
@@ -550,6 +568,7 @@ static void emit_list_builtins(FILE *out) {
 void runtime_emit_builtins(FILE *out) {
     emit_yell_int(out);
     emit_yell_str(out);
+    emit_write_bytes(out);
     emit_yell_dispatch(out);
     emit_task_builtins(out);
     emit_heap_alloc(out);

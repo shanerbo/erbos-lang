@@ -30,8 +30,10 @@ typedef enum {
     IR_ARG,         // set arg N = %src (before call)
     IR_RET,         // return %src
     IR_RET_VOID,    // return void
-    IR_STORE,       // mem[%addr + offset] = %val
-    IR_LOAD,        // %dst = mem[%addr + offset]
+    IR_STORE,       // mem[%addr + offset] = %val (8-byte word)
+    IR_LOAD,        // %dst = mem[%addr + offset] (8-byte word)
+    IR_STORE_BYTE,  // *(byte*)(addr + offset) = low byte of %val
+    IR_LOAD_BYTE,   // %dst = zero-extended *(byte*)(addr + offset)
     IR_STORE_LOCAL, // local[slot] = %src
     IR_LOAD_LOCAL,  // %dst = local[slot]
     IR_ADDR_LOCAL,  // %dst = &local[slot]  (P5.3 stackify; materialises a
