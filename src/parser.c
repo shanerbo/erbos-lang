@@ -1050,13 +1050,50 @@ Node *parser_parse(Parser *p) {
     // Parse use declarations first
     while (at(p, TOK_USE)) {
         p->pos++;
-        // Build path: ident/ident/ident
+        // Build path: segment/segment/segment, where each segment
+        // is an identifier OR a type-name token (`list`, `map`,
+        // `imap`, `task`, `int`, `str`, `bool`, `void`). The
+        // type-name keywords also serve as legal stdlib filenames
+        // (e.g. `std/list`, `std/map`) — accept them in path
+        // position and capture their literal spelling.
         char path[256] = {0};
-        strcat(path, eat(p, TOK_IDENT)->value);
+        const char *seg;
+        if (at(p, TOK_IDENT)) {
+            seg = eat(p, TOK_IDENT)->value;
+        } else {
+            switch (cur(p)->type) {
+                case TOK_LIST: seg = "list"; break;
+                case TOK_MAP:  seg = "map";  break;
+                case TOK_IMAP: seg = "imap"; break;
+                case TOK_TASK: seg = "task"; break;
+                case TOK_INT:  seg = "int";  break;
+                case TOK_STR_TYPE: seg = "str"; break;
+                case TOK_BOOL: seg = "bool"; break;
+                default: seg = eat(p, TOK_IDENT)->value; break;
+            }
+            p->pos++;
+        }
+        strcat(path, seg);
         while (at(p, TOK_SLASH)) {
             p->pos++;
             strcat(path, "/");
-            strcat(path, eat(p, TOK_IDENT)->value);
+            const char *seg2;
+            if (at(p, TOK_IDENT)) {
+                seg2 = eat(p, TOK_IDENT)->value;
+            } else {
+                switch (cur(p)->type) {
+                    case TOK_LIST: seg2 = "list"; break;
+                    case TOK_MAP:  seg2 = "map";  break;
+                    case TOK_IMAP: seg2 = "imap"; break;
+                    case TOK_TASK: seg2 = "task"; break;
+                    case TOK_INT:  seg2 = "int";  break;
+                    case TOK_STR_TYPE: seg2 = "str"; break;
+                    case TOK_BOOL: seg2 = "bool"; break;
+                    default: seg2 = eat(p, TOK_IDENT)->value; break;
+                }
+                p->pos++;
+            }
+            strcat(path, seg2);
         }
         // Optional alias: as name
         char *alias = NULL;

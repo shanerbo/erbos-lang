@@ -1,0 +1,74 @@
+// Regression test: P6.1 std/list — generic List of T with
+// push/pop/get/set/len.
+//
+// These methods are pure Potato (heap_alloc + mem_load/mem_store
+// per element). Capacity grows at 2× on push when full.
+
+use std/string
+use std/list
+
+test "len reflects pushed count" {
+  xs is List of int ()
+  assert(xs.len() eq 0)
+  xs.push(10)
+  assert(xs.len() eq 1)
+  xs.push(20)
+  xs.push(30)
+  assert(xs.len() eq 3)
+}
+
+test "get returns pushed values in order" {
+  xs is List of int ()
+  xs.push(10)
+  xs.push(20)
+  xs.push(30)
+  assert(xs.get(0) eq 10)
+  assert(xs.get(1) eq 20)
+  assert(xs.get(2) eq 30)
+}
+
+test "set updates in place" {
+  xs is List of int ()
+  xs.push(10)
+  xs.push(20)
+  xs.set(1, 99)
+  assert(xs.get(0) eq 10)
+  assert(xs.get(1) eq 99)
+}
+
+test "pop returns last and shrinks" {
+  xs is List of int ()
+  xs.push(10)
+  xs.push(20)
+  xs.push(30)
+  v is xs.pop()
+  assert(v eq 30)
+  assert(xs.len() eq 2)
+  v2 is xs.pop()
+  assert(v2 eq 20)
+  assert(xs.len() eq 1)
+}
+
+test "growth past initial capacity" {
+  xs is List of int ()
+  // Initial cap is 8 — push 100 elements to force multiple
+  // doublings.
+  through (i from 0 to 100 by 1) {
+    xs.push(i * 3)
+  }
+  assert(xs.len() eq 100)
+  assert(xs.get(0) eq 0)
+  assert(xs.get(50) eq 150)
+  assert(xs.get(99) eq 297)
+}
+
+test "List of String stores header pointers" {
+  xs is List of String ()
+  xs.push("alpha")
+  xs.push("beta")
+  xs.push("gamma")
+  assert(xs.len() eq 3)
+  assert(xs.get(0).equals("alpha"))
+  assert(xs.get(1).equals("beta"))
+  assert(xs.get(2).equals("gamma"))
+}
