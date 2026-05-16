@@ -10,22 +10,22 @@
 //   hello
 //   3
 
-Box<T> is { value T }
+Box of T is { value T }
 
-Box<T>.set(self ref Box<T>, v T) {
+Box.set(self ref Box of T, v T) {
   self.value be v
 }
 
-Box<T>.get(self Box<T>) T {
+Box.get(self Box of T) T {
   give self.value
 }
 
 spark {
-  bi is Box<int>()
+  bi is Box of int ()
   bi.set(42)
   yell(bi.get())
 
-  bs is Box<str>()
+  bs is Box of str ()
   bs.set("hello")
   yell(bs.get())
 

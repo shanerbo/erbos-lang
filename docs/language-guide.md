@@ -146,37 +146,38 @@ Rules:
 
 ## Generics
 
-Structs and methods can be parametric. Type parameters appear in
-angle brackets immediately after the type name in the declaration head:
+Structs and methods can be parametric. Type parameters appear after
+`of` (one parameter) or `of … to …` (two parameters) immediately
+after the type name in the declaration head:
 
 ```
-Box<T> is {
+Box of T is {
   value T
 }
 
-Box<T>.set(self ref Box<T>, v T) {
+Box.set(self ref Box of T, v T) {
   self.value be v
 }
 
-Box<T>.get(self Box<T>) T {
+Box.get(self Box of T) T {
   give self.value
 }
 
-Pair<K, V> is {
+Both of K to V is {
   key K
   value V
 }
 
 spark {
   // Two distinct instantiations of the same template.
-  bi is Box<int>()
+  bi is Box of int ()
   bi.set(42)
-  bs is Box<str>()
+  bs is Box of str ()
   bs.set("hello")
   yell(bi.get())   // 42
   yell(bs.get())   // hello
 
-  p is Pair<str, int>()
+  p is Both of str to int ()
   // ...
 }
 ```
@@ -184,23 +185,25 @@ spark {
 Rules:
 
 - Type parameters are bound by the surrounding declaration. Inside
-  `Box<T>.set`, the name `T` refers to whatever the caller instantiated
-  the box with.
+  `Box.set`, the name `T` refers to whatever the caller instantiated
+  the box with — the compiler reads it off the receiver's `of T`
+  clause, so the method head doesn't repeat the parameter list.
 - Constructors at use sites carry their type arguments explicitly:
-  `Box<int>()`, `Pair<str, int>()`, `Map<str, int>()`. Plain
-  `Box()` is an error — the compiler does not currently infer type
-  arguments from context.
-- The compiler **monomorphizes**: each unique concrete form (`Box<int>`,
-  `Box<str>`, `Pair<str, int>`, …) becomes its own emitted struct
-  layout and its own emitted methods. There are no v-tables and no
-  runtime type tags.
-- Symbols are mangled by replacing the angle-bracket form with
-  underscores: `Box<int>` → `_Box__int`, `Map<str, int>` →
-  `_Map__str__int`, `List<Pair<str, int>>` → `_List__Pair__str__int`.
-- Nested generics are supported (`List<Pair<str, int>>` is fine);
-  parametric types may appear anywhere a type name is expected — in
-  struct fields, method parameter types, return types, and variable
-  declarations.
+  `Box of int ()`, `Both of str to int ()`, `Map of str to int ()`.
+  The compiler does not currently infer type arguments from context.
+- The compiler **monomorphizes**: each unique concrete form
+  (`Box of int`, `Box of str`, `Both of str to int`, …) becomes its
+  own emitted struct layout and its own emitted methods. There are
+  no v-tables and no runtime type tags.
+- Symbols are mangled positionally with `__` separators:
+  `Box of int` → `_Box__int`, `Map of str to int` → `_Map__str__int`,
+  `List of List of int` → `_List__List__int`.
+- Nested generics are supported and parse right-associatively, so
+  `Map of str to List of int` reads as `Map of str to (List of int)`.
+  No commas, no parens, no `<>` in type position — anywhere.
+- Up to two type parameters per generic (via `of T` or `of K to V`).
+  Three-or-more-parameter generics are not yet supported; wrap
+  multiple values in a named struct instead.
 - Instantiating an undeclared template is a compile error
   (`cannot instantiate 'Foo<int>' — no generic type named 'Foo' is in scope`).
 

@@ -20,7 +20,8 @@
 | P6.0 | Raw memory primitives callable from Potato | ✅ done |
 | P6.1 | Pure-Potato `std/list.ptt` | pending |
 | P6.2 | Pure-Potato `std/map.ptt` | pending |
-| P6.3 | Keyword desugaring (`list of T` → `List<T>` etc.) | pending |
+| P3.1 | Switch generics syntax from `<>` to `of`/`to` | ✅ done |
+| P6.3 | Drop `list`/`map`/`imap` keywords; route literals to stdlib types | pending |
 | P6.4 | Delete C-emitted list/map/imap builtins | pending |
 
 After P3 the language can *express* `Map<K, V>` as pure Potato. P4 and P5

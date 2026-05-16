@@ -1,9 +1,9 @@
-// Microbenchmark for Map<str, int> set/get/keys.
+// Microbenchmark for Map of str to int set/get/keys.
 //
 // This is the P6 baseline reference: we measure today's
 // C-emitted `_map_set` / `_map_get` / `_map_keys` performance
 // before rewriting std/map in pure Potato. After the rewrite,
-// the same workload running through `Map<str, int>` (the
+// the same workload running through `Map of str to int` (the
 // monomorphised user-defined type) must come within 1.2× of
 // the timing captured here.
 //

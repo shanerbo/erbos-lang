@@ -1,7 +1,7 @@
 // Instantiating a generic type that doesn't exist as a template
 // must error rather than silently produce a missing symbol.
 spark {
-  // No `Foo<T>` defined anywhere — must be a compile error.
-  x is Foo<int>()
+  // No `Foo of T` defined anywhere — must be a compile error.
+  x is Foo of int ()
   yell(0)
 }

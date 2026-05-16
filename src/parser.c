@@ -152,33 +152,43 @@ static Node *parse_primary(Parser *p) {
     if (at(p, TOK_IDENT)) {
         char *name = cur(p)->value;
 
-        // Parametric constructor: `Box<int>()` or `Map<str, int>()`.
-        // We disambiguate from a comparison by looking ahead: an
-        // angle-bracketed type-arg list contains only types and commas,
-        // is closed with '>', and is immediately followed by '('. If
-        // any token in the lookahead window is something other than
-        // IDENT / a primitive-type keyword / ',' / '<' / '>' before we
-        // see the closing '>(', or if the closing '>' is not followed
-        // by '(', this is not a constructor — fall through.
-        if (peek_at(p, 1)->type == TOK_LT) {
-            int look = 2;
-            int depth = 1;
+        // Parametric constructor: `Box of int ()` or `Map of str to int ()`.
+        // We disambiguate from a generic non-call expression with `of`
+        // inside (e.g. a hypothetical `xs is List of int` in a place
+        // that expects an expression) by looking ahead: a parametric
+        // constructor's type-arg list is followed by '('. The shape
+        // is IDENT `of` IDENT [`to` IDENT] `(`, optionally with the
+        // type args themselves being parametric (recursing through
+        // more `of` / `to`).
+        //
+        // Lookahead walker: starting at peek(1), consume only
+        // type-position tokens (IDENT / primitive keywords / `of` /
+        // `to`). Stop at the first token that can't be in a type
+        // position. If that token is `(`, it's a constructor call.
+        if (peek_at(p, 1)->type == TOK_OF) {
+            int look = 1;
             int ok = 1;
-            while (ok && depth > 0) {
+            int saw_type_token = 0;
+            while (ok) {
                 TokenType t = p->tokens[p->pos + look].type;
-                if (t == TOK_EOF || t == TOK_NEWLINE) { ok = 0; break; }
-                if (t == TOK_LT) depth++;
-                else if (t == TOK_GT) { depth--; if (depth == 0) { look++; break; } }
-                else if (t != TOK_IDENT && t != TOK_INT && t != TOK_STR_TYPE &&
-                         t != TOK_BOOL && t != TOK_LIST && t != TOK_MAP &&
-                         t != TOK_IMAP && t != TOK_TASK && t != TOK_VOID &&
-                         t != TOK_COMMA) { ok = 0; break; }
-                look++;
+                if (t == TOK_OF || t == TOK_TO) {
+                    look++;
+                    saw_type_token = 0;  // need a type ident next
+                    continue;
+                }
+                if (t == TOK_IDENT || t == TOK_INT || t == TOK_STR_TYPE ||
+                    t == TOK_BOOL || t == TOK_LIST || t == TOK_MAP ||
+                    t == TOK_IMAP || t == TOK_TASK || t == TOK_VOID) {
+                    look++;
+                    saw_type_token = 1;
+                    continue;
+                }
+                break;
             }
-            if (ok && p->tokens[p->pos + look].type == TOK_LPAREN) {
+            if (ok && saw_type_token && p->tokens[p->pos + look].type == TOK_LPAREN) {
                 // Parametric constructor confirmed. parse_type_name reads
-                // `Box<int>` as one allocated string, then we consume `(`
-                // and arguments as for an ordinary call.
+                // `Box of int` as `Box<int>` (legacy internal form) for
+                // the monomorphizer, then we consume `(` and arguments.
                 char *full = parse_type_name(p);
                 eat(p, TOK_LPAREN);
                 Node *n = alloc_node(NODE_CALL, line);
@@ -779,11 +789,22 @@ static Node *parse_enum_def(Parser *p) {
 
 // Read a single type expression and return it as one allocated string.
 // Handles bare names ("int", "str", "Counter") and parametric types
-// ("Box<int>", "Map<str, int>", "List<Pair<str, int>>"). Nested generics
-// are supported via depth-counting on '<' / '>'.
+// ("Box of int", "Map of str to int", "List of List of int").
 //
-// The monomorphization pass later parses these strings back into a
-// (template-name, [arg-types]) shape.
+// Word-style generics (P3.1):
+//   - `of T` introduces a single type parameter: "Box of int".
+//   - `of K to V` introduces a key->value pair: "Map of str to int".
+//   - Both `of` and `to` are right-associative, so
+//     "List of List of int" parses as "List of (List of int)" and
+//     "Map of str to List of int" parses as "Map of str to (List of int)".
+//   - There are NO commas, NO parens, and NO `<>` in type position.
+//
+// The output uses the legacy `<>` internal representation that the
+// monomorphizer pass parses (it splits on `<`, top-level `,`, and
+// matching `>`). Word-style "Box of int" emits "Box<int>"; "Map of
+// str to int" emits "Map<str,int>"; "List of List of int" emits
+// "List<List<int>>". This keeps the monomorph + mangling code below
+// unchanged — only the surface syntax differs from the original P3.
 static char *parse_type_name(Parser *p) {
     if (!at(p, TOK_IDENT) && !at(p, TOK_INT) && !at(p, TOK_STR_TYPE) &&
         !at(p, TOK_BOOL) && !at(p, TOK_VOID) && !at(p, TOK_LIST) &&
@@ -810,77 +831,77 @@ static char *parse_type_name(Parser *p) {
             default: head = ""; break;
         }
     }
-    // Most type expressions are short. 256 bytes covers `Map<str, list<Pair<str,int>>>` etc.
+    // Most type expressions are short.
     char buf[512];
     int len = (int)strlen(head);
     if (len >= (int)sizeof(buf)) len = (int)sizeof(buf) - 1;
     memcpy(buf, head, len);
     buf[len] = '\0';
     p->pos++;
-    if (at(p, TOK_LT)) {
-        // Append everything from `<` to its matching `>` verbatim.
-        int depth = 0;
-        while (1) {
-            if (at(p, TOK_EOF)) break;
-            if (at(p, TOK_LT)) depth++;
-            else if (at(p, TOK_GT)) {
-                depth--;
-                // Concatenate the '>' then stop.
-                if (len + 1 < (int)sizeof(buf)) buf[len++] = '>';
-                buf[len] = '\0';
-                p->pos++;
-                if (depth == 0) break;
-                continue;
-            }
-            const char *piece = cur(p)->value;
-            if (!piece) {
-                switch (cur(p)->type) {
-                    case TOK_LT: piece = "<"; break;
-                    case TOK_GT: piece = ">"; break;
-                    case TOK_COMMA: piece = ","; break;
-                    case TOK_INT: piece = "int"; break;
-                    case TOK_STR_TYPE: piece = "str"; break;
-                    case TOK_BOOL: piece = "bool"; break;
-                    case TOK_VOID: piece = "void"; break;
-                    case TOK_LIST: piece = "list"; break;
-                    case TOK_MAP: piece = "map"; break;
-                    case TOK_IMAP: piece = "imap"; break;
-                    case TOK_TASK: piece = "task"; break;
-                    default: piece = ""; break;
-                }
-            }
-            int plen = (int)strlen(piece);
+    // Word-style chain: optional `of T [to V]` continuations.
+    //   "Box of int"          -> "Box<int>"
+    //   "Map of str to int"   -> "Map<str,int>"
+    //   "List of List of int" -> "List<List<int>>"
+    // The first `of` opens a `<...>`; subsequent `to` separators
+    // become `,`; nested `of` recurses into another bracket pair.
+    if (at(p, TOK_OF)) {
+        p->pos++; // consume `of`
+        if (len + 1 < (int)sizeof(buf)) buf[len++] = '<';
+        char *inner = parse_type_name(p);
+        if (inner) {
+            int plen = (int)strlen(inner);
             if (len + plen < (int)sizeof(buf)) {
-                memcpy(buf + len, piece, plen);
+                memcpy(buf + len, inner, plen);
                 len += plen;
-                buf[len] = '\0';
             }
-            p->pos++;
+            free(inner);
         }
+        if (at(p, TOK_TO)) {
+            p->pos++; // consume `to`
+            if (len + 1 < (int)sizeof(buf)) buf[len++] = ',';
+            char *vinner = parse_type_name(p);
+            if (vinner) {
+                int plen = (int)strlen(vinner);
+                if (len + plen < (int)sizeof(buf)) {
+                    memcpy(buf + len, vinner, plen);
+                    len += plen;
+                }
+                free(vinner);
+            }
+        }
+        if (len + 1 < (int)sizeof(buf)) buf[len++] = '>';
+        buf[len] = '\0';
     }
     return strdup(buf);
 }
 
-// Parse an optional <T1, T2, ...> type-parameter list immediately after a
-// type name. Caller is positioned just after the IDENT; if the next token
-// is not TOK_LT this is a no-op and returns 0/NULL via out params.
+// Parse an optional `of T [to V]` type-parameter list immediately
+// after a type name in a struct or method declaration head.
+// Examples:
+//   Box of T is { ... }              -> ["T"]
+//   Map of K to V is { ... }         -> ["K", "V"]
+//   Counter is { ... }               -> []  (no params)
+//   Box.set(self ref Box of T, ...)  -> ["T"] when called on the receiver
+//
+// Caller is positioned just after the IDENT; if the next token is
+// not TOK_OF this is a no-op and returns 0/NULL via out params.
 //
 // Returns the number of type parameters parsed (0 if none).
 static int parse_type_params(Parser *p, char ***out_names) {
     *out_names = NULL;
-    if (!at(p, TOK_LT)) return 0;
-    p->pos++; // consume '<'
-    int cap = 4, count = 0;
+    if (!at(p, TOK_OF)) return 0;
+    p->pos++; // consume `of`
+    int cap = 2, count = 0;
     char **names = malloc(cap * sizeof(char *));
-    while (!at(p, TOK_GT) && !at(p, TOK_EOF)) {
+    names[count++] = eat(p, TOK_IDENT)->value;
+    if (at(p, TOK_TO)) {
+        p->pos++; // consume `to`
         if (count >= cap) {
             cap *= 2;
             names = realloc(names, cap * sizeof(char *));
         }
         names[count++] = eat(p, TOK_IDENT)->value;
-        if (at(p, TOK_COMMA)) p->pos++;
     }
-    eat(p, TOK_GT);
     *out_names = names;
     return count;
 }
@@ -1029,50 +1050,11 @@ Node *parser_parse(Parser *p) {
             t->test_def.body = parse_block(p);
             list_push(&program->program.tests, t);
         }
-        // Generic struct or method head: IDENT < IDENT (, IDENT)* >
-        // followed by either `is {` (struct) or `. IDENT (` (method).
-        // We resolve which by looking past the matching `>`.
-        else if (at(p, TOK_IDENT) && peek_at(p, 1)->type == TOK_LT &&
-                 peek_at(p, 2)->type == TOK_IDENT) {
-            // Walk forward to find matching `>`. Type-param lists never
-            // contain nested angle brackets in P3.b (parametric type
-            // arguments inside type-param decls would be P3.c work),
-            // so a single forward scan suffices.
-            int look = 2;
-            while (p->tokens[p->pos + look].type != TOK_GT &&
-                   p->tokens[p->pos + look].type != TOK_EOF &&
-                   p->tokens[p->pos + look].type != TOK_NEWLINE) {
-                look++;
-            }
-            // peek_at relative offsets after the closing '>':
-            //   look+1 = token immediately after '>'
-            TokenType after = p->tokens[p->pos + look + 1].type;
-            if (p->tokens[p->pos + look].type == TOK_GT && after == TOK_IS &&
-                p->tokens[p->pos + look + 2].type == TOK_LBRACE) {
-                // Generic struct: Foo<...> is { ... }
-                list_push(&program->program.structs, parse_struct_def(p));
-            } else if (p->tokens[p->pos + look].type == TOK_GT && after == TOK_DOT &&
-                       p->tokens[p->pos + look + 2].type == TOK_IDENT &&
-                       p->tokens[p->pos + look + 3].type == TOK_LPAREN) {
-                // Generic method: Foo<...>.bar(self ref Foo<...>, ...) ...
-                char *recv = eat(p, TOK_IDENT)->value;
-                char **recv_args = NULL;
-                int recv_arg_count = parse_type_params(p, &recv_args);
-                eat(p, TOK_DOT);
-                Node *m = parse_func_def(p);
-                m->func_def.receiver_type = recv;
-                m->func_def.receiver_type_args = recv_args;
-                m->func_def.receiver_type_arg_count = recv_arg_count;
-                list_push(&program->program.funcs, m);
-            } else {
-                // Not a generic decl head — fall through to the free
-                // function path so a leading `<` in a function body
-                // (e.g. as part of a return-type signature once that
-                // arrives) doesn't get consumed by mistake.
-                list_push(&program->program.funcs, parse_func_def(p));
-            }
-        }
         // Method def: IDENT . IDENT ( ... )   e.g.  Counter.bump(self ref Counter) { ... }
+        // Generic methods (Box.set, Map.set) take the same form — the
+        // receiver type's `of T` clause appears inside the first param's
+        // type string (`self ref Box of T`), and we recover the bound
+        // type-parameter names from that string after parsing.
         else if (at(p, TOK_IDENT) && peek_at(p, 1)->type == TOK_DOT &&
                  peek_at(p, 2)->type == TOK_IDENT && peek_at(p, 3)->type == TOK_LPAREN) {
             char *recv = eat(p, TOK_IDENT)->value;
@@ -1080,11 +1062,82 @@ Node *parser_parse(Parser *p) {
             // parse_func_def reads from the method-name token onward.
             Node *m = parse_func_def(p);
             m->func_def.receiver_type = recv;
+            // Extract receiver_type_args from the first param's type
+            // string. parse_type_name emits the legacy <>-bracketed
+            // form for the monomorphizer's benefit; we re-parse it
+            // here to lift the type variable names out.
+            //
+            // Examples:
+            //   first param type = "Box<T>"           -> ["T"]
+            //   first param type = "Map<K,V>"         -> ["K", "V"]
+            //   first param type = "Counter"          -> []
+            if (m->func_def.param_count > 0 && m->func_def.param_types[0]) {
+                const char *pt = m->func_def.param_types[0];
+                const char *lt = strchr(pt, '<');
+                const char *gt = strrchr(pt, '>');
+                if (lt && gt && gt > lt) {
+                    int cap = 2, count = 0;
+                    char **names = malloc(cap * sizeof(char *));
+                    const char *p2 = lt + 1;
+                    while (p2 < gt) {
+                        // Skip whitespace.
+                        while (p2 < gt && (*p2 == ' ' || *p2 == ',')) p2++;
+                        const char *start = p2;
+                        // Token is bounded by ',' or '>' or '<' (nested
+                        // arg start, e.g. "List<T>" — but for receiver
+                        // type-param extraction we only care about the
+                        // top-level idents, which are the type variables
+                        // bound by the receiver). Nested generics never
+                        // appear in a method's receiver-type clause: the
+                        // receiver is always `Type of T` or `Type of K to V`
+                        // with bare ident type variables.
+                        while (p2 < gt && *p2 != ',' && *p2 != '<' && *p2 != '>') p2++;
+                        int len2 = (int)(p2 - start);
+                        if (len2 > 0) {
+                            char *name2 = malloc(len2 + 1);
+                            memcpy(name2, start, len2);
+                            name2[len2] = '\0';
+                            if (count >= cap) { cap *= 2; names = realloc(names, cap * sizeof(char *)); }
+                            names[count++] = name2;
+                        }
+                    }
+                    if (count > 0) {
+                        m->func_def.receiver_type_args = names;
+                        m->func_def.receiver_type_arg_count = count;
+                    } else {
+                        free(names);
+                    }
+                }
+            }
             list_push(&program->program.funcs, m);
         }
         // Struct: IDENT IS {
         else if (at(p, TOK_IDENT) && peek_at(p, 1)->type == TOK_IS && peek_at(p, 2)->type == TOK_LBRACE) {
             list_push(&program->program.structs, parse_struct_def(p));
+        }
+        // Generic struct: IDENT OF IDENT [TO IDENT] IS {
+        //   Box of T is { ... }            -> name="Box", params=["T"]
+        //   Map of K to V is { ... }       -> name="Map", params=["K", "V"]
+        // parse_struct_def handles the params via parse_type_params
+        // (which now consumes `of T [to V]` instead of `<T,V>`).
+        else if (at(p, TOK_IDENT) && peek_at(p, 1)->type == TOK_OF &&
+                 peek_at(p, 2)->type == TOK_IDENT) {
+            // Look past the params to confirm `is {`. Shape:
+            //   IDENT of IDENT is {                      (1 param)
+            //   IDENT of IDENT to IDENT is {             (2 params)
+            int look = 3;
+            if (p->tokens[p->pos + look].type == TOK_TO) {
+                look++;
+                if (p->tokens[p->pos + look].type == TOK_IDENT) look++;
+                else { list_push(&program->program.funcs, parse_func_def(p)); skip_newlines(p); continue; }
+            }
+            if (p->tokens[p->pos + look].type == TOK_IS &&
+                p->tokens[p->pos + look + 1].type == TOK_LBRACE) {
+                list_push(&program->program.structs, parse_struct_def(p));
+            } else {
+                // Shape didn't match — fall through to free-function path.
+                list_push(&program->program.funcs, parse_func_def(p));
+            }
         }
         // Enum: IDENT IS NEWLINE IDENT or IDENT IS IDENT( — not followed by {
         else if (at(p, TOK_IDENT) && peek_at(p, 1)->type == TOK_IS &&
