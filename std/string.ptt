@@ -31,19 +31,47 @@ String.len(self String) int {
   give self.count
 }
 
-// Equality. Calls into the C-runtime _str_eq for now; the
-// implementation already operates on String headers (P3.4).
-// (Method name is `equals` rather than `eq` to avoid colliding
-// with the `eq` operator keyword in method-call syntax.)
-String.equals(self String, other String) bool {
-  // _str_eq returns 1/0; cast to bool via the existing
-  // bool-from-int pipeline.
-  give str_eq(self, other) eq 1
+// Empty-string check.
+String.empty(self String) bool {
+  give self.count eq 0
 }
 
-// Concatenation. Returns a newly-allocated String (owned=1).
+// Equality. Pure Potato — fast-paths on count mismatch, then walks
+// `count` bytes via mem_load_byte. (Method name is `equals` rather
+// than `eq` to avoid colliding with the `eq` operator keyword in
+// method-call syntax.)
+String.equals(self String, other String) bool {
+  self.count ne other.count ?{ give false }
+  through (i from 0 to self.count by 1) {
+    a is mem_load_byte(self.data, i)
+    b is mem_load_byte(other.data, i)
+    a ne b ?{ give false }
+  }
+  give true
+}
+
+// Concatenation. Allocates fresh bytes for self.count + other.count
+// (plus a trailing NUL for compatibility with anything still doing
+// pointer-based scans), copies both inputs in, then allocates a
+// String header (32 bytes) and populates cap, count, data, owned=1.
 String.concat(self String, other String) String {
-  give str_concat(self, other)
+  total is self.count + other.count
+  buf is heap_alloc(total + 1)
+  through (i from 0 to self.count by 1) {
+    mem_store_byte(buf, i, mem_load_byte(self.data, i))
+  }
+  through (j from 0 to other.count by 1) {
+    mem_store_byte(buf, self.count + j, mem_load_byte(other.data, j))
+  }
+  // NUL-terminate the data buffer.
+  mem_store_byte(buf, total, 0)
+  // Allocate the result String header.
+  out is String()
+  out.cap be total
+  out.count be total
+  out.data be buf
+  out.owned be 1
+  give out
 }
 
 // Single-byte access. Returns the byte at `i` as an int (0-255).
@@ -54,23 +82,95 @@ String.byte_at(self String, i int) int {
   give mem_load_byte(self.data, i)
 }
 
-// 1-character String containing the byte at `i`. Allocates.
+// 1-character String containing the byte at `i`. Allocates a 2-byte
+// buffer (char + NUL) and a fresh String header (owned=1).
 String.char_at(self String, i int) String {
-  give char_at(self, i)
-}
-
-// Empty-string check.
-String.empty(self String) bool {
-  give self.count eq 0
+  i lt 0 ?{ panic_oob() }
+  i ge self.count ?{ panic_oob() }
+  buf is heap_alloc(2)
+  mem_store_byte(buf, 0, mem_load_byte(self.data, i))
+  mem_store_byte(buf, 1, 0)
+  out is String()
+  out.cap be 1
+  out.count be 1
+  out.data be buf
+  out.owned be 1
+  give out
 }
 
 // Print to stdout with a trailing newline.
 String.yell(self String) {
-  yell_str(self)
+  write_bytes(self.data, self.count)
+  // Trailing newline. Allocate a tiny one-byte scratch on the heap;
+  // the cost beats spinning up a stack-buffer dance per call.
+  // (A future rev could materialise the literal "\\n" once in
+  // rodata and reuse it everywhere.)
+  nl is heap_alloc(1)
+  mem_store_byte(nl, 0, 10)
+  write_bytes(nl, 1)
+  heap_free(nl, 1)
 }
 
-// int.to_string — base-10 decimal representation. Wraps
-// _int_to_str for now; pure-Potato body lands later.
+// int.to_string — base-10 decimal representation. Pure Potato.
+// For 0 returns "0"; for negatives prefixes '-' and formats the
+// absolute value; otherwise repeated divmod-by-10 builds digits
+// in reverse, then reverses them in place.
 int.to_string(self int) String {
-  give int_to_str(self)
+  // Special case: 0
+  self eq 0 ?{
+    buf is heap_alloc(2)
+    mem_store_byte(buf, 0, 48)    // '0'
+    mem_store_byte(buf, 1, 0)
+    out is String()
+    out.cap be 1
+    out.count be 1
+    out.data be buf
+    out.owned be 1
+    give out
+  }
+
+  // Capture sign and absolute value.
+  is_neg is 0
+  v is self
+  self lt 0 ?{
+    is_neg be 1
+    v be 0 - self
+  }
+
+  // 64-bit signed max is 19 digits + sign + NUL = 21 bytes.
+  buf is heap_alloc(24)
+  pos is 0
+  is_neg eq 1 ?{
+    mem_store_byte(buf, 0, 45)    // '-'
+    pos be 1
+  }
+
+  // Write digits in reverse from `pos`.
+  start is pos
+  infi (v gt 0) {
+    d is v mod 10
+    mem_store_byte(buf, pos, 48 + d)
+    pos be pos + 1
+    v be v / 10
+  }
+
+  // Reverse the digits in [start, pos).
+  end is pos - 1
+  through (k from start to (start + (end - start + 1) / 2) by 1) {
+    mirror is end - (k - start)
+    a is mem_load_byte(buf, k)
+    b is mem_load_byte(buf, mirror)
+    mem_store_byte(buf, k, b)
+    mem_store_byte(buf, mirror, a)
+  }
+
+  // NUL-terminate.
+  mem_store_byte(buf, pos, 0)
+
+  out is String()
+  out.cap be pos
+  out.count be pos
+  out.data be buf
+  out.owned be 1
+  give out
 }
