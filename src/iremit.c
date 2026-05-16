@@ -58,11 +58,38 @@ void iremit_finalize_data(FILE *out) {
     if (g_string_pool.count == 0) return;
     fprintf(out, ".section __DATA,__data\n");
     for (int i = 0; i < g_string_pool.count; i++) {
-        // Escape any embedded characters that the assembler dislikes.
+        // P3.4: every string literal is now lowered to a `String`
+        // struct value (cap, count, data, owned). The rodata for one
+        // literal is laid out as:
+        //
+        //   _strbytes<i>: .asciz "..."        (the raw UTF-8 bytes,
+        //                                      null-terminated for
+        //                                      compatibility with
+        //                                      C-runtime helpers that
+        //                                      still walk to NUL)
+        //   .p2align 3
+        //   _str<i>:
+        //     .quad cap                       (== count for literals)
+        //     .quad count                     (byte length)
+        //     .quad _strbytes<i>              (data ptr)
+        //     .quad 0                         (owned=0; never free)
+        //
+        // IR_LOAD_STR loads the address of `_str<i>`, which IS the
+        // `String` value. C-runtime helpers (_str_eq, _str_concat,
+        // _str_len, _yell_str, _int_to_str, _char_at) take/return
+        // these headers and unpack the data pointer at offset 16.
+        const char *s = g_string_pool.items[i];
+        int n = (int)strlen(s);
         // For Potato source today, strings only contain printable
         // ASCII without quotes, so verbatim emission is enough; if
         // that ever changes, escape backslash and quote here.
-        fprintf(out, "_str%d: .asciz \"%s\"\n", i, g_string_pool.items[i]);
+        fprintf(out, "_strbytes%d: .asciz \"%s\"\n", i, s);
+        fprintf(out, ".p2align 3\n");
+        fprintf(out, "_str%d:\n", i);
+        fprintf(out, "    .quad %d\n", n);
+        fprintf(out, "    .quad %d\n", n);
+        fprintf(out, "    .quad _strbytes%d\n", i);
+        fprintf(out, "    .quad 0\n");
     }
     g_string_pool.count = 0;
 }

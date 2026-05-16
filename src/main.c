@@ -234,10 +234,21 @@ int main(int argc, char **argv) {
         }                                                                       \
         iremit_finalize_data(ir_out);                                           \
         if (test_count > 0) {                                                   \
+            /* P3.4: each test name is a `String` header (4 quads:              \
+             * cap, count, data, owned=0) so the runtime test runner            \
+             * can pass it to `_yell_str` (which now reads count from           \
+             * the header instead of scanning bytes). The bytes live            \
+             * in `_test_name_<i>_bytes`; the header is at                      \
+             * `_test_name_<i>`. */                                              \
             fprintf(ir_out, ".section __DATA,__data\n");                        \
             for (int i = 0; i < test_count; i++) {                              \
                 Node *t = program->program.tests.items[i];                      \
-                fprintf(ir_out, "_test_name_%d: .asciz \"%s\"\n", i, t->test_def.name); \
+                int tn = (int)strlen(t->test_def.name);                         \
+                fprintf(ir_out, "_test_name_%d_bytes: .asciz \"%s\"\n", i,      \
+                    t->test_def.name);                                          \
+                fprintf(ir_out, ".p2align 3\n_test_name_%d:\n", i);             \
+                fprintf(ir_out, "    .quad %d\n    .quad %d\n", tn, tn);        \
+                fprintf(ir_out, "    .quad _test_name_%d_bytes\n    .quad 0\n", i); \
             }                                                                   \
             fprintf(ir_out, ".section __TEXT,__text\n");                        \
         }                                                                       \
