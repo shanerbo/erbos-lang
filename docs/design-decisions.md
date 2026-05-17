@@ -140,3 +140,114 @@ the cost of changing it is high.
   inference that makes `Map of int to String` rare in practice
   (because users don't have to spell out type args at call sites),
   the readability complaint shrinks on its own.
+
+---
+
+## `is ref` for variable bindings (e.g. `b is ref a`)
+**Date:** 2026-05-16
+**Status:** parked — `ref` stays parameter-only; document as intentional
+
+### What was asked
+
+Should `b is ref a` (and `c is ref a`, etc.) work as a way to
+create local aliases? If so, what happens when `a` is dropped or
+moved while `b`/`c`/`d` still hold references?
+
+### What `ref` actually is today
+
+A function-parameter modifier *only*. Two and only two positions:
+
+1. In a declaration — `Counter.bump(self ref Counter)`,
+   `out ref List of String`.
+2. At a call site matching that parameter — `f(ref x)`.
+
+There's no `ref` type, no `ref` binding, no `ref` variable.
+`b is ref a` is a parse error in the current grammar. `ref` is a
+*compile-time permission* on a parameter to mutate fields — no
+runtime aliasing semantics, no borrow tracking, no reference
+counting.
+
+### Why parameter-only is the right line today
+
+1. **Aliasing is lexical and controlled at call sites.** During a
+   `f(ref x)` call, `x` is aliased only for the duration of `f`'s
+   activation record. No way to outlive the caller. No way to
+   stash. The bookkeeping the compiler has to do is zero.
+2. **A `ref` *binding* needs a borrow checker.** The moment you
+   write `b is ref a` you're asking: what if `a` is dropped while
+   `b` is alive? what if `a is now x`? Solving that correctly
+   means tracking lifetimes through control flow — Rust-grade
+   work. Solving it incorrectly means use-after-free, like the
+   `is rep` bug we just hit.
+3. **Existing alternatives.** If you want `a` mutated by a callee:
+   pass `ref a`. If you want a copy: `is rep`. If you want
+   ownership transfer: `is now`. The space is covered.
+
+### Recommended documentation
+
+Document explicitly that `is ref` is intentionally not in the
+grammar, and that aliasing is achieved by passing `ref` at call
+sites. Today the user just gets a parse error, which is
+confusing.
+
+### Conditions under which to revisit
+
+- If/when Potato grows lifetime tracking (a Rust-style borrow
+  checker) — `is ref` becomes implementable safely.
+- If user ergonomics demands surfaces a real use case that can't
+  be expressed with `ref` parameters or `rep`.
+
+---
+
+## `is rep` shallow-copy + double-free (latent UAF)
+**Date:** 2026-05-16
+**Status:** known bug — fix on the roadmap (deep clone for `rep`)
+
+### The bug
+
+`b is rep a` is documented as a "shallow copy (pointer copy)" —
+both `a` and `b` end up holding the same heap pointer. The irgen
+path (`compiler/irgen.c` ~line 967) marks both as heap-owning
+locals. At scope end (`emit_scope_cleanup`), both get a separate
+`_heap_free` call on the same pointer. That's a double-free into
+the bump+free-list allocator, which produces a cycle in the free
+list and lets the next allocation reclaim a block that the other
+alias still points at — a use-after-free.
+
+Hidden at -O1+ by the stackify (escape-analysis) pass, which
+elides the frees for non-escaping structs. Visible at -O0 today:
+
+```
+Point is { x int, y int }
+spark {
+  a is Point(x is 100, y is 200)
+  { b is rep a }       // inner scope frees the (shared) block
+  c is Point(x is 999, y is 888)  // c reclaims a's block
+  yell(a.x)            // prints 999 — was 100
+}
+```
+
+### Why it hasn't bitten yet
+
+The escape-analysis pass at -O1+ stack-allocates small
+non-escaping structs and skips both `_alloc_*` and `_heap_free`,
+hiding the bug for the common case. As soon as `a` flows into a
+function call (escapes), the bug resurfaces at every -O level.
+
+### Fix options
+
+| Option | What | Trade |
+|---|---|---|
+| A. Mark source as moved | After `b is rep a`, `a` is dead. | Defeats the point of `rep` — that's already what `is now` does. |
+| B. Don't free the rep destination | `b` is a non-owning alias; only `a` frees. | Tactical band-aid. Falls apart if `a is now b` happens later (now no one frees). |
+| C. Make `rep` actually deep-clone | Fresh `_heap_alloc` + memcpy of the struct fields (and recursively for nested structs / `array of T`). Each local owns an independent block. | Correct. The README already says deep-clone is on the v0.2+ roadmap; this just promotes it. |
+
+Recommended: C. The current implementation is a bug pretending
+to be a feature. The README already advertises `rep` as planned
+to become deep-clone.
+
+### Tracking
+
+Roadmap in `README.md` lists "Deep clone for `rep`" under
+Planned (v0.2+). When that ships, this UAF goes away by
+construction.
