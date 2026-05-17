@@ -106,11 +106,21 @@ test-ir: $(OUT)
 
 test-runtime:
 	@echo "=== Runtime C tests ==="
-	@$(CC) $(CFLAGS) -Icompiler/runtime -pthread -o tests/compiler/test_runtime tests/compiler/test_runtime.c $(RUNTIME_SRC)
-	@./tests/compiler/test_runtime > /dev/null && echo "  OK:   test_runtime" || echo "  FAIL: test_runtime"
-	@$(CC) $(CFLAGS) -Icompiler/runtime -o tests/compiler/test_channel tests/compiler/test_channel.c $(RUNTIME_SRC) $(CHANNEL_SRC)
-	@./tests/compiler/test_channel > /dev/null && echo "  OK:   test_channel" || echo "  FAIL: test_channel"
-	@rm -f tests/compiler/test_runtime tests/compiler/test_channel
+	@fail=0; \
+	$(CC) $(CFLAGS) -Icompiler/runtime -pthread -o tests/compiler/test_runtime tests/compiler/test_runtime.c $(RUNTIME_SRC); \
+	if ./tests/compiler/test_runtime > /dev/null; then \
+		echo "  OK:   test_runtime"; \
+	else \
+		echo "  FAIL: test_runtime"; fail=1; \
+	fi; \
+	$(CC) $(CFLAGS) -Icompiler/runtime -o tests/compiler/test_channel tests/compiler/test_channel.c $(RUNTIME_SRC) $(CHANNEL_SRC); \
+	if ./tests/compiler/test_channel > /dev/null; then \
+		echo "  OK:   test_channel"; \
+	else \
+		echo "  FAIL: test_channel"; fail=1; \
+	fi; \
+	rm -f tests/compiler/test_runtime tests/compiler/test_channel; \
+	[ $$fail -eq 0 ] || (echo "Some runtime tests failed"; exit 1)
 
 test-framework: $(OUT)
 	@echo "=== Framework tests (erbos test) ==="

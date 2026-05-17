@@ -59,7 +59,7 @@ casing. `use std/...` brings them into scope.
 
 | Type | Defined in | Notes |
 |------|------------|-------|
-| `String` | `std/string.ptt` | UTF-8 text, backed by `array of byte`. Always in scope (auto-loaded). String literals (`"..."`) are values of this type. |
+| `String` | `std/string.ptt` | UTF-8 text, backed by `array of byte`. String literals (`"..."`) are values of this type. Requires `use std/string` (no auto-load). |
 | `List of T` | `std/list.ptt` | Dynamic, growable list. `[1, 2, 3]` literals lower to `List of int` when `std/list` is in scope. |
 | `Map of K to V` | `std/map.ptt` | Ordered key→value map. `K` may be `int`, pointer-shaped, or `String`. `["k" to v]` literals lower to `Map of String to V` when `std/map` is in scope. |
 
