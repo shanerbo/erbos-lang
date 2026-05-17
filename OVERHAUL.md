@@ -296,16 +296,17 @@ on completion. Don't redo a checked task.
           for resolved_type tagging — same downstream emission.
       Acceptance: `make test` green; calls to the dropped builtin
       names error with "unknown function 'X'".
-- [ ] **γ5** Ban kernel-layer names (`heap_alloc`, `heap_free`,
+- [x] **γ5** Ban kernel-layer names (`heap_alloc`, `heap_free`,
       `write_bytes`, `panic_oob`, `panic_capacity`) from being
-      callable in any `.ptt` file. Drop them from checker's
-      known-name dispatch. Compiler emits `bl _<name>` directly
-      when lowering language constructs (`array of T` ctor →
-      `bl _heap_alloc`; bounds-check fail → `bl _panic_oob`).
-      Acceptance: `git grep '"heap_alloc"\|"write_bytes"\|"panic_
-      oob"' src/checker.c src/irgen.c` returns nothing in
-      dispatch positions; user/stdlib code calling those names
-      errors with "undefined function."
+      callable in any `.ptt` file. Already shipped as part of
+      β5 — the checker's kernel-name dispatch table was deleted
+      whole. The compiler emits `bl _<name>` directly when
+      lowering language constructs (array constructor → `bl
+      _heap_alloc`; bounds-check fail → `bl _panic_oob`; etc.)
+      User code calling these names hits the generic "unknown
+      function 'X'" error.
+      Acceptance: verified — `panic_oob()` and `write_bytes(0,0)`
+      from user code error with "unknown function".
 - [ ] **γ6** Sweep all `s str` → `s String` in every `.ptt` file
       (parameters, fields, return types, var declarations). Add
       `use std/string` to every file that referenced `str`.
