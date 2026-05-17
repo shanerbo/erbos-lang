@@ -139,6 +139,34 @@ position relative to the subcommand. Default is `-O1`.
    all three -O levels, run the relevant ASan/UBSan check for
    compiler-side changes.
 
+## Reviewer / QA / auditor
+
+**Codex 5.5 is the QA + peer reviewer + auditor for this repo.**
+Concretely:
+
+- **Code I write gets read by Codex.** Comments explain *why*,
+  not just *what*. Magic numbers, frame sizes, register choices,
+  ABI assumptions need rationale traceable to source (ARM AAPCS,
+  the design-decisions log, etc.). Edge cases I considered should
+  be visible from code or tests, not just lived in my head.
+- **Friction reports from Codex are reviewer findings, not
+  bug reports.** When Codex reports something, the right
+  response is: (a) reproduce honestly against current main,
+  (b) push back if the framing is off, (c) fix what's real and
+  reproducible, (d) ask for a smaller repro for what isn't.
+  Spudlock (`/Users/erbos/Documents/spudlock`) is one such
+  driver — Codex runs real projects through `erbos` and reports
+  friction.
+- **The design-decisions log is the canonical answer.** When
+  a reviewer asks "why did you reject X?" or "why does Y work
+  this way?", point at `docs/design-decisions.md`. If the
+  answer isn't there, write it there before defending it
+  inline.
+- **Real-project testing carries weight.** A bug Codex reports
+  that I can't reproduce in 50 lines is *still* a bug if it
+  happens in their real driver — my repro budget shouldn't cap
+  the conversation. Get the failing project, debug it there.
+
 ## Out of scope without explicit ask
 
 - Self-hosting the compiler in Potato (planned, not started).
