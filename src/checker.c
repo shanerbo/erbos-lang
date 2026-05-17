@@ -66,6 +66,12 @@ static Type make_map_of(Type key, Type val) {
     return t;
 }
 
+// α3: `array of T` typed-storage primitive. Distinct from TYPE_LIST.
+static Type make_array_of(Type elem) {
+    Type t = {TYPE_ARRAY, NULL, alloc_type(elem), NULL, NULL};
+    return t;
+}
+
 static int types_equal(Type a, Type b) {
     // P3.4: TYPE_STR and TYPE_STRUCT("String") describe the same
     // in-memory representation (a String header). The language-
@@ -80,6 +86,11 @@ static int types_equal(Type a, Type b) {
     if (a_is_string && b_is_string) return 1;
     if (a.kind != b.kind) return 0;
     if (a.kind == TYPE_STRUCT) return a.struct_name && b.struct_name && !strcmp(a.struct_name, b.struct_name);
+    // α3: TYPE_ARRAY equality requires matching element type.
+    if (a.kind == TYPE_ARRAY) {
+        if (!a.elem_type || !b.elem_type) return 0;
+        return types_equal(*a.elem_type, *b.elem_type);
+    }
     return 1;
 }
 
@@ -201,6 +212,24 @@ static Type parse_type_str(Checker *c, const char *t) {
     if (!strcmp(t, "list")) return make_type(TYPE_LIST);
     if (!strcmp(t, "map")) return make_type(TYPE_MAP);
     if (!strcmp(t, "imap")) return make_type(TYPE_MAP); // imap is a map variant
+    // α3: `array<T>` (legacy <>-bracketed form from
+    // parse_type_name) and `array__T` (post-monomorph mangled
+    // form) both denote TYPE_ARRAY of the element type. Strip
+    // the wrapping prefix and recurse.
+    if (!strncmp(t, "array<", 6)) {
+        int n = (int)strlen(t);
+        if (n > 7 && t[n - 1] == '>') {
+            char inner[256];
+            int ilen = n - 7;
+            if (ilen >= (int)sizeof(inner)) ilen = (int)sizeof(inner) - 1;
+            memcpy(inner, t + 6, ilen);
+            inner[ilen] = '\0';
+            return make_array_of(parse_type_str(c, inner));
+        }
+    }
+    if (!strncmp(t, "array__", 7)) {
+        return make_array_of(parse_type_str(c, t + 7));
+    }
     if (is_struct(c, t)) return make_struct(t);
     return make_type(TYPE_INT);
 }
@@ -215,6 +244,7 @@ static const char *type_name(Type t) {
         case TYPE_MAP: return "map";
         case TYPE_STRUCT: return t.struct_name ? t.struct_name : "struct";
         case TYPE_TASK: return "task";
+        case TYPE_ARRAY: return "array";
         case TYPE_UNKNOWN: return "unknown";
     }
     return "?";
@@ -627,6 +657,19 @@ static Type check_expr(Checker *c, Node *n) {
             // Return element type if known
             if (obj_t.elem_type) return *obj_t.elem_type;
             return make_type(TYPE_UNKNOWN);
+        }
+        case NODE_ARRAY_NEW: {
+            // α3: `array of T with cap N`. Type-check the cap
+            // expression (must be int). Return TYPE_ARRAY of the
+            // declared element type.
+            Type cap_t = check_expr(c, n->array_new.cap);
+            if (cap_t.kind != TYPE_UNKNOWN && cap_t.kind != TYPE_INT) {
+                fprintf(stderr, "error:%d: array constructor `cap` must be int, got '%s'\n",
+                    n->line, type_name(cap_t));
+                exit(1);
+            }
+            Type elem_t = parse_type_str(c, n->array_new.elem_type);
+            return make_array_of(elem_t);
         }
         case NODE_LIST_LIT: {
             Type elem_t = make_type(TYPE_UNKNOWN);

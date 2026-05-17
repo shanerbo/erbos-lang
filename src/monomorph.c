@@ -998,6 +998,12 @@ void monomorph_run(Node *program) {
             if (!strcmp(struct_templates[i]->struct_def.name, head)) { st = struct_templates[i]; break; }
         }
         if (!st) {
+            // `array<T>` is a built-in type form (Phase α). The
+            // checker handles it as TYPE_ARRAY; the monomorphizer
+            // shouldn't try to find a user template for it.
+            if (!strcmp(head, "array")) {
+                continue;
+            }
             fprintf(stderr, "error: cannot instantiate '%s' — no generic type named '%s' is in scope\n",
                 form, head);
             exit(1);

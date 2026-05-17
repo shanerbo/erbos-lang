@@ -47,6 +47,48 @@ static char *parse_type_name(Parser *p);
 static Node *parse_primary(Parser *p) {
     int line = cur(p)->line;
 
+    // α2: `array of T with cap N` constructor expression. Recognised
+    // as a primary expression so it can be the right-hand side of
+    // `is` declarations and any other expression position.
+    //
+    // `array` is a regular IDENT (no reserved token) — we look at
+    // the IDENT's spelling and require the followup `of <type> with
+    // cap <expr>` shape. If anything mismatches, fall through to
+    // ordinary IDENT-as-variable handling below so existing code
+    // that has a variable named `array` keeps working.
+    if (at(p, TOK_IDENT) && cur(p)->value && !strcmp(cur(p)->value, "array") &&
+        peek_at(p, 1)->type == TOK_OF) {
+        // Lookahead: must be `array of <type> with cap <expr>`.
+        // We commit to this branch only after seeing the full prefix
+        // up to `with`; otherwise, restore position and let the
+        // generic IDENT path handle whatever this turns out to be.
+        int saved = p->pos;
+        p->pos++;            // consume `array`
+        p->pos++;            // consume `of`
+        char *elem_type = parse_type_name(p);
+        // Expect IDENT "with".
+        if (!(at(p, TOK_IDENT) && cur(p)->value && !strcmp(cur(p)->value, "with"))) {
+            // Not the constructor form. Roll back; the generic path
+            // below will report whatever the right error is.
+            p->pos = saved;
+            free(elem_type);
+        } else {
+            p->pos++;        // consume `with`
+            // Expect IDENT "cap".
+            if (!(at(p, TOK_IDENT) && cur(p)->value && !strcmp(cur(p)->value, "cap"))) {
+                fprintf(stderr, "%s:%d: error: expected `cap` after `with` in array constructor\n",
+                    p->filename, cur(p)->line);
+                exit(1);
+            }
+            p->pos++;        // consume `cap`
+            Node *cap_expr = parse_expr(p);
+            Node *n = alloc_node(NODE_ARRAY_NEW, line);
+            n->array_new.elem_type = elem_type;
+            n->array_new.cap = cap_expr;
+            return n;
+        }
+    }
+
     if (at(p, TOK_INT_LIT)) {
         Node *n = alloc_node(NODE_INT_LIT, line);
         n->int_lit.value = atol(cur(p)->value);
@@ -703,7 +745,14 @@ static Node *parse_stmt(Parser *p) {
                 }
                 explicit_type_consumed = 1;
             } else if (at(p, TOK_IDENT) && peek_at(p, 1)->type == TOK_OF &&
-                       peek_at(p, 2)->type != TOK_LPAREN) {
+                       peek_at(p, 2)->type != TOK_LPAREN &&
+                       !(cur(p)->value && !strcmp(cur(p)->value, "array"))) {
+                // `array of T with cap N` is a constructor expression
+                // (handled in parse_primary), not a type-name auto-
+                // construct. Skip this branch when the head is
+                // `array` so the right-hand side falls through to
+                // parse_expr below.
+                //
                 // Capitalised user-generic type form, no parens:
                 //   xs is List of int
                 //   m  is Map of int to int

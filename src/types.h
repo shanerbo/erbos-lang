@@ -10,6 +10,9 @@ typedef enum {
     TYPE_MAP,
     TYPE_STRUCT,
     TYPE_TASK,
+    TYPE_ARRAY,        // α3: typed-storage primitive `array of T`.
+                       // Distinct from TYPE_LIST (which is the
+                       // legacy keyword-form list runtime).
     TYPE_UNKNOWN,
 } TypeKind;
 

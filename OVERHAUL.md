@@ -102,15 +102,19 @@ on completion. Don't redo a checked task.
 
 ### Phase α — Typed arrays (`array of T`)
 
-- [ ] **α1** Parser: type-form `array of T`. Recognised in struct
+- [x] **α1** Parser: type-form `array of T`. Recognised in struct
       fields, function parameters, return types, var declarations.
-      Internally encoded as `Array<T>` (legacy mangled form).
+      Internally encoded as `array<T>` (legacy mangled form).
+      Monomorph skips `array<T>` (it's a built-in, not a user
+      template).
       Acceptance: struct field `data array of int` parses.
-- [ ] **α2** Parser: constructor `array of T with cap N`. `N` is
+- [x] **α2** Parser: constructor `array of T with cap N`. `N` is
       any integer expression. Parses to `NODE_ARRAY_NEW`.
       Acceptance: `xs is array of int with cap 8` parses.
-- [ ] **α3** Checker: `TYPE_ARRAY` with `elem_type` field. Type
-      checking respects the element type.
+- [x] **α3** Checker: `TYPE_ARRAY` with `elem_type` field. Type
+      checking respects the element type. `parse_type_str` handles
+      both `array<T>` (pre-monomorph) and `array__T` (post-monomorph)
+      forms. types_equal compares element types.
       Acceptance: passing `array of int` where `array of str`
       expected errors.
 - [ ] **α4** Irgen: `array of T` constructor lowers to `bl

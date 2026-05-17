@@ -34,6 +34,7 @@ typedef enum {
     NODE_MATCH,
     NODE_TEST_DEF,
     NODE_ASSERT,
+    NODE_ARRAY_NEW,        // α2: `array of T with cap N`
 } NodeType;
 
 typedef struct Node Node;
@@ -201,6 +202,12 @@ struct Node {
 
         // NODE_MAP_LIT
         struct { Node **keys; Node **values; int count; } map_lit;
+
+        // NODE_ARRAY_NEW (α2): `array of T with cap N` constructor.
+        // `elem_type` is the legacy <>-bracketed type string the
+        // monomorphizer/checker pipeline uses; for `array of int`
+        // this is "int". `cap` is any int expression.
+        struct { char *elem_type; Node *cap; } array_new;
 
         // NODE_ENUM_DEF
         struct {
