@@ -3,14 +3,16 @@
 // (demonstrates different helper implementation)
 // Time: O(n)  Space: O(1)
 
-swap(nums list, i int, j int) {
+use std/list
+
+swap(nums List of int, i int, j int) {
   tmp is nums[i]
-  list_set(nums, i, nums[j])
-  list_set(nums, j, tmp)
+  nums[i] be nums[j]
+  nums[j] be tmp
 }
 
 // Reverse subarray by repeated swapping from edges inward
-rev(nums list, lo int, hi int) {
+rev(nums List of int, lo int, hi int) {
   infi (lo lt hi) {
     swap(nums, lo, hi)
     lo be lo + 1
@@ -19,7 +21,7 @@ rev(nums list, lo int, hi int) {
 }
 
 // Find rightmost index where nums[idx] > target, searching from right
-find_swap_target(nums list, start int, end int, target int) int {
+find_swap_target(nums List of int, start int, end int, target int) int {
   j is end
   infi (j gt start) {
     nums[j] gt target ?{
@@ -30,7 +32,7 @@ find_swap_target(nums list, start int, end int, target int) int {
   give start
 }
 
-next_perm(nums list, n int) {
+next_perm(nums List of int, n int) {
   // Find pivot: rightmost i where nums[i] < nums[i+1]
   pivot is -1
   i is n - 2
@@ -52,7 +54,7 @@ next_perm(nums list, n int) {
   rev(nums, pivot + 1, n - 1)
 }
 
-print_list(nums list, n int) {
+print_list(nums List of int, n int) {
   through (i from 0 to n by 1) {
     yell(nums[i])
   }

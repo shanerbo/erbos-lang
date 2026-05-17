@@ -4,7 +4,7 @@
 //        loops, conditionals, recursion, ownership, RAII, string ops,
 //        nested collections, chained indexing, methods, operators
 
-use std/string
+use std/basics
 
 // === Structs ===
 Point is {
@@ -139,18 +139,18 @@ spark {
   yell("---")
 
   // === 11. Typed lists ===
-  nums is list of int
+  nums is List of int
   nums.push(10)
   nums.push(20)
   nums.push(30)
   nums.push(40)
   nums.push(50)
-  yell(len(nums))
+  yell(nums.len())
   yell(nums[0])
   yell(nums[4])
   last is nums.pop()
   yell(last)
-  yell(len(nums))
+  yell(nums.len())
   yell("---")
 
   // === 12. List iteration ===
@@ -159,17 +159,17 @@ spark {
   }
   yell("---")
 
-  // === 13. List mutation with list_set ===
-  list_set(nums, 0, 99)
+  // === 13. List mutation via index assign ===
+  nums[0] be 99
   yell(nums[0])
   yell("---")
 
   // === 14. Typed maps ===
-  scores is map of str to int
+  scores is StringMap of int
   scores.set("alice", 95)
   scores.set("bob", 87)
   scores.set("charlie", 92)
-  yell(len(scores))
+  yell(scores.len())
   yell(scores.get("alice"))
   yell(scores.get("bob"))
   scores.set("bob", 100)
@@ -183,19 +183,31 @@ spark {
   }
   yell("---")
 
-  // === 16. Nested collections: list of lists ===
-  grid is list of list
-  grid.push([1, 2, 3])
-  grid.push([4, 5, 6])
-  grid.push([7, 8, 9])
+  // === 16. Nested collections: List of List of int ===
+  grid is List of List of int
+  inner1 is List of int
+  inner1.push(1)
+  inner1.push(2)
+  inner1.push(3)
+  grid.push(inner1)
+  inner2 is List of int
+  inner2.push(4)
+  inner2.push(5)
+  inner2.push(6)
+  grid.push(inner2)
+  inner3 is List of int
+  inner3.push(7)
+  inner3.push(8)
+  inner3.push(9)
+  grid.push(inner3)
   yell(grid[0][0])
   yell(grid[1][1])
   yell(grid[2][2])
   yell("---")
 
   // === 17. Nested: map + list combo ===
-  registry is map of str to int
-  people is list of Person
+  registry is StringMap of int
+  people is List of Person
   p1 is Person()
   p1.age be 25
   p1.score be 100
@@ -204,7 +216,7 @@ spark {
   p2.age be 30
   p2.score be 85
   people.push(p2)
-  registry.set("count", len(people))
+  registry.set("count", people.len())
   yell(registry.get("count"))
   yell("---")
 
@@ -236,22 +248,22 @@ spark {
   yell("---")
 
   // === 21. Growable list stress (100 elements) ===
-  big is list of int
+  big is List of int
   through (i from 0 to 100 by 1) {
     big.push(i * 2)
   }
-  yell(len(big))
+  yell(big.len())
   yell(big[0])
   yell(big[50])
   yell(big[99])
   yell("---")
 
   // === 22. Growable map stress (50 entries) ===
-  bigmap is map of str to int
+  bigmap is StringMap of int
   through (i from 0 to 50 by 1) {
     bigmap.set(i.to_string(), i * i)
   }
-  yell(len(bigmap))
+  yell(bigmap.len())
   yell(bigmap.get("0"))
   yell(bigmap.get("7"))
   yell(bigmap.get("49"))

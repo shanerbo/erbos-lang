@@ -31,21 +31,19 @@ language defines. They have no pure-Potato replacement.
 | `_alloc_<Struct>` | Per-user-struct constructor — emits `_heap_alloc(field_count*8)` then zero-fills. The latter is required for stdlib container lazy-init sentinels (`self.data eq 0`). |
 | `_task_fire` / `_task_collapse` | No-op placeholders for the green-thread runtime not yet wired into compiled output. |
 
-## Transitional — pending ε / ζ retirement
+## Transitional — minor residue
 
-These helpers are still emitted because the legacy `list` /
-`map` / `imap` collection keywords and a few `+` / `eq` /
-interpolation paths still call them. Phase ε (drop legacy
-keyword forms) and the residual phase ζ pass will retire them:
+A few helpers stay because binary `+`, `eq`, and string
+interpolation still call them inline (rather than dispatching
+through `String.concat` / `String.equals` / `int.to_string`):
 
 | Symbol | Why kept |
 |---|---|
-| `_yell_str` | Alias for `_String_yell` referenced by the runtime-internal panic / pass / assert message paths. The aliasing is a single `.globl` line; cleanup waits for those callers to be swept. |
-| `_yell` | Magic-number int-vs-String dispatch (compares against `0x100000`). γ1 routes typed `yell(x)` directly to `_yell_int` / `_String_yell`; this shim survives only for TYPE_UNKNOWN values reached through chained legacy-list indexing. |
-| `_str_eq` | Called from binary `eq` / `ne` on String operands. Stays until `String.equals` becomes the dispatch target (currently a method-style alternative). |
-| `_str_concat` | Called from `+` on String operands and from string interpolation. Stays until interpolation routes through `String.concat`. |
-| `_int_to_str` | Called from string interpolation when an int variable is embedded. Stays until interpolation routes through `int.to_string`. |
-| `_map_*` / `_list_*` / `_imap_*` | Called from the legacy `list of T` / `map of K to V` / `imap of int to V` keyword forms. ε1 retires the keywords; ε3 / ε4 route literals through stdlib types; ζ1 deletes these emitters. |
+| `_yell_str` | Alias for `_String_yell` referenced by the runtime-internal panic / pass / assert message paths. The aliasing is a single `.globl` line. |
+| `_yell` | Magic-number int-vs-String dispatch (compares against `0x100000`). γ1 routes typed `yell(x)` directly; this shim survives only for TYPE_UNKNOWN values. |
+| `_str_eq` | Called from binary `eq` / `ne` on String operands. |
+| `_str_concat` | Called from `+` on String operands and from string interpolation. |
+| `_int_to_str` | Called from string interpolation when an int variable is embedded. |
 
 ## Already retired
 
@@ -54,6 +52,9 @@ keyword forms) and the residual phase ζ pass will retire them:
 | `_str_len` | ζ2 (γ4 routed user code through `s.len()`) |
 | `_char_at` | ζ2 (γ4 routed user code through `s.char_at(i)`) |
 | `_yell_dispatch` (renamed `_yell`) | γ1 (compile-time resolution; shim only kept for TYPE_UNKNOWN) |
+| `_list_new` / `_list_push` / `_list_pop` / `_list_set` / `_list_len` | ζ1 (ε1 retired the legacy `list of T` keyword form; user code uses `List of T` from std/list) |
+| `_map_new` / `_map_set` / `_map_get` / `_map_keys` / `_map_len` | ζ1 (legacy `map of K to V` retired; user code uses `Map of K to V` and `StringMap of V`) |
+| `_imap_new` / `_imap_set` / `_imap_get` / `_imap_len` | ζ1 (legacy `imap of int to V` retired; user code uses `Map of int to V`) |
 
 ## Layout contracts the runtime reads
 
@@ -79,13 +80,6 @@ For `array of byte` the element size is 1 (ldrb/strb); for
 every other element type it's 8 (ldr/str). The compiler
 synthesises the offset multiplication; the runtime never sees
 the elements directly.
-
-### Legacy `list` / `map` / `imap` (24 bytes — ε retires these)
-| Offset | Field |
-|---|---|
-| 0  | `cap`     |
-| 8  | `count`   |
-| 16 | `data`    |
 
 ### `_pass_prefix` / `_oob_*` / `_assert_*` data sections
 Each runtime-emitted message is laid out as a String value to

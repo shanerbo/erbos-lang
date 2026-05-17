@@ -1,7 +1,9 @@
 // Rotting Oranges tests
 
-solve(grid list, rows int, cols int) int {
-  queue is list of int
+use std/list
+
+solve(grid List of int, rows int, cols int) int {
+  queue is List of int
   fresh is 0
   through (r from 0 to rows by 1) {
     through (c from 0 to cols by 1) {
@@ -15,8 +17,8 @@ solve(grid list, rows int, cols int) int {
   head is 0
   dr is [0 - 1, 1, 0, 0]
   dc is [0, 0, 0 - 1, 1]
-  infi (head lt len(queue)) {
-    size is len(queue) - head
+  infi (head lt queue.len()) {
+    size is queue.len() - head
     through (s from 0 to size by 1) {
       pos is queue[head]
       head be head + 1
@@ -28,7 +30,7 @@ solve(grid list, rows int, cols int) int {
         nr ge 0 and nr lt rows and nc ge 0 and nc lt cols ?{
           nidx is nr * cols + nc
           grid[nidx] eq 1 ?{
-            list_set(grid, nidx, 2)
+            grid[nidx] be 2
             queue.push(nr * 100 + nc)
             fresh be fresh - 1
           }

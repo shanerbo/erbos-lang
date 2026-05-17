@@ -1,13 +1,13 @@
 # Potato Built-in Functions 🥔
 
-> **Status:** mid-overhaul. The free-function string builtins
-> (`str_len`, `str_eq`, `str_concat`, `int_to_str`, `char_at`) and
-> the kernel-layer names (`heap_alloc`, `mem_load`, etc.) have been
-> removed from user-callable namespace. The legacy `list` / `map` /
-> `imap` keyword forms are still accepted but scheduled for removal
-> in phase ε of [`OVERHAUL.md`](../OVERHAUL.md). User code should
-> prefer the stdlib types (`List of T`, `Map of K to V`,
-> `StringMap of V`).
+> **Status:** post-overhaul. Free-function string builtins
+> (`str_len`, `str_eq`, `str_concat`, `int_to_str`, `char_at`),
+> kernel-layer names (`heap_alloc`, `mem_load`, etc.), and the
+> legacy collection keyword forms (`list of T`, `map of K to V`,
+> `imap of int to V`) are all gone. User code uses the pure-Potato
+> stdlib types (`List of T`, `Map of K to V`, `StringMap of V`)
+> from std/list / std/map / std/string_map. Programs that want
+> the comfortable defaults import `std/basics` for the bundle.
 
 ## Output
 
@@ -55,35 +55,39 @@ compiler knows the layout; user code only sees `String`.
 String interpolation `"hi {name}"` desugars to a chain of `+`
 operations — same `String.concat` path as explicit concatenation.
 
-## Lists (legacy keyword form, scheduled for removal in phase ε)
+## Lists (`std/list`)
 
-| Function/Method | Description | Example |
-|----------|-------------|---------|
-| `list of T` | Create typed list | `nums is list of int` |
-| `.push(val)` | Append element | `nums.push(10)` |
-| `.pop()` | Remove and return last | `nums.pop()` |
-| `[a, b, c]` | List literal | `nums is [1, 2, 3]` |
+`use std/list` brings `List of T` into scope. Literals
+`[a, b, c]` lower to `List of int` automatically when the
+import is present.
 
-The pure-Potato replacement is `List of T` (in `std/list.ptt`).
-Both forms work today; ε will route literals through `List of T`
-and retire the keyword form.
-
-## Maps (legacy keyword forms, scheduled for removal in phase ε)
-
-| Form | Description |
-|---|---|
-| `map of str to V` | string-keyed map (legacy keyword) |
-| `imap of int to V` | int-keyed map (legacy keyword) |
-| `["k" to v, ...]` | string-key map literal |
-
-The pure-Potato replacements are `StringMap of V` (in
-`std/string_map.ptt`) and `Map of K to V` (in `std/map.ptt`).
-
-| Method | Description | Example |
+| Method / Form | Description | Example |
 |---|---|---|
-| `.set(key, val)` | insert/update | `m.set("x", 10)` |
-| `.get(key)` | get value (0 if absent) | `m.get("x")` |
-| `.keys()` | list of keys | `m.keys()` |
+| `xs is List of T` | construct an empty list | `nums is List of int` |
+| `xs.push(v)` | append | `nums.push(10)` |
+| `xs.pop()` | remove and return last | `last is nums.pop()` |
+| `xs.get(i)` / `xs[i]` | element at index | `nums[0]` |
+| `xs.set(i, v)` / `xs[i] be v` | write at index | `nums[0] be 99` |
+| `xs.len()` | count | `nums.len()` |
+| `[a, b, c]` | list literal | `nums is [1, 2, 3]` |
+| `through (x in xs) { }` | iterate | dispatches to `.len` + `.get` |
+
+## Maps (`std/string_map`, `std/map`)
+
+`StringMap of V` is the string-keyed map; `Map of K to V` is for
+int / pointer-shaped keys (uses `==` directly). Map literals
+`["k" to v]` lower to `StringMap of int` automatically when
+`use std/string_map` is in scope.
+
+| Method / Form | Description |
+|---|---|
+| `m is StringMap of V` | construct an empty string-keyed map |
+| `m is Map of K to V` | construct an empty int / pointer-keyed map |
+| `m.set(key, val)` | insert / update |
+| `m.get(key)` | get value (0 if absent) |
+| `m.keys()` | List of keys (StringMap only) |
+| `m.len()` | entry count |
+| `["k" to v, ...]` | string-keyed map literal |
 
 ## Structs
 

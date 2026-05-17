@@ -9,6 +9,7 @@
 // maps live as their own type.
 
 use std/string
+use std/list
 
 StringMap of V is {
   count int
@@ -54,4 +55,15 @@ StringMap.get(self StringMap of V, k String) V {
     }
   }
   give 0
+}
+
+// keys() — return a fresh List of String holding the keys in
+// insertion order. Allocates; iteration order is stable for
+// repeated calls on the same map.
+StringMap.keys(self StringMap of V) List of String {
+  out is List of String
+  through (i from 0 to self.count by 1) {
+    out.push(self.keys[i])
+  }
+  give out
 }

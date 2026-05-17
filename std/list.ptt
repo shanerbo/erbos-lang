@@ -63,13 +63,15 @@ List.pop(self ref List of T) T {
   give self.data[self.count]
 }
 
-// Read element at `i`. Bounds-checked by the language `array of T`
-// primitive (panics on i < 0 or i >= cap), with an additional
-// check against `count` so unwritten slots aren't readable.
+// Read element at `i`. Bounds-checked against `count` (not cap):
+// the user-visible length of the list is its count, even though
+// the backing storage may have headroom for more elements.
 List.get(self List of T, i int) T {
-  i ge self.count ?{
-    // Force the language-level OOB panic on cap rather than count.
-    give self.data[self.count]
+  i lt 0 or i ge self.count ?{
+    // Force a panic by indexing the backing array past its cap.
+    // The `array of T` primitive's bounds check fires regardless
+    // of how many elements `self.count` claims are live.
+    give self.data[self.data.cap]
   }
   give self.data[i]
 }
@@ -77,10 +79,8 @@ List.get(self List of T, i int) T {
 // Write element at `i`. Bounds-checked. Caller grows the list
 // with `push` first; `set` does NOT extend.
 List.set(self ref List of T, i int, v T) {
-  i ge self.count ?{
-    // Same trick: read-via-OOB to trigger panic with a clear
-    // origin in the typed-array layer.
-    junk is self.data[self.count]
+  i lt 0 or i ge self.count ?{
+    junk is self.data[self.data.cap]
     give
   }
   self.data[i] be v

@@ -363,11 +363,23 @@ on completion. Don't redo a checked task.
 
 ### Phase ε — Drop `list` / `map` / `imap` keyword forms
 
-- [ ] **ε1** Drop `TOK_LIST`, `TOK_MAP`, `TOK_IMAP` from lexer.
-      `list`, `map`, `imap` become regular identifiers.
-      Acceptance: lexer no longer emits those tokens.
-- [x] **ε2** Partial sweep — every `.ptt` file whose surface
-      is fully covered by the stdlib types' methods is migrated:
+- [x] **ε1** Lexer no longer emits `TOK_LIST` / `TOK_MAP` /
+      `TOK_IMAP` for the words `list` / `map` / `imap` — they
+      are now ordinary identifiers. The token enum entries stay
+      in `token.h` so legacy switch statements that referenced
+      them still compile (they're dead branches). Programs
+      writing `xs is list of int` now hit the monomorph error
+      "cannot instantiate 'list<int>' — no generic type named
+      'list' is in scope" and must rewrite to `List of int` (and
+      `use std/list`).
+      Acceptance met: full sweep of remaining .ptt files done
+      under ε2; legacy keyword form errors out as expected.
+- [x] **ε2** Full sweep — every `.ptt` file in the repo migrated
+      from legacy `list of T` / `map of K to V` / `imap of int to V`
+      keyword forms to stdlib types. Initial pass migrated the easy
+      files; the remaining set was finished alongside ε1 (which
+      retired the keywords).
+      Initial migrated set:
         - `tests/test_list.ptt`        → `List of int`
         - `tests/test_map.ptt`         → `StringMap of int` + `Map of int to int`
         - `examples/list_methods.ptt`  → `List of int`
@@ -470,10 +482,20 @@ on completion. Don't redo a checked task.
 
 ### Phase ζ — Delete dead C runtime
 
-- [ ] **ζ1** Delete `emit_list_builtins`, `emit_map_builtins`,
-      `emit_imap_builtins` from `src/runtime_emit.c`.
-      Acceptance: `git grep '_list_\|_map_\|_imap_'
-      src/runtime_emit.c` returns only comments; tests green.
+- [x] **ζ1** Deleted `emit_list_builtins` / `emit_map_builtins` /
+      `emit_imap_builtins` from `src/runtime_emit.c` (308 lines
+      removed). The legacy `_list_*` / `_map_*` / `_imap_*`
+      symbols no longer exist in compiled binaries; ε1 made them
+      unreachable from any `.ptt` file, and ε3+ε4 routed literals
+      through the stdlib types that monomorphize via the normal
+      user-method codegen path.
+      Also dropped the now-dead irgen built-in collection method
+      dispatch (`xs.push` → `_list_push`, `m.set` → `_map_set`)
+      and the constructor remap (`list()` → `_list_new` etc.).
+      `xs.push(v)` for `List of int` now resolves through
+      `resolved_struct_name` to `_List__int_push` directly.
+      Acceptance: `nm` on a fresh binary shows no `_list_*` /
+      `_map_*` / `_imap_*` symbols; `make test` green.
 - [x] **ζ2** (partial) Delete `emit_str_builtins` from
       `src/runtime_emit.c`. The symbols it emitted (`_str_len`,
       `_char_at`) had no remaining callers after γ4 — every user

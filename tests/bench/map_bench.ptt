@@ -1,35 +1,32 @@
-// Microbenchmark for Map of str to int set/get/keys.
+// Microbenchmark for StringMap of int set/get/keys.
 //
-// This is the P6 baseline reference: we measure today's
-// C-emitted `_map_set` / `_map_get` / `_map_keys` performance
-// before rewriting std/map in pure Potato. After the rewrite,
-// the same workload running through `Map of str to int` (the
-// monomorphised user-defined type) must come within 1.2× of
-// the timing captured here.
-//
-// The harness is intentionally simple: each phase performs N
-// operations and prints a sentinel so the test runner can
-// confirm the work happened. Wall-clock measurement happens
-// via `time` outside the .ptt file (no built-in timing yet).
+// This is the post-overhaul reference for `StringMap of int`
+// (pure-Potato, backed by `array of T`). It supersedes the
+// pre-overhaul baseline that measured the C-emitted `_map_*`
+// helpers; θ4 captures the wall-clock comparison externally.
 //
 // Phases:
 //   1. set: insert N distinct keys.
 //   2. get: read every key back (forces every bucket walk).
 //   3. keys: enumerate the map and sum the values.
 //
-// N=512 is small enough for the test suite (sub-second at
-// any -O level today) but large enough that the loop dominates
-// any fixed setup cost.
+// N=512 is small enough for the test suite (sub-second at any
+// -O level) but large enough that the loop dominates any fixed
+// setup cost.
+
+use std/string
+use std/list
+use std/string_map
 
 spark {
-  m is map of str to int
+  m is StringMap of int
 
   // Phase 1: set 512 distinct keys.
   through (i from 0 to 512 by 1) {
     k is "k{i}"
     m.set(k, i * 7)
   }
-  yell(len(m))                          // 512 — confirms inserts done
+  yell(m.len())                         // 512 — confirms inserts done
 
   // Phase 2: read every key back; sum the values to keep the
   // compiler from dead-code-eliminating the loads.
@@ -38,7 +35,7 @@ spark {
     k is "k{i}"
     total be total + m.get(k)
   }
-  yell(total)                           // sum_{i=0..511} i*7 = 7 * (511*512/2) = 915712
+  yell(total)                           // 7 * (511*512/2) = 915712
 
   // Phase 3: enumerate keys and sum values via lookup.
   ks is m.keys()

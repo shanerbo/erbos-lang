@@ -20,11 +20,12 @@ test "string-map update" {
 }
 
 test "map literal" {
-  // Map literals (`["k" to v]`) still route through the legacy
-  // `map` keyword today; phase ε4 retires it for StringMap of V.
+  // ε4: ["k" to v] now lowers to `StringMap of int` via stdlib
+  // path because `use std/string_map` is in scope.
   m is ["name" to 1, "age" to 2]
   assert(m.get("name") eq 1)
   assert(m.get("age") eq 2)
+  assert(m.len() eq 2)
 }
 
 test "string-map growable" {

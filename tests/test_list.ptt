@@ -22,12 +22,12 @@ test "list pop" {
 }
 
 test "list literal" {
-  // [a, b, c] still routes through the legacy `list` keyword
-  // type today; phase ε3 retires that. Keep this test on the
-  // legacy form to verify the bridge keeps working until then.
+  // ε3: [a, b, c] now lowers to `List of int` via stdlib path
+  // because `use std/list` is in scope.
   nums is [10, 20, 30]
   assert(nums[0] eq 10)
   assert(nums[2] eq 30)
+  assert(nums.len() eq 3)
 }
 
 test "list growable" {

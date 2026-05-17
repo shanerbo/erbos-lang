@@ -1,22 +1,24 @@
-// Queue: FIFO data structure using a list + head pointer
+// Queue: FIFO data structure using a list + head pointer.
 
-new() list of int {
-  give list of int
+use std/list
+
+new() List of int {
+  give List of int
 }
 
-push(q list, val int) {
+push(q List of int, val int) {
   q.push(val)
 }
 
-pop(q list, head int) int {
+pop(q List of int, head int) int {
   give q[head]
 }
 
-size(q list, head int) int {
-  give len(q) - head
+size(q List of int, head int) int {
+  give q.len() - head
 }
 
-empty(q list, head int) int {
-  len(q) - head le 0 ?{ give 1 }
+empty(q List of int, head int) int {
+  q.len() - head le 0 ?{ give 1 }
   give 0
 }

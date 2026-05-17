@@ -23,6 +23,9 @@
 //   cherry
 //   3
 
+use std/string_map
+use std/list
+
 spark {
   // Force enough locals + heap allocations that the through-in's
   // hidden coll/idx slots end up at offsets > 255 from x29.
@@ -43,15 +46,15 @@ spark {
   pad15 is "padding-string-15"
   pad16 is "padding-string-16"
 
-  fruits is map of str to int
+  fruits is StringMap of int
   fruits.set("apple", 1)
   fruits.set("banana", 2)
   fruits.set("cherry", 3)
 
-  yell(len(fruits))
+  yell(fruits.len())
   keys is fruits.keys()
   through (k in keys) {
     yell(k)
   }
-  yell(len(keys))
+  yell(keys.len())
 }

@@ -7,13 +7,15 @@
 // 3. Swap nums[i] and nums[j]
 // 4. Reverse from i+1 to end
 
-swap(nums list, i int, j int) {
+use std/list
+
+swap(nums List of int, i int, j int) {
   tmp is nums[i]
-  list_set(nums, i, nums[j])
-  list_set(nums, j, tmp)
+  nums[i] be nums[j]
+  nums[j] be tmp
 }
 
-reverse(nums list, start int, end int) {
+reverse(nums List of int, start int, end int) {
   l is start
   r is end
   infi (l lt r) {
@@ -23,7 +25,7 @@ reverse(nums list, start int, end int) {
   }
 }
 
-next_perm(nums list, n int) {
+next_perm(nums List of int, n int) {
   // Step 1: find rightmost ascent
   i is n - 2
   infi (i ge 0) {
@@ -50,7 +52,7 @@ next_perm(nums list, n int) {
   reverse(nums, i + 1, n - 1)
 }
 
-print_list(nums list, n int) {
+print_list(nums List of int, n int) {
   through (i from 0 to n by 1) {
     yell(nums[i])
   }

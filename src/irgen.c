@@ -464,10 +464,12 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
                 emit(c, (IRInst){.op = IR_CONST, .dst = dummy, .imm = 0});
                 return dummy;
             }
-            if (!strcmp(call_name, "list"))      call_name = "list_new";
-            else if (!strcmp(call_name, "map"))  call_name = "map_new";
-            else if (!strcmp(call_name, "imap")) call_name = "imap_new";
-            else if (!strcmp(call_name, "task")) {
+            // ε1+ζ1: `list` / `map` / `imap` constructors are gone.
+            // User code now writes `List of T` / `Map of K to V` /
+            // `StringMap of V` (or the literal forms) and the
+            // monomorphizer + irgen route them through the stdlib
+            // method symbols. The remap below is dead.
+            if (!strcmp(call_name, "task")) {
                 // task() returns a placeholder handle (0). No bl needed.
                 VReg dst = new_vreg(c);
                 emit(c, (IRInst){.op = IR_CONST, .dst = dst, .imm = 0});
@@ -581,15 +583,16 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
                          n->method_call.resolved_struct_name, method);
                 sym = strdup(sym_buf);
             }
-            // 3. built-in collection methods
+            // 3. built-in task methods (the green-thread runtime
+            // is a separate effort — not yet wired into compiled
+            // output but the symbols are no-op stubs from
+            // emit_task_builtins). The legacy list/map collection
+            // method dispatch was retired in ε1+ζ1 — `xs.push(v)`
+            // etc. now resolve to the user-method symbols emitted
+            // by std/list / std/map / std/string_map through the
+            // resolved_struct_name path above.
             if (!sym) {
-                if (!strcmp(method, "push") || !strcmp(method, "pop") || !strcmp(method, "len")) {
-                    snprintf(sym_buf, sizeof(sym_buf), "list_%s", method);
-                    sym = strdup(sym_buf);
-                } else if (!strcmp(method, "set") || !strcmp(method, "get") || !strcmp(method, "keys")) {
-                    snprintf(sym_buf, sizeof(sym_buf), "map_%s", method);
-                    sym = strdup(sym_buf);
-                } else if (!strcmp(method, "fire") || !strcmp(method, "collapse")) {
+                if (!strcmp(method, "fire") || !strcmp(method, "collapse")) {
                     snprintf(sym_buf, sizeof(sym_buf), "task_%s", method);
                     sym = strdup(sym_buf);
                 }

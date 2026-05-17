@@ -1,26 +1,28 @@
-// Stack: LIFO data structure using a list
+// Stack: LIFO data structure using a list.
 
-new() list of int {
-  give list of int
+use std/list
+
+new() List of int {
+  give List of int
 }
 
-push(s list, val int) {
+push(s List of int, val int) {
   s.push(val)
 }
 
-pop(s list) int {
+pop(s List of int) int {
   give s.pop()
 }
 
-peek(s list) int {
-  give s[len(s) - 1]
+peek(s List of int) int {
+  give s[s.len() - 1]
 }
 
-size(s list) int {
-  give len(s)
+size(s List of int) int {
+  give s.len()
 }
 
-empty(s list) int {
-  len(s) eq 0 ?{ give 1 }
+empty(s List of int) int {
+  s.len() eq 0 ?{ give 1 }
   give 0
 }

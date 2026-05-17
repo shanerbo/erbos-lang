@@ -5,8 +5,9 @@
 
 use std/string
 use std/string_map
+use std/list
 
-solve(nums list, size int, target int) int {
+solve(nums List of int, size int, target int) int {
   seen is StringMap of int
   through (i from 0 to size by 1) {
     complement is target - nums[i]

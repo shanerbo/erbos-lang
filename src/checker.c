@@ -756,6 +756,40 @@ static Type check_expr(Checker *c, Node *n) {
             // parameter — read it off val_type when available.
             if (obj_t.kind == TYPE_STRUCT && obj_t.val_type)
                 return *obj_t.val_type;
+            // ε3 chained-index support: for stdlib `List__<T>`,
+            // `Map__<K>__<V>`, `StringMap__<V>` structs, infer the
+            // element type from the `data` field of the struct
+            // definition. Without this, `grid[0][0]` on
+            // `List of List of int` types the inner index as
+            // TYPE_UNKNOWN and falls back to legacy header decoding.
+            if (obj_t.kind == TYPE_STRUCT && obj_t.struct_name) {
+                StructInfo *si = find_struct(c, obj_t.struct_name);
+                if (si) {
+                    // Find the `data` field.
+                    for (int fi = 0; fi < si->field_count; fi++) {
+                        if (!strcmp(si->field_names[fi], "data") ||
+                            !strcmp(si->field_names[fi], "vals")) {
+                            const char *t = si->field_types[fi];
+                            // Strip "array<" / "array__" prefix to get
+                            // the element type spelling.
+                            const char *inner = NULL;
+                            if (!strncmp(t, "array<", 6) &&
+                                t[strlen(t) - 1] == '>') {
+                                int len = (int)strlen(t) - 7;
+                                char buf[256];
+                                if (len > 0 && len < (int)sizeof(buf)) {
+                                    memcpy(buf, t + 6, len);
+                                    buf[len] = '\0';
+                                    return parse_type_str(c, buf);
+                                }
+                            } else if (!strncmp(t, "array__", 7)) {
+                                inner = t + 7;
+                                return parse_type_str(c, inner);
+                            }
+                        }
+                    }
+                }
+            }
             return make_type(TYPE_UNKNOWN);
         }
         case NODE_INDEX_ASSIGN: {

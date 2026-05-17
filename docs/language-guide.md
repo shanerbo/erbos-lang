@@ -33,10 +33,9 @@ All variables must be initialized.
 | `StringMap of V` | string-keyed map (stdlib, from `std/string_map`) |
 | `nil` | null/empty pointer |
 
-> The legacy `str` keyword and the `list` / `map` / `imap` keyword
-> forms are still accepted but scheduled for removal — see
-> [`OVERHAUL.md`](../OVERHAUL.md). New code should write `String`
-> and the stdlib types.
+> The legacy `str` keyword and `list` / `map` / `imap` keyword
+> forms have been retired (γ7 + ε1). Programs use `String` /
+> `List of T` / `Map of K to V` / `StringMap of V` exclusively.
 
 ## Functions
 
@@ -245,14 +244,23 @@ yell(nums[0])                 // 10
 yell(nums.len())              // 2
 last is nums.pop()            // 20
 
-// Literal (type inferred — currently maps to legacy `list`,
-// scheduled to route through List of T in phase ε):
+// Literal — lowers to `List of int` because std/list is in scope:
 vals is [1, 2, 3]
+yell(vals[0])                 // 1
 
-// Chained indexing across legacy list-of-list works too:
-grid is list of list
-grid.push([1, 2, 3])
+// Chained indexing on List of List of int:
+grid is List of List of int
+inner is List of int
+inner.push(1)
+inner.push(2)
+inner.push(3)
+grid.push(inner)
 yell(grid[0][1])              // 2
+
+// Iteration:
+through (x in nums) {
+  yell(x)
+}
 ```
 
 ## Maps
@@ -272,13 +280,17 @@ memo is Map of int to int
 memo.set(42, 100)
 yell(memo.get(42))            // 100
 
-// Map literal (currently routes to the legacy `map` keyword;
-// phase ε will route through StringMap of V):
+// Map literal — lowers to `StringMap of int` because
+// std/string_map is in scope:
 m is ["name" to 1, "age" to 2]
+yell(m.get("name"))           // 1
 
-// Iteration via .keys() works on the legacy `map` keyword form;
-// the stdlib Map / StringMap will gain explicit iteration in
-// phase ε once the keyword forms are retired.
+// Iteration via .keys() returns a List of String:
+keys is scores.keys()
+through (k in keys) {
+  yell(k)
+  yell(scores.get(k))
+}
 ```
 
 ## Enums + Pattern Matching

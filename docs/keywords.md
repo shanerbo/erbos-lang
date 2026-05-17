@@ -1,10 +1,11 @@
 # Potato Keywords 🥔
 
-> **Status:** mid-overhaul. `assert` was demoted from reserved to
-> a stdlib function (γ3); `spark` was promoted from identifier to
-> reserved keyword (α0). The legacy `list` / `map` / `imap` keyword
-> forms are still accepted but scheduled for removal in phase ε
-> of [`OVERHAUL.md`](../OVERHAUL.md).
+> **Status:** post-overhaul. `assert` was demoted from reserved
+> to a stdlib function (γ3); `spark` was promoted from identifier
+> to reserved keyword (α0). The legacy `list` / `map` / `imap`
+> keyword forms are gone (ε1) — every program uses `List of T` /
+> `Map of K to V` / `StringMap of V` from std/list / std/map /
+> std/string_map.
 
 | Keyword | Purpose | Example |
 |---------|---------|---------|
@@ -18,7 +19,7 @@
 | `ref` | mutable borrow param | `func(p ref Point)` |
 | `through` | range/collection loop | `through (i from 0 to 10 by 1) { }` |
 | `from` / `to` / `by` | loop range | see `through` |
-| `in` | collection iteration | `through (x in list) { }` |
+| `in` | collection iteration | `through (x in xs) { }` |
 | `infi` | while/infinite loop | `infi (cond) { }` |
 | `stop` | break | `stop` |
 | `skip` | continue | `skip` |
@@ -30,26 +31,20 @@
 | `nil` | null pointer | `root eq nil` |
 | `array` | typed-storage primitive (`array of T`, `array of byte`) | `xs is array of int with cap 8` |
 | `with` / `cap` | array constructor parts | `array of int with cap 8` |
-| `of` / `to` | generic type connectives | `List of int`, `Map of str to int` |
+| `of` / `to` | generic type connectives | `List of int`, `Map of String to int` |
 | `match` | pattern match on enum | `match r { Ok(v) => ... }` |
 | `use` | import module | `use std/math` |
 | `as` | import alias | `use path as name` |
 | `test` | define test block | `test "name" { }` |
 | `task` | concurrency handle (compiled-mode placeholder; see note) | `t is task()` |
 
-### Scheduled for removal (phase ε)
-
-| Keyword | Replacement |
-|---------|-------------|
-| `list` (in `list of T` and the implicit `[a,b,c]` literal type) | `List of T` from `std/list` |
-| `map` (in `map of K to V` and `["k" to v]` literals) | `StringMap of V` from `std/string_map` |
-| `imap` | `Map of int to V` from `std/map` |
-
 ### No longer reserved
 
 | Word | Why |
 |------|-----|
 | `assert` | Now a stdlib function (γ3). `assert(cond)` parses as a regular call; the checker recognises the name and lowers to `_assert_fail`-on-false. |
+| `list` / `map` / `imap` | Retired in ε1. The legacy keyword forms (`list of T`, `map of K to V`, `imap of int to V`) no longer parse. User code now writes `List of T` / `Map of K to V` / `StringMap of V` (from std/list / std/map / std/string_map). The `[a, b, c]` literal lowers to `List of int` and `["k" to v]` lowers to `StringMap of int` when the matching `use` line is in scope. |
+| `str` | Retired in γ7 — `String` (the std/string struct) is the only spelling now. |
 
 ## Symbols
 

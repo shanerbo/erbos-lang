@@ -178,11 +178,12 @@ mi.set(42, 100)
 yell(mi.get(42))
 ```
 
-The legacy keyword forms (`list of int`, `map of str to int`,
-`imap of int to int`, `[1,2,3]` literals) still work but are
-scheduled for removal in phase ε of the
-[overhaul plan](OVERHAUL.md). New code should use the stdlib
-types.
+The `[1,2,3]` and `["k" to v]` literal forms lower to
+`List of int` and `StringMap of int` automatically when the
+matching `use std/list` / `use std/string_map` is in scope.
+The legacy `list of T` / `map of K to V` / `imap of int to V`
+keyword forms are retired (phase ε of the
+[overhaul plan](OVERHAUL.md)).
 
 ### Ownership & Safety
 ```
@@ -229,7 +230,6 @@ c is rep b          // clone — shallow copy (pointer copy)
 | `nil` | null pointer |
 | `array` | typed-storage primitive (`array of T`, `array of byte`) |
 | `of` / `to` | word-style generic connectives (`Box of T`, `Map of K to V`) |
-| `list` / `map` / `imap` | legacy collection-type keywords (scheduled for removal in phase ε of [`OVERHAUL.md`](OVERHAUL.md)) |
 | `match` | pattern match on enum |
 | `use` / `as` | import module / alias |
 | `test` | built-in test block (`assert` is now a stdlib function, not a keyword) |
@@ -300,7 +300,7 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 | `ref` enforcement | Non-ref struct params cannot be mutated (compile error). |
 | Green thread runtime | Separate C library (`src/runtime.c`). Not integrated into compiled `.ptt` output. |
 | Channels | Separate C library (`src/channel.c`). Not integrated into compiled output. |
-| Pure-Potato stdlib (`std/string`, `std/list`, `std/map`, `std/string_map`) | Shipped as the canonical method-style surface. The legacy `list` / `map` / `imap` keyword forms still work behind the same C runtime; phase ε of [`OVERHAUL.md`](OVERHAUL.md) retires them. |
+| Pure-Potato stdlib (`std/string`, `std/list`, `std/map`, `std/string_map`) | The only collection / String surface. Backed by `array of T`. List / map literals lower through these types automatically. Legacy `list` / `map` / `imap` keyword forms retired (ε1). |
 | `array of T` / `array of byte` | Typed-storage primitives — what the stdlib types are built on. |
 
 ### Planned (v0.2+)
@@ -310,7 +310,6 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 | Result/Option as built-in types | — |
 | Traits / interfaces | — |
 | Operator overloading | — |
-| Phase ε / ζ of overhaul: drop legacy `list`/`map`/`imap` keywords + delete dead C runtime | see [`OVERHAUL.md`](OVERHAUL.md) |
 | Self-hosting | — |
 
 ---
@@ -364,8 +363,8 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 - [x] Pure-Potato `std/list`, `std/map`, `std/string_map`, `std/string` (against `array of T`)
 - [x] `spark` reserved keyword; `assert` demoted to stdlib function
 - [x] Compile-time `yell` overload (resolves on static argument type)
-- [ ] Drop legacy `list` / `map` / `imap` keyword forms (phase ε)
-- [ ] Delete dead C runtime helpers (phase ζ)
+- [x] Drop legacy `list` / `map` / `imap` keyword forms (phase ε)
+- [x] Delete dead C runtime collection helpers (phase ζ1)
 - [ ] Deep clone for `rep`
 - [ ] Result/Option as built-in types
 - [ ] Traits / interfaces
@@ -436,7 +435,7 @@ The **Monomorph** pass (`src/monomorph.c`) instantiates every concrete generic f
 
 The **IR backend** is the only backend. The legacy AST-walking direct codegen was retired after the IR pipeline reached behavioural parity on every program in the test corpus (see `docs/ir-pipeline.md`). The IR uses cross-block, call-aware register allocation: vregs whose live range crosses a `bl` are placed in callee-save registers (x19..x28) with proper prologue saves, while shorter-lived values use the temporary range (x8, x11..x18; x9 and x10 are reserved as scratch for frame addressing).
 
-`erbos ir <file.ptt>` emits the .s only, useful for inspecting generated assembly. Runtime helpers (yell, heap allocator, panic and assert handlers, plus the legacy list/map/imap collection helpers and a String shim) are emitted from `src/runtime_emit.c` as raw ARM64 assembly. The pure-Potato stdlib (`std/list`, `std/map`, `std/string_map`, `std/string`) provides the canonical method-style surface; phase ζ of [`OVERHAUL.md`](OVERHAUL.md) deletes the remaining C-runtime collection helpers once phase ε retires the legacy keyword forms that still depend on them.
+`erbos ir <file.ptt>` emits the .s only, useful for inspecting generated assembly. The runtime helpers in `src/runtime_emit.c` are now down to the irreducible kernel-boundary set: `_heap_alloc` / `_heap_free`, `_yell_int` / `_String_yell`, `_write_bytes`, `_panic_oob` / `_panic_capacity` / `_assert_fail`, the per-struct `_alloc_<X>` constructors, plus the residual `_str_eq` / `_str_concat` / `_int_to_str` / `_yell` shim used by the operator + interpolation paths. The pure-Potato stdlib (`std/list`, `std/map`, `std/string_map`, `std/string`) provides every collection and String operation through monomorphized user methods. See [`docs/runtime.md`](docs/runtime.md) for the full breakdown.
 
 ---
 
