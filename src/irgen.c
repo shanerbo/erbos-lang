@@ -488,20 +488,19 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
             // language constructs — typed array indexing, struct
             // field access, etc.
             else if (!strcmp(call_name, "len")) {
+                // Free-function `len()` survives only on legacy
+                // `list`/`map`/`imap` keyword-form receivers (where
+                // count lives at offset 8 of a 24-byte header).
+                // String receivers route via `s.len()` (γ4); the
+                // string-specific `_str_len` symbol was dropped in
+                // ζ2. Once ε retires the legacy collection keywords
+                // this entire builtin goes away.
                 if (n->call.arg_count == 1) {
                     Node *arg = n->call.args[0];
-                    // Heuristic match on resolved_type set by the checker:
-                    //   3 = list/map (load offset 8)
-                    //   5 = string (call _str_len)
-                    if (arg->resolved_type == 5) {
-                        call_name = "str_len";
-                    } else {
-                        // Treat as a generic header-load.
-                        VReg argv = gen_expr(c, arg);
-                        VReg dst = new_vreg(c);
-                        emit(c, (IRInst){.op = IR_LOAD, .dst = dst, .a = argv, .imm = 8});
-                        return dst;
-                    }
+                    VReg argv = gen_expr(c, arg);
+                    VReg dst = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_LOAD, .dst = dst, .a = argv, .imm = 8});
+                    return dst;
                 }
             }
             VReg *args = NULL;

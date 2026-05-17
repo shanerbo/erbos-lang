@@ -351,51 +351,12 @@ static void emit_int_to_str(FILE *out) {
     fprintf(out, "    ldp x29, x30, [sp], #16\n    ret\n\n");
 }
 
-static void emit_str_builtins(FILE *out) {
-    // β4: _str_len reads count from the String header at offset 8.
-    fprintf(out, "// built-in: _str_len(x0=String) -> int\n");
-    fprintf(out, ".globl _str_len\n.p2align 2\n_str_len:\n");
-    fprintf(out, "    ldr x0, [x0, #8]\n");
-    fprintf(out, "    ret\n\n");
-
-    // _char_at(x0=String header, x1=index) -> new 1-char String.
-    // β4: source data field is array of byte (16-byte hdr); load
-    // bytes ptr via two-step. Result: allocate bytes (2), array
-    // of byte hdr (16), and String hdr (32).
-    fprintf(out, "// built-in: _char_at(x0=String, x1=int) -> String\n");
-    fprintf(out, ".globl _char_at\n.p2align 2\n_char_at:\n");
-    fprintf(out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
-    fprintf(out, "    stp x19, x20, [sp, #-16]!\n");
-    fprintf(out, "    stp x25, x26, [sp, #-16]!\n");
-    fprintf(out, "    str x27, [sp, #-16]!\n");
-    fprintf(out, "    ldr x19, [x0, #16]\n");      // arr hdr
-    fprintf(out, "    ldr x19, [x19, #8]\n");      // src bytes ptr
-    fprintf(out, "    mov x20, x1\n");             // index
-    fprintf(out, "    mov x0, #2\n    bl _heap_alloc\n");
-    fprintf(out, "    mov x25, x0\n");
-    fprintf(out, "    ldrb w2, [x19, x20]\n");
-    fprintf(out, "    strb w2, [x25, #0]\n");
-    fprintf(out, "    strb wzr, [x25, #1]\n");
-    // array-of-byte header for result.
-    fprintf(out, "    mov x0, #16\n    bl _heap_alloc\n");
-    fprintf(out, "    mov x27, x0\n");
-    fprintf(out, "    mov x4, #1\n");
-    fprintf(out, "    str x4, [x27, #0]\n");       // arr.cap
-    fprintf(out, "    str x25, [x27, #8]\n");      // arr.data
-    // String header.
-    fprintf(out, "    mov x0, #32\n    bl _heap_alloc\n");
-    fprintf(out, "    mov x26, x0\n");
-    fprintf(out, "    mov x4, #1\n");
-    fprintf(out, "    str x4, [x26, #0]\n");
-    fprintf(out, "    str x4, [x26, #8]\n");
-    fprintf(out, "    str x27, [x26, #16]\n");     // data = arr hdr
-    fprintf(out, "    str x4, [x26, #24]\n");      // owned = 1
-    fprintf(out, "    mov x0, x26\n");
-    fprintf(out, "    ldr x27, [sp], #16\n");
-    fprintf(out, "    ldp x25, x26, [sp], #16\n");
-    fprintf(out, "    ldp x19, x20, [sp], #16\n");
-    fprintf(out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
-}
+// ζ2: emit_str_builtins (which used to emit `_str_len` and
+// `_char_at`) is gone. Both symbols had no remaining callers
+// after γ4 routed user code through the `s.len()` / `s.char_at(i)`
+// method form. The `String.len` / `String.char_at` user methods
+// in `std/string.ptt` provide the same semantics through the
+// canonical method-dispatch path.
 
 static void emit_map_builtins(FILE *out) {
     // Map layout: header [capacity | count | data_ptr], data is
@@ -716,7 +677,8 @@ void runtime_emit_builtins(FILE *out) {
     emit_str_eq(out);
     emit_str_concat(out);
     emit_int_to_str(out);
-    emit_str_builtins(out);
+    // ζ2: emit_str_builtins removed — `_str_len` and `_char_at`
+    // had no remaining callers after γ4.
     emit_map_builtins(out);
     emit_imap_builtins(out);
     emit_list_builtins(out);
