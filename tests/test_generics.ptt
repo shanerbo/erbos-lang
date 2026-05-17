@@ -7,7 +7,7 @@
 //     concrete instantiation and one specialised method per
 //     instantiation+template
 //   - per-instantiation symbol mangling: Box of int -> Box__int,
-//     Both of str to int -> Both__str__int
+//     Both of String to int -> Both__String__int
 //   - distinct concrete instantiations of the same template don't
 //     interfere
 //
@@ -15,6 +15,8 @@
 //   - `of T` introduces a single type parameter
 //   - `of K to V` introduces a key->value pair
 //   - method-def head infers parameters from the receiver
+
+use std/string
 
 Box of T is {
   value T
@@ -55,24 +57,25 @@ test "generic Box of int" {
   assert(b.get() eq 42)
 }
 
-test "generic Box of str" {
-  b is Box of str
+test "generic Box of String" {
+  b is Box of String
   b.set("hello")
-  // String comparison flows through _str_eq.
+  // String comparison flows through String.equals (via the
+  // operator-tagging path in the checker).
   assert(b.get() eq "hello")
 }
 
 test "two distinct instantiations of the same template" {
   bi is Box of int
-  bs is Box of str
+  bs is Box of String
   bi.set(7)
   bs.set("seven")
   assert(bi.get() eq 7)
   assert(bs.get() eq "seven")
 }
 
-test "two-parameter generic Both of str to int" {
-  p is Both of str to int
+test "two-parameter generic Both of String to int" {
+  p is Both of String to int
   p.set_key("alice")
   p.set_value(95)
   assert(p.get_key() eq "alice")

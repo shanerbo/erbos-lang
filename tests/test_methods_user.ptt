@@ -9,6 +9,8 @@
 //   - recursive method calls through self
 //   - methods called inside loops
 
+use std/string
+
 Counter is {
   value int
 }
@@ -47,7 +49,7 @@ Point.translated(self Point, dx int, dy int) Point {
 
 Result is
   Ok(value int)
-  | Err(message str)
+  | Err(message String)
 
 Result.tag(self Result) int {
   give 99

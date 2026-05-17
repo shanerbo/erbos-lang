@@ -1,6 +1,8 @@
+use std/string
+
 Result is
   Ok(value int)
-  | Err(message str)
+  | Err(message String)
 
 divide(a int, b int) Result {
   b eq 0 ?{

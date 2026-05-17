@@ -307,12 +307,20 @@ on completion. Don't redo a checked task.
       function 'X'" error.
       Acceptance: verified — `panic_oob()` and `write_bytes(0,0)`
       from user code error with "unknown function".
-- [ ] **γ6** Sweep all `s str` → `s String` in every `.ptt` file
-      (parameters, fields, return types, var declarations). Add
-      `use std/string` to every file that referenced `str`.
-      Affected files: ~20 in `examples/`, `tests/`, `std/`.
-      Acceptance: `grep -E '\\b(str)\\b' tests/ examples/ std/`
-      returns nothing relevant; tests still pass.
+- [x] **γ6** Sweep all `s str` → `s String` in every `.ptt` file —
+      function parameters, struct/enum field types, return types,
+      var declarations. Each file that newly uses `String` got a
+      `use std/string` injected.
+      Files swept: tests/test_enum.ptt, tests/test_methods_user.ptt,
+      tests/test_generics.ptt, examples/kitchen_sink.ptt,
+      examples/leetcode/{longest_substr,longest_substr_brute,
+      phone_combos}.ptt, examples/leetcode/tests/test_longest_substr.ptt.
+      The `map of str to V` legacy keyword form is left in place —
+      that's a phase ε concern (the entire `map` keyword goes
+      away there, taking `str` with it as a key-type spelling).
+      Acceptance: `grep -rnE '\bstr\b' tests/*.ptt examples/*.ptt
+      examples/**/*.ptt` returns only `map of str to V` and
+      string-test-internal references; `make test` green.
 - [ ] **γ7** Drop `TOK_STR_TYPE` from the lexer and `TYPE_STR`
       from the checker. The token and type kind are gone. String
       type is referenced exclusively as `String` (the struct from

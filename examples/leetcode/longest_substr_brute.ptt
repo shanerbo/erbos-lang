@@ -2,7 +2,9 @@
 // Approach: O(n^2) brute force
 // Time: O(n^2)  Space: O(1)
 
-has_dup(s str, start int, end int) int {
+use std/string
+
+has_dup(s String, start int, end int) int {
   through (i from start to end by 1) {
     through (j from i + 1 to end by 1) {
       s.char_at(i) eq s.char_at(j) ?{
@@ -13,7 +15,7 @@ has_dup(s str, start int, end int) int {
   give 0
 }
 
-longest(s str, n int) int {
+longest(s String, n int) int {
   max_len is 0
   through (i from 0 to n by 1) {
     through (j from i + 1 to n + 1 by 1) {

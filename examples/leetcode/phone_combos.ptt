@@ -2,7 +2,9 @@
 // Approach: Recursive backtracking
 // Time: O(4^n)  Space: O(n)
 
-get_letters(digit str) str {
+use std/string
+
+get_letters(digit String) String {
   digit eq "2" ?{ give "abc" }
   digit eq "3" ?{ give "def" }
   digit eq "4" ?{ give "ghi" }
@@ -14,7 +16,7 @@ get_letters(digit str) str {
   give ""
 }
 
-backtrack(digits str, index int, current str, n int) {
+backtrack(digits String, index int, current String, n int) {
   index eq n ?{
     yell(current)
     give
@@ -29,7 +31,7 @@ backtrack(digits str, index int, current str, n int) {
   }
 }
 
-solve(digits str) {
+solve(digits String) {
   n is digits.len()
   n eq 0 ?{ give }
   backtrack(digits, 0, "", n)

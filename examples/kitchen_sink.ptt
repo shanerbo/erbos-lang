@@ -41,7 +41,7 @@ fib(n int) int {
 }
 
 // === String helpers ===
-greet(name str) str {
+greet(name String) String {
   give "hello " + name
 }
 
