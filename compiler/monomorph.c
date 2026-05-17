@@ -309,6 +309,16 @@ static Node *clone_node(Node *n) {
         case NODE_CALL:
             c->call.name = xstrdup(n->call.name);
             c->call.args = clone_node_array(n->call.args, n->call.arg_count);
+            // Named-arg form: each arg has a parallel field-name slot.
+            // Mirror the array; positional calls leave arg_names == NULL.
+            if (n->call.arg_names) {
+                c->call.arg_names = malloc(n->call.arg_count * sizeof(char *));
+                for (int i = 0; i < n->call.arg_count; i++) {
+                    c->call.arg_names[i] = xstrdup(n->call.arg_names[i]);
+                }
+            } else {
+                c->call.arg_names = NULL;
+            }
             break;
         case NODE_METHOD_CALL:
             c->method_call.object = clone_node(n->method_call.object);

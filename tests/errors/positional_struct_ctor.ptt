@@ -1,0 +1,13 @@
+// Positional struct constructors are no longer allowed; users must
+// use the named-arg form (or zero-default with later field
+// assignment).
+
+Point is {
+  x int
+  y int
+}
+
+spark {
+  p is Point(1, 2)
+  yell(p.x)
+}

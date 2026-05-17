@@ -158,9 +158,17 @@ struct Node {
         struct { Node *value; } give;
 
         // NODE_CALL
+        // arg_names (named-arg constructor form): parallel to args.
+        // When non-NULL, arg_names[i] is the declared field name for
+        // args[i]; the call is interpreted as `Foo(field is value, ...)`.
+        // When NULL, the call is positional (today the parser forbids
+        // positional struct constructors with args, so positional ==
+        // free-function call). All-or-nothing: we never mix named and
+        // positional in the same call.
         struct {
             char *name;
             Node **args;
+            char **arg_names;
             int arg_count;
         } call;
 

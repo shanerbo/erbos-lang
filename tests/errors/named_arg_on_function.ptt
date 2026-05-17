@@ -1,0 +1,11 @@
+// Named arguments are only valid inside struct constructors. A
+// function call with named-arg syntax must be a compile error
+// (functions are positional).
+
+add(a int, b int) int {
+  give a + b
+}
+
+spark {
+  yell(add(a is 1, b is 2))
+}

@@ -42,6 +42,30 @@ static Node *parse_block(Parser *p);
 static Node *parse_if_continuation(Parser *p, Node *first_cond, int line);
 static char *parse_type_name(Parser *p);
 
+// Parse a single call argument. If the argument is in the named form
+//   IDENT is EXPR
+// (a struct-style named-field initializer, e.g. `Point(x is 1, y is 2)`),
+// the caller-provided *out_name is set to the field name (heap-owned
+// strdup'd copy, never NULL). Otherwise *out_name is set to NULL and
+// the argument is parsed as a plain expression. Detection requires
+// IDENT *immediately* followed by `is`; anything else (including
+// `IDENT eq ...`, `IDENT.foo`, `IDENT(...)`) falls through to the
+// plain-expression path. Caller is responsible for enforcing the
+// "all-or-nothing" rule between named and positional args within the
+// same call.
+static Node *parse_call_arg(Parser *p, char **out_name) {
+    *out_name = NULL;
+    if (at(p, TOK_IDENT) && peek_at(p, 1)->type == TOK_IS) {
+        char *fname = strdup(cur(p)->value);
+        p->pos++;          // skip IDENT
+        p->pos++;          // skip `is`
+        Node *val = parse_expr(p);
+        *out_name = fname;
+        return val;
+    }
+    return parse_expr(p);
+}
+
 // --- Expression parsing ---
 
 static Node *parse_primary(Parser *p) {
@@ -272,19 +296,40 @@ static Node *parse_primary(Parser *p) {
                 n->call.name = full;
                 int cap = 4;
                 n->call.args = malloc(cap * sizeof(Node *));
+                n->call.arg_names = malloc(cap * sizeof(char *));
                 n->call.arg_count = 0;
+                int saw_named = 0;
+                int saw_positional = 0;
                 if (!at(p, TOK_RPAREN)) {
                     if (at(p, TOK_REF)) p->pos++;
-                    n->call.args[n->call.arg_count++] = parse_expr(p);
+                    char *nm = NULL;
+                    n->call.args[n->call.arg_count] = parse_call_arg(p, &nm);
+                    n->call.arg_names[n->call.arg_count] = nm;
+                    if (nm) saw_named = 1; else saw_positional = 1;
+                    n->call.arg_count++;
                     while (at(p, TOK_COMMA)) {
                         p->pos++;
                         if (n->call.arg_count >= cap) {
                             cap *= 2;
                             n->call.args = realloc(n->call.args, cap * sizeof(Node *));
+                            n->call.arg_names = realloc(n->call.arg_names, cap * sizeof(char *));
                         }
                         if (at(p, TOK_REF)) p->pos++;
-                        n->call.args[n->call.arg_count++] = parse_expr(p);
+                        nm = NULL;
+                        n->call.args[n->call.arg_count] = parse_call_arg(p, &nm);
+                        n->call.arg_names[n->call.arg_count] = nm;
+                        if (nm) saw_named = 1; else saw_positional = 1;
+                        n->call.arg_count++;
                     }
+                }
+                if (saw_named && saw_positional) {
+                    fprintf(stderr, "%s:%d: error: cannot mix named and positional arguments in '%s'\n",
+                        p->filename, line, full);
+                    exit(1);
+                }
+                if (!saw_named) {
+                    free(n->call.arg_names);
+                    n->call.arg_names = NULL;
                 }
                 eat(p, TOK_RPAREN);
                 Node *base = n;
@@ -345,19 +390,40 @@ static Node *parse_primary(Parser *p) {
             n->call.name = name;
             int cap = 4;
             n->call.args = malloc(cap * sizeof(Node *));
+            n->call.arg_names = malloc(cap * sizeof(char *));
             n->call.arg_count = 0;
+            int saw_named = 0;
+            int saw_positional = 0;
             if (!at(p, TOK_RPAREN)) {
                 if (at(p, TOK_REF)) p->pos++; // skip ref at call site
-                n->call.args[n->call.arg_count++] = parse_expr(p);
+                char *nm = NULL;
+                n->call.args[n->call.arg_count] = parse_call_arg(p, &nm);
+                n->call.arg_names[n->call.arg_count] = nm;
+                if (nm) saw_named = 1; else saw_positional = 1;
+                n->call.arg_count++;
                 while (at(p, TOK_COMMA)) {
                     p->pos++;
                     if (n->call.arg_count >= cap) {
                         cap *= 2;
                         n->call.args = realloc(n->call.args, cap * sizeof(Node *));
+                        n->call.arg_names = realloc(n->call.arg_names, cap * sizeof(char *));
                     }
                     if (at(p, TOK_REF)) p->pos++; // skip ref at call site
-                    n->call.args[n->call.arg_count++] = parse_expr(p);
+                    nm = NULL;
+                    n->call.args[n->call.arg_count] = parse_call_arg(p, &nm);
+                    n->call.arg_names[n->call.arg_count] = nm;
+                    if (nm) saw_named = 1; else saw_positional = 1;
+                    n->call.arg_count++;
                 }
+            }
+            if (saw_named && saw_positional) {
+                fprintf(stderr, "%s:%d: error: cannot mix named and positional arguments in '%s'\n",
+                    p->filename, line, name);
+                exit(1);
+            }
+            if (!saw_named) {
+                free(n->call.arg_names);
+                n->call.arg_names = NULL;
             }
             eat(p, TOK_RPAREN);
             base = n;
@@ -634,23 +700,18 @@ static Node *parse_stmt(Parser *p) {
         return n;
     }
 
+    // `nomut` is a leading prefix on `IDENT is ...`. Rather than
+    // duplicate the entire is-decl parsing path here (which has
+    // `is now`, `is rep`, primitive types, generic auto-construct,
+    // etc.), we consume the `nomut` keyword and let the IDENT path
+    // below handle the rest, then mark the resulting NODE_VAR_DECL
+    // as nomut. This keeps every shape `is` accepts available to
+    // `nomut` for free — including `nomut xs is List of int`,
+    // `nomut p is Point(x is 1, y is 2)`, etc.
+    int leading_nomut = 0;
     if (at(p, TOK_NOMUT)) {
         p->pos++;
-        char *name = eat(p, TOK_IDENT)->value;
-        eat(p, TOK_IS);
-        Node *n = alloc_node(NODE_VAR_DECL, line);
-        n->var_decl.name = name;
-        n->var_decl.is_nomut = 1;
-        n->var_decl.type_name = NULL;
-        if (at(p, TOK_INT) || at(p, TOK_STR_TYPE) || at(p, TOK_BOOL) || at(p, TOK_IDENT)) {
-            // Check if next is a type keyword or struct name followed by value
-            if (at(p, TOK_INT) || at(p, TOK_STR_TYPE) || at(p, TOK_BOOL)) {
-                n->var_decl.type_name = cur(p)->value;
-                p->pos++;
-            }
-        }
-        n->var_decl.value = parse_expr(p);
-        return n;
+        leading_nomut = 1;
     }
 
     if (at(p, TOK_IDENT)) {
@@ -661,7 +722,7 @@ static Node *parse_stmt(Parser *p) {
             eat(p, TOK_IS);
             Node *n = alloc_node(NODE_VAR_DECL, line);
             n->var_decl.name = name;
-            n->var_decl.is_nomut = 0;
+            n->var_decl.is_nomut = leading_nomut;
             n->var_decl.is_move = 0;
             n->var_decl.is_rep = 0;
             n->var_decl.type_name = NULL;

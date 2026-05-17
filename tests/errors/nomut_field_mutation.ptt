@@ -1,0 +1,13 @@
+// `nomut` now blocks direct field mutation, not just rebinding.
+// Without this, `nomut` was a meaningless decoration on value structs.
+
+Point is {
+  x int
+  y int
+}
+
+spark {
+  nomut p is Point()
+  p.x be 99
+  yell(p.x)
+}

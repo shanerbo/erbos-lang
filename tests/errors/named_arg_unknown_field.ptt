@@ -1,0 +1,11 @@
+// Unknown field name in named-arg constructor must be a compile error.
+
+Point is {
+  x int
+  y int
+}
+
+spark {
+  p is Point(x is 1, z is 2)
+  yell(p.x)
+}

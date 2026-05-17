@@ -380,7 +380,73 @@ static Type check_expr(Checker *c, Node *n) {
             return check_expr(c, n->unary.operand);
         case NODE_CALL: {
             const char *name = n->call.name;
-            if (is_struct(c, name)) return make_struct(name);
+            if (is_struct(c, name)) {
+                // Named-arg constructor: validate every arg's field name
+                // exists, every declared field is set exactly once, and
+                // each arg's value type matches the field's declared
+                // type. Order in source is free.
+                if (n->call.arg_names) {
+                    StructInfo *si = find_struct(c, name);
+                    // Quick sanity check + index lookup table.
+                    int *seen = calloc(si->field_count, sizeof(int));
+                    for (int i = 0; i < n->call.arg_count; i++) {
+                        const char *fname = n->call.arg_names[i];
+                        int field_idx = -1;
+                        for (int j = 0; j < si->field_count; j++) {
+                            if (!strcmp(si->field_names[j], fname)) { field_idx = j; break; }
+                        }
+                        if (field_idx < 0) {
+                            fprintf(stderr,
+                                "error:%d: struct '%s' has no field '%s'\n",
+                                n->line, name, fname);
+                            exit(1);
+                        }
+                        if (seen[field_idx]) {
+                            fprintf(stderr,
+                                "error:%d: field '%s' set more than once in '%s' constructor\n",
+                                n->line, fname, name);
+                            exit(1);
+                        }
+                        seen[field_idx] = 1;
+                        Type arg_t = check_expr(c, n->call.args[i]);
+                        Type expected = parse_type_str(c, si->field_types[field_idx]);
+                        if (arg_t.kind != TYPE_UNKNOWN && expected.kind != TYPE_UNKNOWN &&
+                            !types_equal(arg_t, expected)) {
+                            fprintf(stderr,
+                                "error:%d: field '%s' of '%s' expects '%s', got '%s'\n",
+                                n->line, fname, name, type_name(expected), type_name(arg_t));
+                            exit(1);
+                        }
+                    }
+                    for (int j = 0; j < si->field_count; j++) {
+                        if (!seen[j]) {
+                            fprintf(stderr,
+                                "error:%d: field '%s' missing in '%s' constructor (named-arg form requires every field)\n",
+                                n->line, si->field_names[j], name);
+                            exit(1);
+                        }
+                    }
+                    free(seen);
+                } else if (n->call.arg_count > 0) {
+                    // Positional struct constructor with args is no
+                    // longer supported. Today there's no checker pass
+                    // validating it, and silent truncation by field
+                    // count is a footgun. Force the named-arg form.
+                    fprintf(stderr,
+                        "error:%d: positional struct constructors are not supported; use named-arg form '%s(field is value, ...)'\n",
+                        n->line, name);
+                    exit(1);
+                }
+                return make_struct(name);
+            }
+            // Reject named args on anything that isn't a struct
+            // constructor — function calls and built-ins are positional.
+            if (n->call.arg_names) {
+                fprintf(stderr,
+                    "error:%d: named arguments are only valid in struct constructors, not in call to '%s'\n",
+                    n->line, name);
+                exit(1);
+            }
             if (!strcmp(name, "list") || !strcmp(name, "list_new")) return make_type(TYPE_LIST);
             if (!strcmp(name, "map") || !strcmp(name, "map_new") || !strcmp(name, "imap")) return make_type(TYPE_MAP);
             if (!strcmp(name, "task")) return make_type(TYPE_TASK);
@@ -1012,7 +1078,11 @@ static void check_stmt(Checker *c, Node *n) {
                     exit(1);
                 }
             }
-            // Enforce ref: if object is a non-ref param, block mutation
+            // Enforce ref: if object is a non-ref param, block mutation.
+            // Also enforce nomut: a `nomut` binding cannot have its
+            // fields directly mutated. Method calls that take `ref self`
+            // are still allowed because the type author opts into them
+            // via the receiver declaration.
             if (n->field_assign.object->type == NODE_IDENT) {
                 const char *obj_name = n->field_assign.object->ident.name;
                 int ref_status = get_sym_is_ref(c, obj_name);
@@ -1020,6 +1090,12 @@ static void check_stmt(Checker *c, Node *n) {
                 // ref_status: -1=local(ok), 0=param non-ref(error for structs), 1=param ref(ok)
                 if (ref_status == 0 && obj_t2.kind == TYPE_STRUCT) {
                     fprintf(stderr, "error:%d: cannot mutate '%s' — parameter is not ref\n", n->line, obj_name);
+                    exit(1);
+                }
+                if (is_nomut_sym(c, obj_name)) {
+                    fprintf(stderr,
+                        "error:%d: cannot mutate field '%s' of nomut variable '%s'\n",
+                        n->line, n->field_assign.field, obj_name);
                     exit(1);
                 }
             }

@@ -1,0 +1,12 @@
+// Named-arg constructors require every field to be present.
+// `y` is omitted — must be a compile error.
+
+Point is {
+  x int
+  y int
+}
+
+spark {
+  p is Point(x is 1)
+  yell(p.x)
+}

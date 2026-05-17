@@ -1,0 +1,12 @@
+// Mixing named and positional arguments in the same call must be a
+// compile error. The rule is all-or-nothing.
+
+Point is {
+  x int
+  y int
+}
+
+spark {
+  p is Point(1, y is 2)
+  yell(p.x)
+}

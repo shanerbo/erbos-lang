@@ -1,0 +1,102 @@
+// Coverage for struct construction:
+//   - zero-default: Point()
+//   - named-arg:    Point(x is 1, y is 2)
+//   - nomut binding rules
+
+use std/list
+
+Point is {
+  x int
+  y int
+}
+
+User is {
+  age int
+  active bool
+}
+
+Edge is {
+  src int
+  dst int
+  weight int
+}
+
+Counter is {
+  value int
+}
+
+Counter.bump(self ref Counter) {
+  self.value be self.value + 1
+}
+
+test "zero-default still works" {
+  p is Point()
+  assert(p.x eq 0)
+  assert(p.y eq 0)
+}
+
+test "named-arg basic" {
+  p is Point(x is 1, y is 2)
+  assert(p.x eq 1)
+  assert(p.y eq 2)
+}
+
+test "named-arg order is free" {
+  // Field order in declaration: x, y. Source order: y, x. Result must match.
+  p is Point(y is 99, x is 7)
+  assert(p.x eq 7)
+  assert(p.y eq 99)
+}
+
+test "named-arg with mixed field types" {
+  u is User(age is 30, active is true)
+  assert(u.age eq 30)
+  assert(u.active eq true)
+}
+
+test "named-arg with three fields" {
+  e is Edge(src is 1, dst is 2, weight is 50)
+  assert(e.src eq 1)
+  assert(e.dst eq 2)
+  assert(e.weight eq 50)
+}
+
+test "named-arg with three fields reordered" {
+  e is Edge(weight is 50, dst is 2, src is 1)
+  assert(e.src eq 1)
+  assert(e.dst eq 2)
+  assert(e.weight eq 50)
+}
+
+test "nomut + named-arg construction works" {
+  // The whole reason to have atomic init: nomut bindings
+  // can now actually be useful for value structs.
+  nomut origin is Point(x is 0, y is 0)
+  assert(origin.x eq 0)
+  assert(origin.y eq 0)
+}
+
+test "nomut on stdlib container is allowed" {
+  // nomut binds the variable; ref-self methods (.push) still mutate.
+  nomut xs is List of int
+  xs.push(10)
+  xs.push(20)
+  assert(xs.len() eq 2)
+  assert(xs.get(0) eq 10)
+}
+
+test "nomut + ref-self method on user struct" {
+  // `bump` takes `ref Counter`; nomut blocks direct field write
+  // but ref-self methods are an explicit opt-in by the type author.
+  nomut c is Counter(value is 5)
+  c.bump()
+  c.bump()
+  assert(c.value eq 7)
+}
+
+test "named-arg expressions can be computed" {
+  base is 10
+  p is Point(x is base + 1, y is base * 2)
+  assert(p.x eq 11)
+  assert(p.y eq 20)
+}

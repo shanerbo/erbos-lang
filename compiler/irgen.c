@@ -408,13 +408,11 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
         case NODE_CALL: {
             // Check if it's a struct constructor
             int is_struct = 0;
-            int field_count = 0;
             if (c->program) {
                 for (int si = 0; si < c->program->program.structs.count; si++) {
                     Node *s = c->program->program.structs.items[si];
                     if (!strcmp(s->struct_def.name, n->call.name)) {
                         is_struct = 1;
-                        field_count = s->struct_def.field_count;
                         break;
                     }
                 }
@@ -425,11 +423,38 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
                 snprintf(alloc_name, sizeof(alloc_name), "alloc_%s", n->call.name);
                 VReg ptr = new_vreg(c);
                 emit(c, (IRInst){.op = IR_CALL, .dst = ptr, .str = strdup(alloc_name), .args = NULL, .arg_count = 0});
-                // Store args as fields
-                for (int i = 0; i < n->call.arg_count && i < field_count; i++) {
-                    VReg val = gen_expr(c, n->call.args[i]);
-                    emit(c, (IRInst){.op = IR_STORE, .a = ptr, .b = val, .imm = i * 8});
+                // Named-arg form: look up each arg's field name to find
+                // the declared field index → emit a store at that
+                // offset. Order in source is free; the checker has
+                // already validated that every field is present exactly
+                // once and that types match. The positional form (with
+                // args) is rejected by the checker.
+                if (n->call.arg_names) {
+                    Node *struct_def = NULL;
+                    for (int si = 0; si < c->program->program.structs.count; si++) {
+                        Node *s = c->program->program.structs.items[si];
+                        if (!strcmp(s->struct_def.name, n->call.name)) {
+                            struct_def = s;
+                            break;
+                        }
+                    }
+                    for (int i = 0; i < n->call.arg_count; i++) {
+                        const char *fname = n->call.arg_names[i];
+                        int field_idx = -1;
+                        for (int j = 0; j < struct_def->struct_def.field_count; j++) {
+                            if (!strcmp(struct_def->struct_def.field_names[j], fname)) {
+                                field_idx = j;
+                                break;
+                            }
+                        }
+                        // Defensive: checker guarantees field_idx >= 0.
+                        VReg val = gen_expr(c, n->call.args[i]);
+                        emit(c, (IRInst){.op = IR_STORE, .a = ptr, .b = val,
+                                         .imm = field_idx * 8});
+                    }
                 }
+                // Zero-default constructor: nothing else to do — the
+                // _alloc_<X> call returns a zeroed struct.
                 return ptr;
             }
             // Remap built-in calls to their real emitted symbols.

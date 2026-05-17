@@ -1,0 +1,13 @@
+// Even when initialised with the atomic named-arg form, a `nomut`
+// binding cannot have its fields directly mutated.
+
+Point is {
+  x int
+  y int
+}
+
+spark {
+  nomut p is Point(x is 1, y is 2)
+  p.x be 99
+  yell(p.x)
+}

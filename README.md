@@ -106,9 +106,23 @@ Point is {
   y int
 }
 
-p is Point()
+p is Point()                       // zero-default: fields start at 0
 p.x be 10
+p.y be 20
+
+q is Point(x is 10, y is 20)       // named-arg: atomic init, every field required
+nomut origin is Point(x is 0, y is 0)
 ```
+
+Two construction forms:
+
+- `Point()` — zero-default. Cheap; mutate fields afterwards.
+- `Point(field is value, ...)` — named-arg. Atomic. Every declared
+  field must appear exactly once, order is free, types are checked.
+
+Positional constructors (`Point(1, 2)`) are intentionally rejected —
+field reorder would silently swap call-site semantics. Use named-arg
+or define a factory method.
 
 ### Methods
 ```

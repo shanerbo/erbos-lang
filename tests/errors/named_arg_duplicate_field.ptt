@@ -1,0 +1,12 @@
+// Setting the same field twice in a named-arg constructor must be a
+// compile error.
+
+Point is {
+  x int
+  y int
+}
+
+spark {
+  p is Point(x is 1, x is 2, y is 3)
+  yell(p.x)
+}

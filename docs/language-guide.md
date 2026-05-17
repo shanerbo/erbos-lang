@@ -104,11 +104,60 @@ Point is {
   x int
   y int
 }
+```
 
+There are two ways to construct a struct value:
+
+**Zero-default** — every field starts at the type's zero value:
+
+```
 p is Point()
 p.x be 10
 p.y be 20
 ```
+
+**Named-arg** — atomic init, every declared field set in one go:
+
+```
+p is Point(x is 10, y is 20)
+```
+
+Rules for named-arg construction:
+
+- Every declared field must appear exactly once.
+- Order in the call is free; values land in declared field order.
+- Each value's type must match the field's declared type.
+- Mixing named and positional args (`Point(1, y is 2)`) is a
+  compile error.
+- Positional struct constructors (`Point(1, 2)`) are not allowed —
+  they tie call sites to declaration order with no syntactic
+  warning. Use named-arg or define a factory method.
+
+Use whichever form fits. Zero-default is cheaper to write when
+you'll mutate fields anyway. Named-arg is required when you want
+the binding to be `nomut` (see below) or when you want refactor-
+safe construction that breaks loudly if a new field is added.
+
+### `nomut` and structs
+
+`nomut x is V` means: the binding `x` cannot be reassigned, and
+its fields cannot be directly mutated. Method calls that take
+`ref self` are still allowed — they're an explicit opt-in by the
+type author.
+
+```
+nomut origin is Point(x is 0, y is 0)   // ok: atomic init
+// origin.x be 1                        // error: nomut blocks field mutation
+// origin be Point(x is 9, y is 9)      // error: nomut blocks reassignment
+
+nomut xs is List of int                 // ok: zero-default of stdlib container
+xs.push(10)                              // ok: List.push takes `ref self`
+```
+
+`nomut p is Point()` parses but is generally a dead end — without
+field mutation you can never set `p.x` / `p.y` to anything other
+than zero. Prefer `nomut p is Point(x is ..., y is ...)` so the
+value is fully determined at the bind site.
 
 ## Methods
 

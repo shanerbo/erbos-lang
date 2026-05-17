@@ -1,0 +1,27 @@
+// Regression: named-arg constructor must store each value at the
+// declared field's offset even when source order differs from
+// declaration order. The IR backend looks up each arg's name in
+// the struct field table; a regression here would store at the
+// wrong offset and silently produce swapped fields. Run at -O0/-O1/-O2.
+
+Edge is {
+  src int
+  dst int
+  weight int
+}
+
+test "named-arg fields go to declared offsets, source order != decl order" {
+  // Declared: src, dst, weight. Source: weight, src, dst.
+  e is Edge(weight is 7, src is 100, dst is 200)
+  assert(e.src eq 100)
+  assert(e.dst eq 200)
+  assert(e.weight eq 7)
+}
+
+test "named-arg expressions evaluate before stores" {
+  base is 50
+  e is Edge(dst is base + 1, src is base, weight is base * 2)
+  assert(e.src eq 50)
+  assert(e.dst eq 51)
+  assert(e.weight eq 100)
+}

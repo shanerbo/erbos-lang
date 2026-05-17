@@ -1,0 +1,11 @@
+// Type mismatch on a field's value must be a compile error.
+
+Point is {
+  x int
+  y int
+}
+
+spark {
+  p is Point(x is "hello", y is 2)
+  yell(p.x)
+}

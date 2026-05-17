@@ -9,7 +9,7 @@ name resolved by `use`.
 | `spark` | program entry point | `spark { }` |
 | `is` | variable declaration | `x is 10` |
 | `be` | reassignment | `x be 42` |
-| `nomut` | immutable variable | `nomut x is 10` |
+| `nomut` | immutable binding (no reassignment, no direct field mutation) | `nomut p is Point(x is 0, y is 0)` |
 | `give` | return value | `give x + y` |
 | `now` | move ownership | `b is now a` |
 | `rep` | clone (shallow) | `b is rep a` |
