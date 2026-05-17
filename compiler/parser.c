@@ -290,6 +290,30 @@ static Node *parse_primary(Parser *p) {
                 }
                 break;
             }
+            // No-parens auto-construct in expression position. When
+            // `IDENT of TYPE [to TYPE]` is followed by something
+            // that ends an expression — `,`, `)`, NEWLINE, or EOF —
+            // synthesize a zero-arg constructor call. This lets
+            // users write `Foo(items is List of Int, count is 0)`
+            // (the natural form for "default-construct this nested
+            // collection field") instead of the parser refusing the
+            // value position. Same idea as the var-decl
+            // auto-construct path lower down — extended to argument
+            // position so named-arg constructors work for fields of
+            // generic stdlib type.
+            if (ok && saw_type_token) {
+                TokenType end = p->tokens[p->pos + look].type;
+                if (end == TOK_COMMA || end == TOK_RPAREN ||
+                    end == TOK_NEWLINE || end == TOK_EOF) {
+                    char *full = parse_type_name(p);
+                    Node *n = alloc_node(NODE_CALL, line);
+                    n->call.name = full;
+                    n->call.args = NULL;
+                    n->call.arg_names = NULL;
+                    n->call.arg_count = 0;
+                    return n;
+                }
+            }
             if (ok && saw_type_token && p->tokens[p->pos + look].type == TOK_LPAREN) {
                 // Parametric constructor confirmed. parse_type_name reads
                 // `Box of int` as `Box<int>` (legacy internal form) for

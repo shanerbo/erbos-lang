@@ -1,0 +1,49 @@
+// Regression for spudlock issue #11: match-arm bindings need
+// their declared types so method dispatch on them resolves to
+// the right symbol.
+//
+// Pre-fix, the checker never visited NODE_MATCH at all. Match
+// arm bindings ran through irgen + emit but had no type, so a
+// method call like `count.to_string()` inside an arm fell to
+// the unknown-receiver path and emitted bare `bl _to_string`
+// (undefined). Spudlock's report.ptt hit this exactly.
+
+use std/string
+
+Result is
+  Success(value int)
+  | Failure(code int, message String)
+
+format_result(r Result) String {
+  match r {
+    Success(v) => give "ok " + v.to_string()
+    Failure(c, m) => give "error " + c.to_string() + ": " + m
+  }
+  give ""
+}
+
+test "match Success arm binds int to use to_string()" {
+  r is Result.Success(42)
+  s is format_result(r)
+  assert(s.equals("ok 42"))
+}
+
+test "match Failure arm binds int and String correctly" {
+  r is Result.Failure(7, "boom")
+  s is format_result(r)
+  assert(s.equals("error 7: boom"))
+}
+
+test "match arm method dispatch picks the right symbol per type" {
+  // Stress: int.to_string() and String passed unchanged in same
+  // arm. Without the binding-type fix, c was treated as having
+  // unknown type and method dispatch fell back to a bare call.
+  r is Result.Failure(99, "down")
+  match r {
+    Success(v) => assert(false)
+    Failure(c, m) => {
+      assert(c.to_string().equals("99"))
+      assert(m.equals("down"))
+    }
+  }
+}

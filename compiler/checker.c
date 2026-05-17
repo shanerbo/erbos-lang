@@ -42,6 +42,10 @@ typedef struct {
     // know about them to avoid flagging them as undefined.
     char **import_aliases;
     int import_count;
+    // The parsed program root. Needed by the NODE_MATCH path to
+    // find enum variant field types when binding match-arm
+    // parameters into the symbol table.
+    Node *program;
     // Current function context
     Type cur_return_type;
     int found_give;
@@ -1139,21 +1143,24 @@ static void check_stmt(Checker *c, Node *n) {
         }
         case NODE_FIELD_ASSIGN: {
             Type obj_t = check_expr(c, n->field_assign.object);
-            // Reject `field be now <non-ident>` / `field be rep <non-ident>`.
-            // The forms only make sense with a named local on the RHS:
-            // `now` needs a name to mark moved; `rep` needs the source's
-            // type, which we recover from the local's symbol.
-            if ((n->field_assign.is_move || n->field_assign.is_rep) &&
-                n->field_assign.value->type != NODE_IDENT) {
-                fprintf(stderr,
-                    "error:%d: `field be %s ...` requires a variable on the right-hand side\n",
-                    n->line, n->field_assign.is_move ? "now" : "rep");
-                exit(1);
-            }
             Type val_t = check_expr(c, n->field_assign.value);
             // `field be now src` transfers ownership of `src` into
-            // the field. Mark `src` as moved so any subsequent read
-            // produces a use-after-move error. Mirrors `is now`.
+            // the field. When the source is a named local, mark the
+            // symbol moved so subsequent reads produce a
+            // use-after-move error (mirrors `is now`).
+            //
+            // `field be now obj.field2` (or any non-IDENT RHS) is
+            // also accepted: it transfers the pointer but cannot
+            // mark a struct field as moved (we only track moves at
+            // the symbol level). This is the typical "drain a field
+            // into another" pattern used at the end of a function
+            // where the source struct is about to be RAII-freed
+            // anyway. The cost: the source field is left dangling
+            // until the parent goes out of scope; it shouldn't be
+            // read.
+            //
+            // `field be rep src` deep-clones; src isn't marked
+            // moved (both bindings remain alive).
             if (n->field_assign.is_move &&
                 n->field_assign.value->type == NODE_IDENT) {
                 mark_moved_sym(c, n->field_assign.value->ident.name);
@@ -1263,6 +1270,64 @@ static void check_stmt(Checker *c, Node *n) {
             for (int j = 0; j < n->block.stmts.count; j++)
                 check_stmt(c, n->block.stmts.items[j]);
             break;
+        case NODE_MATCH: {
+            // Type-check the matched expression. The match-arm
+            // bodies need their binding parameters registered with
+            // the right types so subsequent expression-level checks
+            // (especially method dispatch like `count.to_string()`)
+            // pick the right symbol.
+            //
+            // Without this case, match arms ran through irgen and
+            // emit but never through the checker, so binding-shadow
+            // variables had no type and method dispatch fell back
+            // to the unknown-receiver path — emitting bare `_to_string`
+            // instead of `_int_to_string`. Surfaced by spudlock's
+            // report.ptt match against ReportCase.{Success(int),
+            // Failure(int, String)}.
+            check_expr(c, n->match_expr.expr);
+            for (int ai = 0; ai < n->match_expr.arm_count; ai++) {
+                const char *vname = n->match_expr.arm_variant_names[ai];
+                int saved = c->count;
+                // Look up the variant's declared field types from
+                // the program's enum table. Match by variant name
+                // — same enum may have multiple variants, distinct
+                // enums may share a variant name; we try every
+                // enum to find a matching variant.
+                if (c->program) {
+                    for (int ei = 0; ei < c->program->program.enums.count; ei++) {
+                        Node *e = c->program->program.enums.items[ei];
+                        for (int vi = 0; vi < e->enum_def.variant_count; vi++) {
+                            if (!vname) continue;
+                            if (strcmp(e->enum_def.variant_names[vi], vname) != 0) continue;
+                            // Found the variant. Bind each arm
+                            // parameter with the declared field
+                            // type at that position.
+                            int decl_count = e->enum_def.variant_field_counts[vi];
+                            int arm_count = n->match_expr.arm_binding_counts[ai];
+                            int bind_count = decl_count < arm_count ? decl_count : arm_count;
+                            for (int bi = 0; bi < bind_count; bi++) {
+                                const char *bn = n->match_expr.arm_bindings[ai][bi];
+                                const char *bt = e->enum_def.variant_field_types[vi][bi];
+                                set_sym(c, bn, parse_type_str(c, bt));
+                            }
+                            goto done_arm_bindings;
+                        }
+                    }
+                }
+done_arm_bindings:;
+                Node *body = n->match_expr.arm_bodies[ai];
+                if (body && body->type == NODE_BLOCK) {
+                    for (int j = 0; j < body->block.stmts.count; j++)
+                        check_stmt(c, body->block.stmts.items[j]);
+                } else if (body) {
+                    // Single-statement arm: treat as one stmt.
+                    check_stmt(c, body);
+                }
+                // Pop bindings.
+                c->count = saved;
+            }
+            break;
+        }
         case NODE_GIVE: {
             if (n->give.value) {
                 Type give_t = check_expr(c, n->give.value);
@@ -1310,6 +1375,7 @@ static void check_stmt(Checker *c, Node *n) {
 
 void checker_run(Node *program) {
     Checker c = {0};
+    c.program = program;
 
     // Register import aliases so identifier checks know about them.
     c.import_aliases = program->program.use_aliases;
