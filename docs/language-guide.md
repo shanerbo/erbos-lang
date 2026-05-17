@@ -438,6 +438,82 @@ reset(ref pt)                 // caller acknowledges
 
 > `ref` is enforced: mutating a non-ref struct parameter is a compile error.
 
+## Larger programs — the `App` pattern
+
+Potato has no module-level / global variables. Every binding
+lives inside a `spark { }` block, a `test "..." { }` block, or
+a function body. This is deliberate (see
+[`docs/design-decisions.md`](design-decisions.md)) — function
+signatures stay honest about what data they touch, and
+initialization-order bugs become impossible.
+
+The convention for programs that need long-lived shared state is
+to wrap every arena in a single top-level `App` struct, owned
+by `spark`. Functions that need an arena take `ref App` (or
+just the specific arena, when that's all they touch).
+
+```
+use std/list
+
+Image is { pixels int }
+ImageStore is { images List of Image }
+
+ImageStore.add(self ref ImageStore, img Image) int {
+  self.images.push(img)
+  give self.images.len() - 1
+}
+
+User is { id int }
+UserStore is { users List of User }
+
+UserStore.add(self ref UserStore, u User) int {
+  self.users.push(u)
+  give self.users.len() - 1
+}
+
+// One App holds every long-lived arena.
+App is {
+  images ImageStore
+  users  UserStore
+}
+
+// Functions reach data through `ref App` (or a specific arena).
+show_icon(app ref App, icon_id int) {
+  icon is app.images.images.get(icon_id)
+  yell(icon.pixels)
+}
+
+count_users(users UserStore) int {
+  give users.users.len()
+}
+
+spark {
+  app is App()
+
+  // Populate. Field auto-init means app.images and app.users
+  // are already empty arenas — see "struct field auto-init"
+  // in design-decisions.md.
+  app.images.add(Image(pixels is 32000))
+  app.users.add(User(id is 1))
+  app.users.add(User(id is 2))
+
+  // Use.
+  show_icon(ref app, 0)        // 32000
+  yell(count_users(app.users)) // 2
+}
+```
+
+This is structurally identical to "one global `App` instance"
+in C++/Python — same data accessible from the same set of
+functions — but the path is *visible in every signature*. A
+function that doesn't take `ref App` can't reach into the App,
+even by accident. Testability follows: pass a fresh `App` to
+test a function in isolation.
+
+When a function only needs one arena, take just that arena
+(`count_users(users UserStore)`), not the whole `App`. Smaller
+signatures are clearer about what the function depends on.
+
 ## Imports
 
 ```

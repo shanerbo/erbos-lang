@@ -565,3 +565,83 @@ Both passes consult a module-level `g_iropt_program` set by
 - `tests/ir/struct_field_auto_init.ptt` — 2 IR regression tests
   at -O0/-O1/-O2.
 - All tests pass clean at -O0/-O1/-O2; ASan + UBSan clean.
+
+---
+
+## No module-level globals
+**Date:** 2026-05-17
+**Status:** decided
+**Decision:** Potato has no top-level / file-scope / module-level
+variable bindings. Every `is` lives inside `spark { }`,
+`test "..." { }`, or a function body. The convention for
+long-lived shared state is the `App` pattern (one top-level
+struct that owns every arena, passed by `ref`).
+
+### Why no globals
+
+Pushing back on a comparison reflex: most languages have globals
+(C++ file-scope `static`, Python module-level `let`, Java
+class-level `static`), so users coming from those languages
+reach for them first. The case for *not* adding them:
+
+1. **Function signatures stay complete descriptions of what the
+   function touches.** `f(p Point)` reads `p` and nothing else.
+   No "this function might mutate the global cache somewhere"
+   surprise. Test that function in isolation by constructing a
+   fresh `Point`; it can't reach for anything you didn't give it.
+
+2. **Initialization order is impossible to get wrong.** No
+   "static initializer A depends on static initializer B in
+   another translation unit." `spark` runs top to bottom;
+   whatever's bound by line N is what's available on line N+1.
+
+3. **The compiler doesn't need a notion of static lifetime.**
+   Globals would need a separate memory region (BSS / DATA), a
+   separate cleanup story (do they get freed? when?), and a
+   separate const-vs-mut distinction. Locals + heap + RAII
+   covers everything.
+
+4. **Concurrency stays honest.** When the green-thread runtime
+   gets wired into compiled output, there are no shared globals
+   to synchronize. Each task has its own data; sharing is
+   explicit through channels. The hardest C++/Java concurrency
+   problem — "what does this global thread-safely look like?" —
+   doesn't exist by construction.
+
+### What you give up
+
+| Cost | Severity | Workaround |
+|---|---|---|
+| Function signatures can grow when many arenas are involved | low–medium | The `App` pattern: pass one `ref App` instead of N arenas. |
+| No singletons (one logger, one config) | medium | Logger lives in `App`. Functions that log take `ref App` (or just the logger). |
+| No module-init code | low | Build everything at the top of `spark` and pass it in. |
+
+### The `App` pattern (canonical)
+
+For programs that need long-lived shared state, define a single
+top-level struct that owns every arena, instantiate it once at
+the top of `spark`, and pass `ref App` (or just the specific
+arena) to functions that need access. See
+`docs/language-guide.md` § "Larger programs — the `App`
+pattern" for the full worked example.
+
+### What this is NOT
+
+- Not "no constants." Compile-time constants (`nomut x is 10`)
+  inside a function or block work today. We could add file-scope
+  `nomut` for true constants without touching any of the above
+  reasoning. That's a smaller, separate question; not addressed
+  here.
+- Not "no module state ever." If we eventually add a stdlib
+  logger or similar, it could be a struct that the user
+  instantiates in `App`. The convention does the work, not the
+  language.
+
+### Conditions under which to revisit
+
+- A real Potato program demonstrates a use case that genuinely
+  cannot be expressed via the `App` pattern, AND can't be
+  factored differently. We haven't hit one.
+- File-scope `nomut` (compile-time constants only, no mutable
+  globals) is a separate proposal that could land cheaply if
+  there's demand. Not on the roadmap today.

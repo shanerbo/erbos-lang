@@ -196,12 +196,51 @@ construction. This is the pattern modern compilers (LLVM,
 rust-analyzer), ECS game engines, and databases all converged
 on. It works without language changes.
 
+### Larger programs — the `App` pattern
+
+Potato has no module-level globals. Every binding lives inside
+`spark { }`, `test { }`, or a function body. This means: function
+signatures stay honest about what data they touch.
+
+For programs that need long-lived shared state, the convention
+is to wrap every arena in a single top-level `App` struct.
+Functions take `ref App` (or just the specific arena they need).
+
+```
+App is {
+  images ImageStore
+  users  UserStore
+}
+
+show_icon(app ref App, icon_id int) {
+  icon is app.images.images.get(icon_id)
+  yell(icon.pixels)
+}
+
+spark {
+  app is App()
+  // populate app.images, app.users...
+  show_icon(ref app, 0)
+}
+```
+
+Same data accessible from the same set of functions as you'd
+get with globals — but the path is *visible in every signature*.
+A function without `ref App` in its parameter list cannot touch
+the App, even by accident. Tests pass a fresh `App` and exercise
+in isolation.
+
+See [`docs/language-guide.md`](docs/language-guide.md#larger-programs--the-app-pattern)
+for the full example.
+
 ### What Potato deliberately doesn't have
 
 - **No garbage collector.** Single ownership + RAII is enough.
 - **No refcount (`Rc`/`Arc`).** Arena+index covers the use case.
 - **No `&T` long-lived borrows.** They'd require a borrow
   checker, which is a separate multi-year language design.
+- **No module-level globals.** Function signatures stay honest;
+  `App`-pattern handles long-lived shared state.
 - **No async/await.** A green-thread runtime exists in the
   source tree but isn't wired into compiled output yet.
 
