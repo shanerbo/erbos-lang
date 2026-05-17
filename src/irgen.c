@@ -22,6 +22,14 @@ typedef struct {
     int *local_is_heap;
     int *local_is_moved;
     int *local_alloc_sizes;
+    int *local_is_array;     // α7: 1 if the local holds an `array of T`
+                             // header. RAII has to free both the header
+                             // (16 bytes) AND the data buffer (cap*esz
+                             // bytes loaded from header[8]) at scope exit.
+    int *local_array_esz;    // α8: element size for the array local (8
+                             // for `array of int`, 1 for `array of byte`).
+                             // Used by emit_scope_cleanup to compute the
+                             // data-buffer size for _heap_free.
     int local_count;
     int local_cap;
     int slot_next;      // next stack slot
@@ -67,6 +75,8 @@ static void set_local(IRGenCtx *c, const char *name, VReg v) {
         c->local_is_heap = realloc(c->local_is_heap, c->local_cap * sizeof(int));
         c->local_is_moved = realloc(c->local_is_moved, c->local_cap * sizeof(int));
         c->local_alloc_sizes = realloc(c->local_alloc_sizes, c->local_cap * sizeof(int));
+        c->local_is_array = realloc(c->local_is_array, c->local_cap * sizeof(int));
+        c->local_array_esz = realloc(c->local_array_esz, c->local_cap * sizeof(int));
     }
     c->local_names[c->local_count] = (char *)name;
     c->local_vregs[c->local_count] = v;
@@ -75,6 +85,8 @@ static void set_local(IRGenCtx *c, const char *name, VReg v) {
     c->local_is_heap[c->local_count] = 0;
     c->local_is_moved[c->local_count] = 0;
     c->local_alloc_sizes[c->local_count] = 0;
+    c->local_is_array[c->local_count] = 0;
+    c->local_array_esz[c->local_count] = 8;
     // Store initial value
     emit(c, (IRInst){.op = IR_STORE_LOCAL, .a = v, .imm = c->local_slots[c->local_count]});
     c->local_count++;
@@ -86,6 +98,22 @@ static void set_local(IRGenCtx *c, const char *name, VReg v) {
 // headers, 152 for map/imap headers. The exact size only matters for
 // the free-list metadata; the allocator rounds up to 16-byte alignment
 // so any conservative over-estimate is safe.
+// α7/α8: mark a local as holding an array header. RAII frees both
+// the data buffer (cap*esz bytes loaded from header[8]) and the
+// header itself (16 bytes). esz is 8 for `array of int` etc., 1
+// for `array of byte`.
+static void mark_array_local(IRGenCtx *c, const char *name, int esz) {
+    for (int i = c->local_count - 1; i >= 0; i--) {
+        if (!strcmp(c->local_names[i], name)) {
+            c->local_is_heap[i] = 1;
+            c->local_is_array[i] = 1;
+            c->local_array_esz[i] = esz;
+            c->local_alloc_sizes[i] = 16;  // header size; data freed separately
+            return;
+        }
+    }
+}
+
 static void mark_heap_size(IRGenCtx *c, const char *name, int size) {
     for (int i = c->local_count - 1; i >= 0; i--) {
         if (!strcmp(c->local_names[i], name)) {
@@ -110,21 +138,51 @@ static void mark_moved_local(IRGenCtx *c, const char *name) {
 // Emit `_heap_free(ptr, size)` for every local in [from, local_count)
 // that is heap-allocated and not moved. Used at scope end (NODE_BLOCK),
 // at returns (NODE_GIVE), and at function fall-off.
+//
+// Array locals (α7) get a two-step cleanup: free the data buffer
+// (size = cap * 8, where cap is loaded from header[0]) THEN free
+// the 16-byte header itself.
 static void emit_scope_cleanup(IRGenCtx *c, int from) {
     for (int i = from; i < c->local_count; i++) {
         if (!c->local_is_heap[i] || c->local_is_moved[i]) continue;
-        // Mark as freed so a later cleanup over the same range
-        // (the function-end sweep after a NODE_BLOCK already cleaned
-        // its own range, then NODE_GIVE/fall-off sweeps everything)
-        // doesn't double-free.
         c->local_is_moved[i] = 1;
-        VReg ptr = new_vreg(c);
-        emit(c, (IRInst){.op = IR_LOAD_LOCAL, .dst = ptr, .imm = c->local_slots[i]});
+        VReg header = new_vreg(c);
+        emit(c, (IRInst){.op = IR_LOAD_LOCAL, .dst = header, .imm = c->local_slots[i]});
+
+        if (c->local_is_array[i]) {
+            // Array layout: header[0]=cap, header[8]=data.
+            // Free data first (size = cap * elem_size), then header
+            // (16 bytes). elem_size: 8 for `array of int`, 1 for
+            // `array of byte`.
+            VReg cap = new_vreg(c);
+            emit(c, (IRInst){.op = IR_LOAD, .dst = cap, .a = header, .imm = 0});
+            VReg esz = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CONST, .dst = esz, .imm = c->local_array_esz[i]});
+            VReg data_sz = new_vreg(c);
+            emit(c, (IRInst){.op = IR_MUL, .dst = data_sz, .a = cap, .b = esz});
+            VReg data = new_vreg(c);
+            emit(c, (IRInst){.op = IR_LOAD, .dst = data, .a = header, .imm = 8});
+            VReg *fa1 = malloc(2 * sizeof(VReg));
+            fa1[0] = data; fa1[1] = data_sz;
+            VReg ig1 = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CALL, .dst = ig1, .str = "heap_free",
+                             .args = fa1, .arg_count = 2});
+            // Now free the header.
+            VReg sz16 = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CONST, .dst = sz16, .imm = 16});
+            VReg *fa2 = malloc(2 * sizeof(VReg));
+            fa2[0] = header; fa2[1] = sz16;
+            VReg ig2 = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CALL, .dst = ig2, .str = "heap_free",
+                             .args = fa2, .arg_count = 2});
+            continue;
+        }
+
         VReg sz = new_vreg(c);
         int s = c->local_alloc_sizes[i] ? c->local_alloc_sizes[i] : 16;
         emit(c, (IRInst){.op = IR_CONST, .dst = sz, .imm = s});
         VReg *args = malloc(2 * sizeof(VReg));
-        args[0] = ptr;
+        args[0] = header;
         args[1] = sz;
         VReg ignored = new_vreg(c);
         emit(c, (IRInst){.op = IR_CALL, .dst = ignored, .str = "heap_free",
@@ -667,39 +725,52 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
             oob_ok_b->label = oob_ok_lbl;
             switch_block(c, oob_ok_b);
 
-            // data_ptr = obj[data_off]; addr = data_ptr + idx*8;
-            // load.  data_off was set above based on layout.
+            // data_ptr = obj[data_off]; addr = data_ptr + idx*esz;
+            // load.  data_off and elem-size set above based on layout
+            // and element type.
+            int is_byte_elem = n->index_access.is_byte;
+            int elem_sz = is_byte_elem ? 1 : 8;
             VReg data_ptr = new_vreg(c);
             emit(c, (IRInst){.op = IR_LOAD, .dst = data_ptr, .a = obj, .imm = data_off});
-            VReg eight = new_vreg(c);
-            emit(c, (IRInst){.op = IR_CONST, .dst = eight, .imm = 8});
-            VReg byte_off = new_vreg(c);
-            emit(c, (IRInst){.op = IR_MUL, .dst = byte_off, .a = idx, .b = eight});
+            VReg byte_off;
+            if (elem_sz == 1) {
+                byte_off = idx;          // index IS the byte offset
+            } else {
+                VReg esz = new_vreg(c);
+                emit(c, (IRInst){.op = IR_CONST, .dst = esz, .imm = elem_sz});
+                byte_off = new_vreg(c);
+                emit(c, (IRInst){.op = IR_MUL, .dst = byte_off, .a = idx, .b = esz});
+            }
             VReg addr = new_vreg(c);
             emit(c, (IRInst){.op = IR_ADD, .dst = addr, .a = data_ptr, .b = byte_off});
             VReg dst = new_vreg(c);
-            emit(c, (IRInst){.op = IR_LOAD, .dst = dst, .a = addr, .imm = 0});
+            emit(c, (IRInst){
+                .op = is_byte_elem ? IR_LOAD_BYTE : IR_LOAD,
+                .dst = dst, .a = addr, .imm = 0
+            });
             return dst;
         }
 
         case NODE_ARRAY_NEW: {
-            // α4: `array of T with cap N` — typed-storage primitive.
+            // α4/α8: `array of T with cap N` — typed-storage primitive.
             //
             // Runtime layout (16 bytes):
             //   [0]  cap         (int)
-            //   [8]  data_ptr    (pointer to N * sizeof(T) bytes)
+            //   [8]  data_ptr    (pointer to cap * sizeof(T) bytes)
             //
             // Two heap allocations: the header (16 bytes) and the
             // data buffer (cap * sizeof(T) bytes). The user-Potato
             // code never sees these calls — the compiler synthesises
-            // them. Element-size for now is fixed at 8 (one machine
-            // word per slot); `array of byte` (α8) will distinguish.
+            // them. Element size is 8 (one machine word) by default,
+            // 1 for `array of byte`.
+            int elem_sz = (n->array_new.elem_type &&
+                           !strcmp(n->array_new.elem_type, "byte")) ? 1 : 8;
             VReg cap_v = gen_expr(c, n->array_new.cap);
-            // data_size = cap * 8
-            VReg eight = new_vreg(c);
-            emit(c, (IRInst){.op = IR_CONST, .dst = eight, .imm = 8});
+            // data_size = cap * elem_sz
+            VReg esz = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CONST, .dst = esz, .imm = elem_sz});
             VReg data_size = new_vreg(c);
-            emit(c, (IRInst){.op = IR_MUL, .dst = data_size, .a = cap_v, .b = eight});
+            emit(c, (IRInst){.op = IR_MUL, .dst = data_size, .a = cap_v, .b = esz});
             // data = _heap_alloc(data_size)
             VReg *da = malloc(sizeof(VReg));
             da[0] = data_size;
@@ -863,6 +934,13 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
                 mark_heap_size(c, n->var_decl.name, 520);
             } else if (n->var_decl.value->type == NODE_MAP_LIT) {
                 mark_heap_size(c, n->var_decl.name, 152);
+            } else if (n->var_decl.value->type == NODE_ARRAY_NEW) {
+                // α7/α8: array gets two-step RAII free (data + header).
+                // Element size is 1 for `array of byte`, 8 for
+                // everything else (default machine word).
+                int esz = (n->var_decl.value->array_new.elem_type &&
+                           !strcmp(n->var_decl.value->array_new.elem_type, "byte")) ? 1 : 8;
+                mark_array_local(c, n->var_decl.name, esz);
             }
             break;
         }
@@ -984,16 +1062,26 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
             IRBlock *oob_ok_b = new_block(c);
             oob_ok_b->label = oob_ok_lbl;
             switch_block(c, oob_ok_b);
-            // data_ptr = obj[data_off]; addr = data_ptr + idx*8; store.
+            // data_ptr = obj[data_off]; addr = data_ptr + idx*esz; store.
+            int is_byte_elem_w = n->index_assign.is_byte;
+            int elem_sz_w = is_byte_elem_w ? 1 : 8;
             VReg data_ptr = new_vreg(c);
             emit(c, (IRInst){.op = IR_LOAD, .dst = data_ptr, .a = obj, .imm = data_off});
-            VReg eight = new_vreg(c);
-            emit(c, (IRInst){.op = IR_CONST, .dst = eight, .imm = 8});
-            VReg byte_off = new_vreg(c);
-            emit(c, (IRInst){.op = IR_MUL, .dst = byte_off, .a = idx, .b = eight});
+            VReg byte_off_w;
+            if (elem_sz_w == 1) {
+                byte_off_w = idx;
+            } else {
+                VReg esz_w = new_vreg(c);
+                emit(c, (IRInst){.op = IR_CONST, .dst = esz_w, .imm = elem_sz_w});
+                byte_off_w = new_vreg(c);
+                emit(c, (IRInst){.op = IR_MUL, .dst = byte_off_w, .a = idx, .b = esz_w});
+            }
             VReg addr = new_vreg(c);
-            emit(c, (IRInst){.op = IR_ADD, .dst = addr, .a = data_ptr, .b = byte_off});
-            emit(c, (IRInst){.op = IR_STORE, .a = addr, .b = val, .imm = 0});
+            emit(c, (IRInst){.op = IR_ADD, .dst = addr, .a = data_ptr, .b = byte_off_w});
+            emit(c, (IRInst){
+                .op = is_byte_elem_w ? IR_STORE_BYTE : IR_STORE,
+                .a = addr, .b = val, .imm = 0
+            });
             break;
         }
 
@@ -1422,6 +1510,8 @@ IRProgram *irgen_generate(Node *program) {
         free(ctx.local_is_heap);
         free(ctx.local_is_moved);
         free(ctx.local_alloc_sizes);
+        free(ctx.local_is_array);
+        free(ctx.local_array_esz);
     }
 
     // Synthesize one IRFunc per `test "name" { ... }` block, named
@@ -1466,6 +1556,8 @@ IRProgram *irgen_generate(Node *program) {
         free(ctx.local_is_heap);
         free(ctx.local_is_moved);
         free(ctx.local_alloc_sizes);
+        free(ctx.local_is_array);
+        free(ctx.local_array_esz);
     }
 
     return ir;

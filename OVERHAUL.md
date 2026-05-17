@@ -131,12 +131,19 @@ on completion. Don't redo a checked task.
       NODE_INDEX_ASSIGN AST node. Same bounds-check + layout
       selection as α5.
       Acceptance: write-then-read round-trips; OOB writes panic.
-- [ ] **α7** RAII: array's backing storage freed at scope end via
-      compiler-emitted `_heap_free`.
+- [x] **α7** RAII: array's backing storage freed at scope end via
+      compiler-emitted `_heap_free`. Two-step free per array
+      local: data buffer (cap*esz bytes) then header (16 bytes).
+      `local_is_array` and `local_array_esz` parallel arrays
+      track per-local metadata.
       Acceptance: ASan shows zero leaks across stdlib tests.
-- [ ] **α8** `array of byte` for byte-level storage. Element size 1;
-      lowers to `ldrb` / `strb`. Required for `String.data`.
-      Acceptance: `data is array of byte with cap 32` works.
+- [x] **α8** `array of byte` for byte-level storage. New TYPE_BYTE
+      kind. Element size 1; lowers to `IR_LOAD_BYTE` / `IR_STORE_BYTE`
+      (ARM64 `ldrb` / `strb`). Required for String.data. types_equal
+      treats TYPE_INT and TYPE_BYTE as interchangeable so int
+      literals can flow into byte slots.
+      Acceptance: `data is array of byte with cap 32` works;
+      writing 511 stores 0xFF (truncation to low byte).
 
 ### Phase β — Stdlib rewrite using `array of T`
 

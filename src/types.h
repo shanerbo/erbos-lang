@@ -13,6 +13,9 @@ typedef enum {
     TYPE_ARRAY,        // α3: typed-storage primitive `array of T`.
                        // Distinct from TYPE_LIST (which is the
                        // legacy keyword-form list runtime).
+    TYPE_BYTE,         // α8: a byte (8-bit unsigned int). Used only
+                       // as the element type of `array of byte`.
+                       // At the value level, byte values flow as int.
     TYPE_UNKNOWN,
 } TypeKind;
 

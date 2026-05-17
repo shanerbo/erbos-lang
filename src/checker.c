@@ -84,6 +84,12 @@ static int types_equal(Type a, Type b) {
     int b_is_string = (b.kind == TYPE_STR) ||
         (b.kind == TYPE_STRUCT && b.struct_name && !strcmp(b.struct_name, "String"));
     if (a_is_string && b_is_string) return 1;
+    // α8: TYPE_BYTE and TYPE_INT are interchangeable at the value
+    // level. `arr[i] be 65` writes the int 65 as a byte; reads
+    // produce int. The byte-vs-int distinction only affects the
+    // element-size of `array of byte` allocation/indexing.
+    if ((a.kind == TYPE_INT && b.kind == TYPE_BYTE) ||
+        (a.kind == TYPE_BYTE && b.kind == TYPE_INT)) return 1;
     if (a.kind != b.kind) return 0;
     if (a.kind == TYPE_STRUCT) return a.struct_name && b.struct_name && !strcmp(a.struct_name, b.struct_name);
     // α3: TYPE_ARRAY equality requires matching element type.
@@ -208,6 +214,7 @@ static Type parse_type_str(Checker *c, const char *t) {
     if (!strcmp(t, "int")) return make_type(TYPE_INT);
     if (!strcmp(t, "str")) return make_type(TYPE_STR);
     if (!strcmp(t, "bool")) return make_type(TYPE_BOOL);
+    if (!strcmp(t, "byte")) return make_type(TYPE_BYTE);
     if (!strcmp(t, "void")) return make_type(TYPE_VOID);
     if (!strcmp(t, "list")) return make_type(TYPE_LIST);
     if (!strcmp(t, "map")) return make_type(TYPE_MAP);
@@ -245,6 +252,7 @@ static const char *type_name(Type t) {
         case TYPE_STRUCT: return t.struct_name ? t.struct_name : "struct";
         case TYPE_TASK: return "task";
         case TYPE_ARRAY: return "array";
+        case TYPE_BYTE: return "byte";
         case TYPE_UNKNOWN: return "unknown";
     }
     return "?";
@@ -658,6 +666,10 @@ static Type check_expr(Checker *c, Node *n) {
             // array layout (cap@0, data@8) and the list layout
             // (cap@0, count@8, data@16).
             n->index_access.is_array = (obj_t.kind == TYPE_ARRAY);
+            // α8: tag for byte-element arrays so irgen uses ldrb/strb
+            // and element-size 1 instead of 8.
+            n->index_access.is_byte = (obj_t.kind == TYPE_ARRAY &&
+                obj_t.elem_type && obj_t.elem_type->kind == TYPE_BYTE);
             // Return element type if known
             if (obj_t.elem_type) return *obj_t.elem_type;
             return make_type(TYPE_UNKNOWN);
@@ -667,6 +679,8 @@ static Type check_expr(Checker *c, Node *n) {
             check_expr(c, n->index_assign.index);
             Type val_t = check_expr(c, n->index_assign.value);
             n->index_assign.is_array = (obj_t.kind == TYPE_ARRAY);
+            n->index_assign.is_byte = (obj_t.kind == TYPE_ARRAY &&
+                obj_t.elem_type && obj_t.elem_type->kind == TYPE_BYTE);
             // Element type compat (best-effort)
             if (obj_t.elem_type && val_t.kind != TYPE_UNKNOWN &&
                 obj_t.elem_type->kind != TYPE_UNKNOWN &&

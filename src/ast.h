@@ -196,11 +196,13 @@ struct Node {
         struct { Node *object; char *field; char *struct_name; } field_access;
 
         // NODE_INDEX (arr[idx]). is_array set by checker when the
-        // indexed object's static type is `array of T`. Used by
-        // irgen to pick between the array layout (cap at offset
-        // 0, data at offset 8) and the legacy list layout
-        // (cap/count/data at offsets 0/8/16).
-        struct { Node *object; Node *index; int is_array; } index_access;
+        // indexed object's static type is `array of T`. is_byte
+        // set when T == byte (α8). Used by irgen to pick between
+        // the array layout (cap at offset 0, data at offset 8)
+        // and the legacy list layout (cap/count/data at offsets
+        // 0/8/16); is_byte selects the element-size 1 path with
+        // ldrb/strb instead of the default 8-byte ldr/str.
+        struct { Node *object; Node *index; int is_array; int is_byte; } index_access;
 
         // NODE_LIST_LIT
         struct { Node **items; int count; } list_lit;
@@ -214,15 +216,14 @@ struct Node {
         // this is "int". `cap` is any int expression.
         struct { char *elem_type; Node *cap; } array_new;
 
-        // NODE_INDEX_ASSIGN (α6): `arr[i] be v` / `xs[i] = v`.
-        // Same shape as NODE_INDEX but with a value to write. The
-        // checker tags is_array on this node identically to how it
-        // tags NODE_INDEX, picking between array and list layouts.
+        // NODE_INDEX_ASSIGN (α6/α8): `arr[i] be v` / `xs[i] = v`.
+        // Same shape as NODE_INDEX but with a value to write.
         struct {
             Node *object;
             Node *index;
             Node *value;
             int is_array;
+            int is_byte;
         } index_assign;
 
         // NODE_ENUM_DEF

@@ -1,0 +1,38 @@
+// Regression test: α8 — `array of byte` element type.
+//
+// Element size is 1 (vs 8 for `array of int` / `array of T` for
+// pointer-shape T). Indexing uses `ldrb` / `strb`. The byte value
+// flows as int at the value level (one byte zero-extended into a
+// 64-bit register on read; the low byte of the int is stored on
+// write).
+//
+// Output must match across -O0/-O1/-O2.
+//
+// Expected output:
+//   104
+//   111
+//   255
+//   0
+
+spark {
+  bs is array of byte with cap 6
+  bs[0] be 104
+  bs[1] be 101
+  bs[2] be 108
+  bs[3] be 108
+  bs[4] be 111
+  bs[5] be 10
+  yell(bs[0])
+  yell(bs[4])
+
+  // Truncation: storing 511 (0x1FF) writes 0xFF (255).
+  bs[0] be 511
+  yell(bs[0])
+
+  // Round-trip through a loop.
+  zero_buf is array of byte with cap 16
+  through (i from 0 to 16 by 1) {
+    zero_buf[i] be 0
+  }
+  yell(zero_buf[7])
+}
