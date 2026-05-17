@@ -216,10 +216,24 @@ struct Node {
         struct { Node *object; Node *index; int is_array; int is_byte; char *method_struct; } index_access;
 
         // NODE_LIST_LIT
-        struct { Node **items; int count; } list_lit;
+        // NODE_LIST_LIT — `[a, b, c]`. ε3 adds elem_type_name:
+        // a pre-monomorph pass infers the element type from the
+        // first item and stores its monomorph-mangled spelling
+        // (e.g. "int" or "String") here. The monomorph collector
+        // then seeds `List<elem_type_name>`; irgen routes the
+        // literal through `_alloc_List__<elem>` + per-item
+        // `_List__<elem>_push`. Empty literals (`[]`) default to
+        // `int`.
+        struct { Node **items; int count; char *elem_type_name; } list_lit;
 
         // NODE_MAP_LIT
-        struct { Node **keys; Node **values; int count; } map_lit;
+        // NODE_MAP_LIT — `["k" to v, ...]`. ε4 adds val_type_name:
+        // a pre-monomorph pass infers the value type from the
+        // first pair (keys are always String for the literal
+        // syntax) and stores it here. Irgen routes the literal
+        // through `_alloc_StringMap__<V>` + per-pair
+        // `_StringMap__<V>_set`.
+        struct { Node **keys; Node **values; int count; char *val_type_name; } map_lit;
 
         // NODE_ARRAY_NEW (α2): `array of T with cap N` constructor.
         // `elem_type` is the legacy <>-bracketed type string the

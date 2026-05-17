@@ -762,14 +762,43 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
             return header;
         }
         case NODE_LIST_LIT: {
-            // Allocate a list header (24 bytes: cap, count, data_ptr)
-            // then a data buffer (max(count, 8) * 8 bytes), then fill
-            // the data buffer with each element.
+            // ε3: when the literal carries an elem_type_name tag
+            // (set by the monomorph seed-literals pass when the
+            // `List` template is in scope), route through the
+            // stdlib `List of T` constructor + per-item push:
+            //   tmp is List of <T>
+            //   tmp.push(items[0]); tmp.push(items[1]); ...
+            //
+            // Otherwise (no `use std/list`), fall through to the
+            // legacy 24-byte header form so existing programs keep
+            // running until ε1 retires the legacy keyword forms.
+            if (n->list_lit.elem_type_name) {
+                char alloc_sym[256];
+                char push_sym[256];
+                snprintf(alloc_sym, sizeof(alloc_sym),
+                    "alloc_List__%s", n->list_lit.elem_type_name);
+                snprintf(push_sym, sizeof(push_sym),
+                    "List__%s_push", n->list_lit.elem_type_name);
+                VReg list_obj = new_vreg(c);
+                emit(c, (IRInst){.op = IR_CALL, .dst = list_obj,
+                    .str = strdup(alloc_sym),
+                    .args = NULL, .arg_count = 0});
+                for (int i = 0; i < n->list_lit.count; i++) {
+                    VReg val = gen_expr(c, n->list_lit.items[i]);
+                    VReg *aa = malloc(2 * sizeof(VReg));
+                    aa[0] = list_obj;
+                    aa[1] = val;
+                    VReg ignored = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_CALL, .dst = ignored,
+                        .str = strdup(push_sym),
+                        .args = aa, .arg_count = 2});
+                }
+                return list_obj;
+            }
+            // Legacy 24-byte header form: cap@0, count@8, data@16.
             int count = n->list_lit.count;
             int data_size = count * 8 > 64 ? count * 8 : 64;
             int cap = count > 8 ? count : 8;
-
-            // header = _heap_alloc(24)
             VReg sz_header = new_vreg(c);
             emit(c, (IRInst){.op = IR_CONST, .dst = sz_header, .imm = 24});
             VReg *aa1 = malloc(sizeof(VReg));
@@ -777,8 +806,6 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
             VReg header = new_vreg(c);
             emit(c, (IRInst){.op = IR_CALL, .dst = header, .str = "heap_alloc",
                              .args = aa1, .arg_count = 1});
-
-            // data = _heap_alloc(data_size)
             VReg sz_data = new_vreg(c);
             emit(c, (IRInst){.op = IR_CONST, .dst = sz_data, .imm = data_size});
             VReg *aa2 = malloc(sizeof(VReg));
@@ -786,19 +813,13 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
             VReg data = new_vreg(c);
             emit(c, (IRInst){.op = IR_CALL, .dst = data, .str = "heap_alloc",
                              .args = aa2, .arg_count = 1});
-
-            // header[0] = cap
             VReg vcap = new_vreg(c);
             emit(c, (IRInst){.op = IR_CONST, .dst = vcap, .imm = cap});
             emit(c, (IRInst){.op = IR_STORE, .a = header, .b = vcap, .imm = 0});
-            // header[8] = count
             VReg vcnt = new_vreg(c);
             emit(c, (IRInst){.op = IR_CONST, .dst = vcnt, .imm = count});
             emit(c, (IRInst){.op = IR_STORE, .a = header, .b = vcnt, .imm = 8});
-            // header[16] = data
             emit(c, (IRInst){.op = IR_STORE, .a = header, .b = data, .imm = 16});
-
-            // Fill elements
             for (int i = 0; i < count; i++) {
                 VReg val = gen_expr(c, n->list_lit.items[i]);
                 emit(c, (IRInst){.op = IR_STORE, .a = data, .b = val, .imm = i * 8});
@@ -807,7 +828,37 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
         }
 
         case NODE_MAP_LIT: {
-            // Create empty map, then set each entry.
+            // ε4: when val_type_name is set (StringMap template
+            // is in scope), route through the stdlib StringMap of V
+            // constructor + per-pair set:
+            //   tmp is StringMap of <V>
+            //   tmp.set(keys[0], values[0]); ...
+            // Otherwise fall back to the legacy `_map_new` /
+            // `_map_set` C-runtime path.
+            if (n->map_lit.val_type_name) {
+                char alloc_sym[256];
+                char set_sym[256];
+                snprintf(alloc_sym, sizeof(alloc_sym),
+                    "alloc_StringMap__%s", n->map_lit.val_type_name);
+                snprintf(set_sym, sizeof(set_sym),
+                    "StringMap__%s_set", n->map_lit.val_type_name);
+                VReg map = new_vreg(c);
+                emit(c, (IRInst){.op = IR_CALL, .dst = map,
+                    .str = strdup(alloc_sym),
+                    .args = NULL, .arg_count = 0});
+                for (int i = 0; i < n->map_lit.count; i++) {
+                    VReg key = gen_expr(c, n->map_lit.keys[i]);
+                    VReg val = gen_expr(c, n->map_lit.values[i]);
+                    VReg *aa = malloc(3 * sizeof(VReg));
+                    aa[0] = map; aa[1] = key; aa[2] = val;
+                    VReg ignored = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_CALL, .dst = ignored,
+                        .str = strdup(set_sym),
+                        .args = aa, .arg_count = 3});
+                }
+                return map;
+            }
+            // Legacy: _map_new + _map_set per pair.
             VReg map = new_vreg(c);
             emit(c, (IRInst){.op = IR_CALL, .dst = map, .str = "map_new",
                              .args = NULL, .arg_count = 0});
@@ -912,9 +963,17 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
                     mark_heap_size(c, n->var_decl.name, 520);
                 }
             } else if (n->var_decl.value->type == NODE_LIST_LIT) {
-                mark_heap_size(c, n->var_decl.name, 520);
+                // ε3: tagged list literals lower to a 16-byte
+                // `List of T` struct (count + array-ptr); legacy
+                // 24-byte list header is the untagged fallback.
+                int sz = n->var_decl.value->list_lit.elem_type_name ? 16 : 520;
+                mark_heap_size(c, n->var_decl.name, sz);
             } else if (n->var_decl.value->type == NODE_MAP_LIT) {
-                mark_heap_size(c, n->var_decl.name, 152);
+                // ε4: tagged map literals lower to a 24-byte
+                // `StringMap of V` struct (count + 2 array-ptrs);
+                // legacy 152-byte map_new is the untagged fallback.
+                int sz = n->var_decl.value->map_lit.val_type_name ? 24 : 152;
+                mark_heap_size(c, n->var_decl.name, sz);
             } else if (n->var_decl.value->type == NODE_ARRAY_NEW) {
                 // α7/α8: array gets two-step RAII free (data + header).
                 // Element size is 1 for `array of byte`, 8 for

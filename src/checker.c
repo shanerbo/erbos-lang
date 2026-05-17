@@ -814,6 +814,18 @@ static Type check_expr(Checker *c, Node *n) {
                     exit(1);
                 }
             }
+            // ε3: when the literal carries an elem_type_name tag
+            // (set by the monomorph seed-literals pass when the
+            // `List` template is in scope), type the literal as
+            // the concrete `List__<elem>` struct so downstream
+            // index / iteration / method dispatch picks the
+            // stdlib path. Without the tag, fall back to TYPE_LIST.
+            if (n->list_lit.elem_type_name) {
+                char buf[256];
+                snprintf(buf, sizeof(buf), "List__%s",
+                    n->list_lit.elem_type_name);
+                return make_struct(strdup(buf));
+            }
             if (elem_t.kind != TYPE_UNKNOWN) return make_list_of(elem_t);
             return make_type(TYPE_LIST);
         }
@@ -836,6 +848,14 @@ static Type check_expr(Checker *c, Node *n) {
                         exit(1);
                     }
                 }
+            }
+            // ε4: when val_type_name is set the literal lowers to
+            // a `StringMap__<V>` struct in irgen; type accordingly.
+            if (n->map_lit.val_type_name) {
+                char buf[256];
+                snprintf(buf, sizeof(buf), "StringMap__%s",
+                    n->map_lit.val_type_name);
+                return make_struct(strdup(buf));
             }
             if (key_t.kind != TYPE_UNKNOWN && val_t.kind != TYPE_UNKNOWN)
                 return make_map_of(key_t, val_t);

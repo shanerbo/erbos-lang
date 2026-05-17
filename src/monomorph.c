@@ -744,10 +744,15 @@ static void collect_in_node(Node *n, StrSet *seen) {
             break;
         case NODE_LIST_LIT:
             collect_in_array(n->list_lit.items, n->list_lit.count, seen);
+            // ε3: literal-driven seeding of `List<elem>` happens
+            // in monomorph_run after template detection; here we
+            // just descend into the items.
             break;
         case NODE_MAP_LIT:
             collect_in_array(n->map_lit.keys, n->map_lit.count, seen);
             collect_in_array(n->map_lit.values, n->map_lit.count, seen);
+            // ε4: literal-driven seeding of `StringMap<V>` likewise
+            // happens in monomorph_run.
             break;
         case NODE_IF:
             collect_in_array(n->if_stmt.conds, n->if_stmt.branch_count, seen);
@@ -858,7 +863,9 @@ static void normalize_in_node(Node *n) {
             normalize_in_node(n->index_access.object);
             normalize_in_node(n->index_access.index);
             break;
-        case NODE_LIST_LIT: normalize_in_array(n->list_lit.items, n->list_lit.count); break;
+        case NODE_LIST_LIT:
+            normalize_in_array(n->list_lit.items, n->list_lit.count);
+            break;
         case NODE_MAP_LIT:
             normalize_in_array(n->map_lit.keys, n->map_lit.count);
             normalize_in_array(n->map_lit.values, n->map_lit.count);
@@ -916,6 +923,172 @@ static void normalize_program(Node *program) {
 // Normalise every type-name string in the entire program. After this,
 // `Pair<str, int>` and `Pair<str,int>` always resolve to the same key.
 static void normalize_program(Node *program);
+
+// ε3 / ε4: walk the program AST and, for every list/map literal,
+// add the corresponding `List<elem>` / `StringMap<V>` parametric
+// form to `seen` (only when the matching template is available).
+static void seed_literals_in_node(Node *n, StrSet *seen,
+                                  int has_list, int has_string_map);
+
+static void seed_literals_in_array(Node **arr, int len, StrSet *seen,
+                                   int has_list, int has_string_map) {
+    if (!arr) return;
+    for (int i = 0; i < len; i++)
+        seed_literals_in_node(arr[i], seen, has_list, has_string_map);
+}
+
+static void seed_literals_in_node(Node *n, StrSet *seen,
+                                  int has_list, int has_string_map) {
+    if (!n) return;
+    switch (n->type) {
+        case NODE_LIST_LIT:
+            seed_literals_in_array(n->list_lit.items, n->list_lit.count,
+                seen, has_list, has_string_map);
+            // ε3: only tag + seed when the `List` template is
+            // available. If it isn't (no `use std/list`), the
+            // literal stays untagged and irgen falls back to the
+            // legacy 24-byte header form.
+            if (has_list) {
+                if (!n->list_lit.elem_type_name)
+                    n->list_lit.elem_type_name = xstrdup("int");
+                char buf[256];
+                snprintf(buf, sizeof(buf), "List<%s>",
+                    n->list_lit.elem_type_name);
+                strset_add(seen, buf);
+            }
+            break;
+        case NODE_MAP_LIT:
+            seed_literals_in_array(n->map_lit.keys, n->map_lit.count,
+                seen, has_list, has_string_map);
+            seed_literals_in_array(n->map_lit.values, n->map_lit.count,
+                seen, has_list, has_string_map);
+            // ε4: same conditional dance as ε3 for `StringMap`.
+            if (has_string_map) {
+                if (!n->map_lit.val_type_name)
+                    n->map_lit.val_type_name = xstrdup("int");
+                char buf[256];
+                snprintf(buf, sizeof(buf), "StringMap<%s>",
+                    n->map_lit.val_type_name);
+                strset_add(seen, buf);
+            }
+            break;
+        case NODE_VAR_DECL:
+            seed_literals_in_node(n->var_decl.value, seen,
+                has_list, has_string_map);
+            break;
+        case NODE_ASSIGN:
+            seed_literals_in_node(n->assign.value, seen,
+                has_list, has_string_map);
+            break;
+        case NODE_FIELD_ASSIGN:
+            seed_literals_in_node(n->field_assign.object, seen,
+                has_list, has_string_map);
+            seed_literals_in_node(n->field_assign.value, seen,
+                has_list, has_string_map);
+            break;
+        case NODE_FIELD_ACCESS:
+            seed_literals_in_node(n->field_access.object, seen,
+                has_list, has_string_map);
+            break;
+        case NODE_BINARY:
+            seed_literals_in_node(n->binary.left, seen,
+                has_list, has_string_map);
+            seed_literals_in_node(n->binary.right, seen,
+                has_list, has_string_map);
+            break;
+        case NODE_UNARY:
+            seed_literals_in_node(n->unary.operand, seen,
+                has_list, has_string_map);
+            break;
+        case NODE_CALL:
+            seed_literals_in_array(n->call.args, n->call.arg_count, seen,
+                has_list, has_string_map);
+            break;
+        case NODE_METHOD_CALL:
+            seed_literals_in_node(n->method_call.object, seen,
+                has_list, has_string_map);
+            seed_literals_in_array(n->method_call.args, n->method_call.arg_count,
+                seen, has_list, has_string_map);
+            break;
+        case NODE_INDEX:
+            seed_literals_in_node(n->index_access.object, seen,
+                has_list, has_string_map);
+            seed_literals_in_node(n->index_access.index, seen,
+                has_list, has_string_map);
+            break;
+        case NODE_INDEX_ASSIGN:
+            seed_literals_in_node(n->index_assign.object, seen,
+                has_list, has_string_map);
+            seed_literals_in_node(n->index_assign.index, seen,
+                has_list, has_string_map);
+            seed_literals_in_node(n->index_assign.value, seen,
+                has_list, has_string_map);
+            break;
+        case NODE_IF:
+            seed_literals_in_array(n->if_stmt.conds, n->if_stmt.branch_count,
+                seen, has_list, has_string_map);
+            seed_literals_in_array(n->if_stmt.bodies, n->if_stmt.branch_count,
+                seen, has_list, has_string_map);
+            seed_literals_in_node(n->if_stmt.nah_body, seen,
+                has_list, has_string_map);
+            break;
+        case NODE_THROUGH_RANGE:
+            seed_literals_in_node(n->through_range.from, seen,
+                has_list, has_string_map);
+            seed_literals_in_node(n->through_range.to, seen,
+                has_list, has_string_map);
+            seed_literals_in_node(n->through_range.by, seen,
+                has_list, has_string_map);
+            seed_literals_in_node(n->through_range.body, seen,
+                has_list, has_string_map);
+            break;
+        case NODE_THROUGH_IN:
+            seed_literals_in_node(n->through_in.collection, seen,
+                has_list, has_string_map);
+            seed_literals_in_node(n->through_in.body, seen,
+                has_list, has_string_map);
+            break;
+        case NODE_INFI:
+            seed_literals_in_node(n->infi.cond, seen,
+                has_list, has_string_map);
+            seed_literals_in_node(n->infi.body, seen,
+                has_list, has_string_map);
+            break;
+        case NODE_GIVE:
+            seed_literals_in_node(n->give.value, seen,
+                has_list, has_string_map);
+            break;
+        case NODE_BLOCK:
+            seed_literals_in_array(n->block.stmts.items, n->block.stmts.count,
+                seen, has_list, has_string_map);
+            break;
+        case NODE_MATCH:
+            seed_literals_in_node(n->match_expr.expr, seen,
+                has_list, has_string_map);
+            seed_literals_in_array(n->match_expr.arm_bodies,
+                n->match_expr.arm_count, seen,
+                has_list, has_string_map);
+            break;
+        case NODE_ASSERT:
+            seed_literals_in_node(n->assert_stmt.condition, seen,
+                has_list, has_string_map);
+            break;
+        default:
+            break;
+    }
+}
+
+static void seed_literals(Node *program, StrSet *seen,
+                          int has_list, int has_string_map) {
+    for (int i = 0; i < program->program.funcs.count; i++)
+        seed_literals_in_node(
+            program->program.funcs.items[i]->func_def.body, seen,
+            has_list, has_string_map);
+    for (int i = 0; i < program->program.tests.count; i++)
+        seed_literals_in_node(
+            program->program.tests.items[i]->test_def.body, seen,
+            has_list, has_string_map);
+}
 
 void monomorph_run(Node *program) {
     // 0. Strip whitespace from every type-name string in the program so
@@ -986,6 +1159,25 @@ void monomorph_run(Node *program) {
         collect_in_func(program->program.funcs.items[i], &seen);
     for (int i = 0; i < program->program.tests.count; i++)
         collect_in_node(program->program.tests.items[i]->test_def.body, &seen);
+
+    // ε3 / ε4: literal-driven seeding. If `List` and/or
+    // `StringMap` templates are available (the user wrote
+    // `use std/list` / `use std/string_map`), every list / map
+    // literal in the program seeds the corresponding parametric
+    // form so the monomorphizer materialises the concrete struct
+    // and methods. If the template is NOT available, the literal
+    // falls back to the legacy header-form lowering in irgen.
+    int has_list_template = 0;
+    int has_string_map_template = 0;
+    for (int i = 0; i < struct_template_count; i++) {
+        const char *nm = struct_templates[i]->struct_def.name;
+        if (!strcmp(nm, "List")) has_list_template = 1;
+        if (!strcmp(nm, "StringMap")) has_string_map_template = 1;
+    }
+    if (has_list_template || has_string_map_template) {
+        seed_literals(program, &seen, has_list_template,
+            has_string_map_template);
+    }
 
     // 3. For each unprocessed parametric form, find its template, clone,
     //    substitute, append. New parametric forms inside the clone go

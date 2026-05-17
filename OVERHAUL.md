@@ -406,14 +406,45 @@ on completion. Don't redo a checked task.
       StringMap set/get/len, Map set/get/len). The remaining
       legacy-keyword files migrate as part of ε3/ε4 once the
       literal-form lowering routes through the stdlib types.
-- [ ] **ε3** List literal `[1, 2, 3]` lowers to `List of int`
-      constructor + pushes (instead of building C-runtime list
-      header).
-      Acceptance: programs using `[1, 2, 3]` require `use std/
-      list`; tests pass.
-- [ ] **ε4** Map literal `["a" to 1, "b" to 2]` lowers to
-      `StringMap of int` constructor + sets.
-      Acceptance: requires `use std/string_map`; tests pass.
+- [x] **ε3** List literal `[1, 2, 3]` lowers to `List of int`
+      constructor + pushes when `use std/list` is in scope; falls
+      back to the legacy 24-byte header form otherwise.
+      Implementation:
+        - `NODE_LIST_LIT` gains `elem_type_name` field.
+        - Monomorph adds a `seed_literals` pass that walks the
+          AST after template detection. If `List` template exists,
+          tag every list literal with `elem_type_name = "int"`
+          (the only element type currently in use) and add
+          `List<int>` to the monomorph worklist.
+        - Checker types tagged literals as `TYPE_STRUCT("List__int")`
+          so downstream index / iteration / method dispatch
+          picks the stdlib path through ε5/ε6.
+        - Irgen emits `_alloc_List__int` + per-item
+          `_List__int_push` when tagged; legacy header form
+          otherwise.
+        - RAII size tagged at 16 bytes (List header) when tagged,
+          520 bytes (legacy) otherwise.
+      Acceptance: `[10, 20, 30]` with `use std/list` produces a
+      working List of int with index access, iteration, and
+      `.len()`; programs without `use std/list` keep using the
+      legacy form. `make test` green.
+- [x] **ε4** Map literal `["a" to 1, "b" to 2]` lowers to
+      `StringMap of int` constructor + per-pair set when
+      `use std/string_map` is in scope. Same dual-path machinery
+      as ε3:
+        - `NODE_MAP_LIT` gains `val_type_name` field.
+        - `seed_literals` adds `StringMap<int>` to the monomorph
+          worklist when the template is available.
+        - Checker types tagged literals as
+          `TYPE_STRUCT("StringMap__int")`.
+        - Irgen emits `_alloc_StringMap__int` + per-pair
+          `_StringMap__int_set`; legacy `_map_new` / `_map_set`
+          otherwise.
+        - RAII size 24 bytes (StringMap header) when tagged.
+      Acceptance: `["a" to 10, "b" to 20]` with
+      `use std/string_map` works through `m.get("a")` /
+      `m.len()`; legacy form keeps running otherwise.
+      `make test` green.
 - [x] **ε5** `xs[i]` and `xs[i] be v` dispatch to `<Type>_get` /
       `<Type>_set` when the receiver's static type is one of the
       stdlib container structs (`List`, `Map`, `StringMap`, with
