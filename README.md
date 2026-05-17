@@ -470,6 +470,13 @@ breakdown.
 
 The language is in early development. If you want to help shape it, open an issue or PR.
 
+Before proposing a language change, read
+[`docs/design-decisions.md`](docs/design-decisions.md) — it's
+the running log of what's been decided, what's parked, and the
+first-principles reasoning. The standing rule: **every feature
+must pay rent** (improve the user's first hour, or prevent a
+class of bugs in their first thousand lines).
+
 ---
 
 ## License

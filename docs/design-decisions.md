@@ -251,3 +251,242 @@ to become deep-clone.
 Roadmap in `README.md` lists "Deep clone for `rep`" under
 Planned (v0.2+). When that ships, this UAF goes away by
 construction.
+
+---
+
+## Object lifecycle / memory model — World A
+**Date:** 2026-05-16
+**Status:** decided
+**Decision:** Single owner, explicit move/clone, no shared
+ownership in the language. Shared lifetime via the arena+index
+pattern.
+
+### The three worlds we considered
+
+| World | Adds | Cost |
+|---|---|---|
+| **A. Strict single owner** | `is now` (move), `is rep` (deep clone), `q is p` for heap-shaped values is an error. `ref T` for in-call mutation. No `&T`, no `Rc`, no borrow checker. | Smallest. Compiler stays simple. Users who want shared lifetime use arena+index. |
+| **B. Single owner + opt-in shared** | Adds `Rc of T` (refcounted wrapper) as a stdlib type. | Medium. Refcount runtime cost; cycle leaks unless `Weak` is added. |
+| **C. Borrow checker** | Adds `&T` / `&mut T` with compile-time lifetime checking. | Largest. Multi-year language design effort. Brings all of Rust's lifetime/async/self-ref pain. |
+
+We picked A.
+
+### Why A
+
+1. **Most data is tree-shaped.** Heap structs in Potato are
+   already pointers under the hood; the existing `is now` /
+   `is rep` / `ref` machinery covers the common cases.
+2. **Shared-ownership use cases are rarer than C++ habit
+   suggests.** Modern compiler/ECS/database design uses arena +
+   integer indices, not `shared_ptr`. We saw no Potato program
+   in the tree that demands `Rc`.
+3. **The borrow checker is a separate, much larger language.**
+   World C isn't a feature; it's a multi-year effort. KISS
+   forbids it for now.
+4. **Single-owner is enforceable cheaply.** Add the rejection of
+   plain `q is p` for heap-shaped values, finish deep-clone for
+   `is rep`, and the compiler proves single ownership for every
+   heap allocation across every program.
+
+### The three rules of World A
+
+1. Every heap allocation has exactly one owner at every point in
+   the program.
+2. `q is now p` moves (source dead afterwards). `q is rep p`
+   deep-clones (independent block, both alive). Plain `q is p`
+   for heap-shaped values is a compile error: the user must say
+   which they meant.
+3. `f(p T)` passes a pointer with read-only permission;
+   `f(p ref T)` passes the same pointer with write permission.
+   Borrows are *lexical* to the call. No long-lived borrows;
+   no `&T` binding form (`is ref` parked separately).
+
+### Escape hatch — arena + index, not Rc
+
+For data that needs to be referenced from many places without
+copying:
+
+```
+// The arena owns the data
+images is List of Image
+img_id is images.len()
+images.push(load("foo.png"))
+
+// Consumers hold an int (the index), not a pointer
+window.icon_id be img_id
+toolbar.icon_id be img_id
+
+// Access through the arena
+icon is images.get(window.icon_id)
+```
+
+Memory profile is identical to `shared_ptr`: one copy of the
+data, many lightweight handles. Lifetime is *structural* (until
+the arena dies) instead of *dynamic* (until the last user dies).
+No refcount, no cycles, no `Weak`, no atomic ops.
+
+This pattern is not a feature; it's a coding discipline. We
+document it in `docs/language-guide.md` and the front-page
+README so users coming from C++ know it exists.
+
+### Conditions under which to revisit
+
+- A real Potato program demonstrates a use case that genuinely
+  cannot be expressed via arena+index, owned moves, or `is rep`.
+  At that point we can consider adding `Rc of T` as a stdlib
+  type (World B), opt-in only, never the default.
+- We never go to World C without an explicit, scoped multi-year
+  design effort. The borrow checker is its own language project.
+
+---
+
+## `nomut ref T` — rejected as redundant
+**Date:** 2026-05-16
+**Status:** decided
+**Decision:** No `nomut ref T` syntax. The default param form
+`T` (no `ref`) is *already* read-only; `nomut ref T` would be
+the same thing spelled twice.
+
+### What's already true
+
+| Param syntax | Read fields | Write fields | C++ analog |
+|---|---|---|---|
+| `f(p Point)` | yes | **no** (compile error) | `const Point& p` |
+| `f(p ref Point)` | yes | yes | `Point& p` |
+
+The checker enforces this in NODE_FIELD_ASSIGN: a non-`ref`
+struct param cannot have its fields mutated.
+
+### Why C++ needs `const T&` but Potato doesn't
+
+In C++, the default for a parameter is *copy* (`T p`). To get a
+no-copy non-mutating reference you need `const T&` — three
+tokens that *together* mean "pointer + read-only." Potato's
+default for any heap-shaped param is *already* "pointer +
+read-only"; one token does the work of three.
+
+If we added `nomut ref T` it would either:
+- mean exactly the same as `T` (redundant, confusing), or
+- mean some new third thing (granular mutation control) — which
+  we explicitly don't want, see "every feature pays rent."
+
+### The `nomut` keyword's two roles
+
+It's worth being clear that `nomut` already wears two hats:
+
+- `nomut x is V` — block reassigning x AND block mutating x's
+  fields.
+- (parameter form, implicit when no `ref`) — block mutating the
+  parameter's fields.
+
+Same idea (no-mutation), two surfaces. The parameter form
+doesn't need an explicit keyword because the absence of `ref`
+already says it.
+
+---
+
+## Calling convention — explicit
+**Date:** 2026-05-16
+**Status:** documented (no code change)
+**Decision:** Document the actual calling convention: heap-shaped
+types are passed as pointers; primitives are passed by value.
+
+### What actually happens (verified in the IR backend)
+
+| Source param | Carried in | What it is | Aliasing | Mutation |
+|---|---|---|---|---|
+| `n int` | x0..x7 | the 8-byte value | no — it's a copy | n/a |
+| `b bool` | x0..x7 | 0 or 1 | no — copy | n/a |
+| `p Point` (no `ref`) | x0..x7 | pointer to caller's heap struct | yes — points at caller's data | **NO**, checker-blocked |
+| `p ref Point` | x0..x7 | same pointer | yes | yes |
+| `xs List of int` (no `ref`) | x0..x7 | pointer to list header | yes | NO |
+| `xs ref List of int` | x0..x7 | pointer to list header | yes | yes |
+| `s String` | x0..x7 | pointer to String header | yes | NO (String fields are immutable from outside via methods) |
+
+Verified: `compiler/regalloc.c:170-177` (params come in via
+x0..x7), `compiler/iremit.c:428-438` (call site moves args to
+x0..x7), and the actual emitted asm for a struct param shows
+a single 8-byte pointer load.
+
+### Why this is enough without a borrow checker
+
+Three properties make pointer-passing-without-lifetimes safe:
+
+1. **Aliasing is lexical.** `f(p)` aliases `p` only for the
+   duration of `f`'s activation. The caller can't observe a
+   write until `f` returns; after, the alias is gone.
+2. **The owner outlives the alias by construction.** A local
+   can't be dropped while it's an argument; no way to
+   prematurely free what the callee is reading.
+3. **No `&` escape.** There's no syntax to capture `p` into a
+   long-lived location inside `f`. Even `g(p)` from inside `f`
+   just continues the lexical chain.
+
+This is the "borrow ends when the function returns" subset of
+Rust's borrow checker, enforced for free by the grammar (no way
+to express anything else). It's what makes World A
+implementable without a real borrow checker.
+
+### Why no `ref int`
+
+Primitives are 8 bytes — same size as a pointer. Pass-by-value
+is as cheap as pass-by-pointer. There's no performance reason
+for `ref int`, and we don't allow primitive parameter mutation
+anyway. If a user genuinely needs an out-int (rare), they wrap
+it in a one-field struct: `Counter is { value int }` and
+`Counter.bump(self ref Counter)`.
+
+---
+
+## Every feature must pay rent
+**Date:** 2026-05-16
+**Status:** standing principle
+**Decision:** Every proposed language feature must demonstrably
+make the user's first hour better, or actively prevent a class
+of bugs in their first thousand lines. Otherwise it doesn't ship.
+
+### The principle
+
+> If a feature isn't actively making the user's first hour
+> better, or actively preventing a class of bugs in their first
+> thousand lines, it's not paying rent. Cut it or defer it.
+
+### Features that pay rent (existing or near-term)
+
+- Better error messages with caret + context (top priority for
+  user feel).
+- File I/O (without it the language is a curiosity, not a tool).
+- `Result of T to E` for fallible operations (immediately useful
+  once I/O exists).
+- A "Potato in 10 minutes" tutorial (zero compiler cost,
+  enormous adoption value).
+- Default `_<Type>_yell` per struct at monomorphize time (debug
+  printing without per-type boilerplate).
+
+### Features that DO NOT pay rent — defer or never
+
+- **Operator overloading.** Permanent complexity tax (every `+`
+  becomes a method-resolution question), small benefit. Go and
+  Zig don't have it and are fine. Defer indefinitely.
+- **Traits / interfaces.** Tempting siren song. Most code that
+  thinks it needs traits actually needs free functions or
+  monomorphization (which we have). Defer until concrete.
+- **Async / await.** Don't wire the green-thread runtime into
+  compiled output until there's a real use case. Every language
+  that added async early regretted the syntax. Defer.
+- **Macros.** Hard no, indefinitely. C, Lisp, and Rust all
+  regret macros. Even Rust's `macro_rules!` is a pain point.
+- **Self-hosting the compiler.** Bragging point that costs months
+  for benefits the user never sees. Defer until the language is
+  stable enough that the rewrite isn't going to be obsolete.
+
+### The forcing function
+
+When someone proposes feature X, ask: "Does this make the user's
+first hour better, OR does this prevent a class of bugs?" If the
+answer is no, the feature gets logged here as deferred and the
+discussion ends.
+
+If the answer is yes, the feature must still survive the other
+language principles (no magic, no `<T>`, KISS, every decision
+serves cohesion over completeness).

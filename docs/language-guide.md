@@ -86,6 +86,24 @@ greet(name String) {
 
 `give` returns a value. Bare `give` returns void.
 
+### Calling convention
+
+| Param type | What's passed | Aliasing | Mutation |
+|------------|---------------|----------|----------|
+| `int`, `bool`, `byte` | the value (8 bytes) | none — it's a copy | n/a |
+| `Point`, `String`, `List of T`, etc. (no `ref`) | a pointer to the caller's heap block | yes — same data | **read-only** (compile error to mutate fields) |
+| `ref T` (any heap-shaped T) | the same pointer | yes | callee may mutate fields |
+
+A non-`ref` parameter of a heap-shaped type is the equivalent of
+C++'s `const T&`: same data as the caller sees, no copy, no
+mutation. There's no separate `nomut ref T` syntax — the absence
+of `ref` already says read-only.
+
+Borrows are *lexical to the call*: an argument is only aliased
+for the duration of that function's activation. There's no
+syntax for a long-lived borrow (no `&p`, no `is ref`), which is
+what lets the compiler stay simple while remaining safe.
+
 ## Conditionals
 
 ```
