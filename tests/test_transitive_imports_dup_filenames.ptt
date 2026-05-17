@@ -19,3 +19,14 @@ test "two transitive `use helper`s from sibling dirs resolve independently" {
   assert(a.call_one() eq 1)
   assert(b.call_two() eq 2)
 }
+
+// Codex P1-11 round 3: even when both helpers define a free
+// function with the same name (`answer` here), they must compile
+// to distinct symbols. Pre-fix both emitted as `_h_answer`
+// (alias-text prefix) and the assembler rejected the duplicate
+// definition. Post-fix, each is keyed by resolved-path canonical
+// alias and they coexist.
+test "overlapping function names across transitive dups still link" {
+  assert(a.call_answer_one() eq 11)
+  assert(b.call_answer_two() eq 22)
+}

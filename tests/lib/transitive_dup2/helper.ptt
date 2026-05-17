@@ -1,1 +1,6 @@
 val_two() int { give 2 }
+
+// Same function name as transitive_dup1/helper.ptt's `answer` —
+// they must compile to distinct symbols since they're distinct
+// modules. See round-3 note in the sibling helper.
+answer() int { give 22 }

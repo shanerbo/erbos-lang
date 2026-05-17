@@ -4,3 +4,8 @@
 use helper as h
 
 call_one() int { give h.val_one() }
+
+// Routes to lib1's `answer` — distinct from lib2's `answer`
+// even though both transitives use the alias `h`. Codex P1-11
+// round 3.
+call_answer_one() int { give h.answer() }

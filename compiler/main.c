@@ -223,6 +223,170 @@ static void rewrite_calls_with_prefix(Node *n,
     }
 }
 
+// Codex P1-11 round 3: assign every loaded module a unique
+// canonical alias derived from its resolved file path. Two
+// transitive `use helper as h` declarations from sibling dirs
+// resolve to *different files*; both must emit their free
+// functions under distinct symbol prefixes or the linker collides
+// on `_h_<func>`. The user-written alias is purely lexical;
+// canonical aliases are program-wide and stable.
+//
+// Strategy: a global path → canonical_alias map. When we encounter
+// a `use X as A` (top-level or transitive), resolve X against the
+// importer's dir, hand the resolved path to `assign_canonical_alias`,
+// and rewrite `A.X()` call sites in the importer's body to use the
+// canonical alias. The existing `<alias>_<func>` symbol-prefix
+// scheme then naturally produces `<canonical>_<func>` symbols, one
+// per resolved file.
+typedef struct {
+    char **paths;
+    char **canonical;
+    int count;
+    int cap;
+} CanonAliasMap;
+
+static CanonAliasMap g_canon = {0};
+
+// Look up or assign a canonical alias for a resolved file path.
+// Returned string is owned by the map and lives until program exit.
+static const char *canonical_alias_for(const char *resolved_path) {
+    for (int i = 0; i < g_canon.count; i++) {
+        if (!strcmp(g_canon.paths[i], resolved_path)) return g_canon.canonical[i];
+    }
+    if (g_canon.count >= g_canon.cap) {
+        g_canon.cap = g_canon.cap ? g_canon.cap * 2 : 8;
+        g_canon.paths = realloc(g_canon.paths, g_canon.cap * sizeof(char *));
+        g_canon.canonical = realloc(g_canon.canonical, g_canon.cap * sizeof(char *));
+    }
+    char buf[32];
+    snprintf(buf, sizeof(buf), "m%d", g_canon.count);
+    int idx = g_canon.count++;
+    g_canon.paths[idx] = strdup(resolved_path);
+    g_canon.canonical[idx] = strdup(buf);
+    return g_canon.canonical[idx];
+}
+
+// Walk a function body and rewrite any NODE_METHOD_CALL whose
+// receiver is a bare NODE_IDENT matching one of `local_aliases[i]`,
+// replacing the IDENT name with `canonical_aliases[i]`. This is
+// alias-rewriting for module-qualified calls (`h.foo()` →
+// `<canon>.foo()`).
+//
+// The walker mirrors `rewrite_calls_with_prefix`'s structure but
+// only changes the IDENT receivers, not call names.
+static void rewrite_alias_idents(Node *n,
+                                 char **local_aliases,
+                                 char **canonical_aliases,
+                                 int alias_count) {
+    if (!n) return;
+    switch (n->type) {
+        case NODE_METHOD_CALL: {
+            // Rewrite the receiver if it's an alias IDENT. Stash the
+            // user-written alias in `method_call.alias_display` so
+            // checker diagnostics report the user's name rather than
+            // the canonical `m<N>` synthetic.
+            Node *obj = n->method_call.object;
+            if (obj && obj->type == NODE_IDENT && obj->ident.name) {
+                for (int i = 0; i < alias_count; i++) {
+                    if (!strcmp(obj->ident.name, local_aliases[i])) {
+                        if (!n->method_call.alias_display) {
+                            n->method_call.alias_display = strdup(local_aliases[i]);
+                        }
+                        obj->ident.name = strdup(canonical_aliases[i]);
+                        break;
+                    }
+                }
+            }
+            // Recurse into args (and the receiver, in case of nested chains).
+            rewrite_alias_idents(n->method_call.object, local_aliases, canonical_aliases, alias_count);
+            for (int i = 0; i < n->method_call.arg_count; i++)
+                rewrite_alias_idents(n->method_call.args[i], local_aliases, canonical_aliases, alias_count);
+            break;
+        }
+        case NODE_CALL:
+            for (int i = 0; i < n->call.arg_count; i++)
+                rewrite_alias_idents(n->call.args[i], local_aliases, canonical_aliases, alias_count);
+            break;
+        case NODE_BLOCK:
+            for (int i = 0; i < n->block.stmts.count; i++)
+                rewrite_alias_idents(n->block.stmts.items[i], local_aliases, canonical_aliases, alias_count);
+            break;
+        case NODE_VAR_DECL:
+            rewrite_alias_idents(n->var_decl.value, local_aliases, canonical_aliases, alias_count);
+            break;
+        case NODE_ASSIGN:
+            rewrite_alias_idents(n->assign.value, local_aliases, canonical_aliases, alias_count);
+            break;
+        case NODE_FIELD_ASSIGN:
+            rewrite_alias_idents(n->field_assign.object, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents(n->field_assign.value, local_aliases, canonical_aliases, alias_count);
+            break;
+        case NODE_FIELD_ACCESS:
+            rewrite_alias_idents(n->field_access.object, local_aliases, canonical_aliases, alias_count);
+            break;
+        case NODE_BINARY:
+            rewrite_alias_idents(n->binary.left, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents(n->binary.right, local_aliases, canonical_aliases, alias_count);
+            break;
+        case NODE_UNARY:
+            rewrite_alias_idents(n->unary.operand, local_aliases, canonical_aliases, alias_count);
+            break;
+        case NODE_INDEX:
+            rewrite_alias_idents(n->index_access.object, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents(n->index_access.index, local_aliases, canonical_aliases, alias_count);
+            break;
+        case NODE_INDEX_ASSIGN:
+            rewrite_alias_idents(n->index_assign.object, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents(n->index_assign.index, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents(n->index_assign.value, local_aliases, canonical_aliases, alias_count);
+            break;
+        case NODE_IF:
+            for (int i = 0; i < n->if_stmt.branch_count; i++) {
+                rewrite_alias_idents(n->if_stmt.conds[i], local_aliases, canonical_aliases, alias_count);
+                rewrite_alias_idents(n->if_stmt.bodies[i], local_aliases, canonical_aliases, alias_count);
+            }
+            rewrite_alias_idents(n->if_stmt.nah_body, local_aliases, canonical_aliases, alias_count);
+            break;
+        case NODE_THROUGH_RANGE:
+            rewrite_alias_idents(n->through_range.from, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents(n->through_range.to, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents(n->through_range.by, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents(n->through_range.body, local_aliases, canonical_aliases, alias_count);
+            break;
+        case NODE_THROUGH_IN:
+            rewrite_alias_idents(n->through_in.collection, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents(n->through_in.body, local_aliases, canonical_aliases, alias_count);
+            break;
+        case NODE_INFI:
+            rewrite_alias_idents(n->infi.cond, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents(n->infi.body, local_aliases, canonical_aliases, alias_count);
+            break;
+        case NODE_GIVE:
+            rewrite_alias_idents(n->give.value, local_aliases, canonical_aliases, alias_count);
+            break;
+        case NODE_MATCH:
+            rewrite_alias_idents(n->match_expr.expr, local_aliases, canonical_aliases, alias_count);
+            for (int i = 0; i < n->match_expr.arm_count; i++)
+                rewrite_alias_idents(n->match_expr.arm_bodies[i], local_aliases, canonical_aliases, alias_count);
+            break;
+        case NODE_LIST_LIT:
+            for (int i = 0; i < n->list_lit.count; i++)
+                rewrite_alias_idents(n->list_lit.items[i], local_aliases, canonical_aliases, alias_count);
+            break;
+        case NODE_MAP_LIT:
+            for (int i = 0; i < n->map_lit.count; i++) {
+                rewrite_alias_idents(n->map_lit.keys[i], local_aliases, canonical_aliases, alias_count);
+                rewrite_alias_idents(n->map_lit.values[i], local_aliases, canonical_aliases, alias_count);
+            }
+            break;
+        case NODE_ASSERT:
+            rewrite_alias_idents(n->assert_stmt.condition, local_aliases, canonical_aliases, alias_count);
+            break;
+        default:
+            break;
+    }
+}
+
 // Resolve a `use <use_path>` against the three-tier search order
 // (importer-sibling, project-root, compiler-binary-dir). Writes the
 // resolved absolute-or-relative file path into `out`. Returns 1 on
@@ -456,6 +620,66 @@ int main(int argc, char **argv) {
         }
     }
 
+    // Codex P1-11 round 3: rewrite top-level alias-qualified call
+    // sites to use the canonical alias for each resolved module.
+    // Without this, `lib1/a.ptt` and `lib2/b.ptt` both writing
+    // `use helper as h` get their `h.foo()` calls emitted as
+    // `_h_foo` — which collide at assembly when both lib1/helper
+    // and lib2/helper define `foo`. The user-written `h` stays in
+    // the source file; it's just translated to a unique canonical
+    // string before the checker sees it.
+    //
+    // For the top-level input, the alias map is `<user_alias> →
+    // canonical_alias_for(resolved_path)`. We apply it to every
+    // function body and to each `use_aliases[ui]` slot so the
+    // existing function-prefixing pass below picks up the
+    // canonical name.
+    {
+        int n_uses = program->program.use_count;
+        if (n_uses > 0) {
+            char **user_aliases = malloc(n_uses * sizeof(char *));
+            char **canon_aliases = malloc(n_uses * sizeof(char *));
+            int valid = 0;
+            for (int ui = 0; ui < n_uses; ui++) {
+                char rp[512];
+                if (!resolve_use_path(program->program.use_paths[ui],
+                                      use_origin_dirs[ui], input,
+                                      rp, sizeof(rp))) {
+                    // Defer the resolution-failure diagnostic to the
+                    // load loop below (it has the structured help).
+                    // For now, skip this entry from the rewrite map.
+                    continue;
+                }
+                user_aliases[valid] = strdup(program->program.use_aliases[ui]);
+                canon_aliases[valid] = strdup(canonical_alias_for(rp));
+                free(program->program.use_aliases[ui]);
+                program->program.use_aliases[ui] = strdup(canon_aliases[valid]);
+                valid++;
+            }
+            for (int fi = 0; fi < program->program.funcs.count; fi++) {
+                Node *f = program->program.funcs.items[fi];
+                if (f->func_def.body) {
+                    rewrite_alias_idents(f->func_def.body,
+                                         user_aliases, canon_aliases, valid);
+                }
+            }
+            // Also rewrite test bodies (test "name" { ... }).
+            for (int ti = 0; ti < program->program.tests.count; ti++) {
+                Node *t = program->program.tests.items[ti];
+                if (t && t->test_def.body) {
+                    rewrite_alias_idents(t->test_def.body,
+                                         user_aliases, canon_aliases, valid);
+                }
+            }
+            for (int i = 0; i < valid; i++) {
+                free(user_aliases[i]);
+                free(canon_aliases[i]);
+            }
+            free(user_aliases);
+            free(canon_aliases);
+        }
+    }
+
     for (int ui = 0; ui < program->program.use_count; ui++) {
         // Sibling base is the originating file's directory, recorded
         // when the `use` was queued. For top-level `use`s in the
@@ -543,6 +767,57 @@ int main(int argc, char **argv) {
         parser_init(&imp_p, &imp_l);
         imp_p.filename = import_path;
         Node *imp_prog = parser_parse(&imp_p);
+
+        // Codex P1-11 round 3: rewrite imp_prog's body's
+        // alias-qualified calls to use canonical aliases derived
+        // from each transitive `use`'s resolved file. Without this,
+        // two distinct files lib1/a.ptt and lib2/b.ptt that both
+        // wrote `use helper as h` would emit calls `h.foo()` that
+        // collide on `_h_foo` after both are loaded. Each transitive
+        // resolves its `use helper` against the *importer's* dir
+        // (imp_dir below) so the canonical alias differs even when
+        // the `use` text matches.
+        char imp_dir[512] = {0};
+        strncpy(imp_dir, import_path, sizeof(imp_dir) - 1);
+        {
+            char *ts = strrchr(imp_dir, '/');
+            if (ts) *(ts + 1) = '\0';
+            else imp_dir[0] = '\0';
+        }
+        if (imp_prog->program.use_count > 0) {
+            int nu = imp_prog->program.use_count;
+            char **user_aliases = malloc(nu * sizeof(char *));
+            char **canon_aliases = malloc(nu * sizeof(char *));
+            int valid = 0;
+            for (int rui = 0; rui < nu; rui++) {
+                char rp[512];
+                if (!resolve_use_path(imp_prog->program.use_paths[rui],
+                                      imp_dir, input,
+                                      rp, sizeof(rp))) {
+                    // Resolution failure surfaces in the load loop
+                    // when the absorbed entry's iteration runs.
+                    continue;
+                }
+                user_aliases[valid] = strdup(imp_prog->program.use_aliases[rui]);
+                canon_aliases[valid] = strdup(canonical_alias_for(rp));
+                free(imp_prog->program.use_aliases[rui]);
+                imp_prog->program.use_aliases[rui] = strdup(canon_aliases[valid]);
+                valid++;
+            }
+            for (int fi = 0; fi < imp_prog->program.funcs.count; fi++) {
+                Node *f = imp_prog->program.funcs.items[fi];
+                if (f->func_def.body) {
+                    rewrite_alias_idents(f->func_def.body,
+                                         user_aliases, canon_aliases, valid);
+                }
+            }
+            for (int i = 0; i < valid; i++) {
+                free(user_aliases[i]);
+                free(canon_aliases[i]);
+            }
+            free(user_aliases);
+            free(canon_aliases);
+        }
 
         // Merge funcs.
         //   - Free functions get prefixed with `<alias>_<name>` so the
@@ -632,13 +907,8 @@ int main(int argc, char **argv) {
         // path, so cycles and "same file via two `use` paths" are
         // still no-ops there. The tuple-dedupe here just prevents
         // the use_paths array from growing on identical re-imports.
-        char imp_dir[512] = {0};
-        strncpy(imp_dir, import_path, sizeof(imp_dir) - 1);
-        {
-            char *ts = strrchr(imp_dir, '/');
-            if (ts) *(ts + 1) = '\0';
-            else imp_dir[0] = '\0';
-        }
+        // (`imp_dir` already computed above for the alias-rewrite
+        // pass; reused here.)
         for (int rui = 0; rui < imp_prog->program.use_count; rui++) {
             const char *rpath = imp_prog->program.use_paths[rui];
             const char *ralias = imp_prog->program.use_aliases[rui];

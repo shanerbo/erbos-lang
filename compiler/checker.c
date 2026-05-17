@@ -843,6 +843,12 @@ static Type check_expr(Checker *c, Node *n) {
             // garbage. Codex audit P0-1.
             if (n->method_call.object->type == NODE_IDENT) {
                 const char *obj_name = n->method_call.object->ident.name;
+                // Codex P1-11 round 3: error messages prefer the
+                // user-written alias over the canonical synthetic
+                // (e.g. `math.max` not `m1.max`).
+                const char *display_name = n->method_call.alias_display
+                    ? n->method_call.alias_display
+                    : obj_name;
                 int is_alias = 0;
                 for (int ai = 0; ai < c->import_count; ai++) {
                     if (c->import_aliases[ai] &&
@@ -860,14 +866,14 @@ static Type check_expr(Checker *c, Node *n) {
                         fprintf(stderr,
                             "error:%d: module '%s' has no function '%s' "
                             "(looked for symbol '%s')\n",
-                            n->line, obj_name, m, prefixed);
+                            n->line, display_name, m, prefixed);
                         exit(1);
                     }
                     if (n->method_call.arg_count != afi->param_count) {
                         fprintf(stderr,
                             "error:%d: function '%s.%s' expects %d "
                             "arguments, got %d\n",
-                            n->line, obj_name, m,
+                            n->line, display_name, m,
                             afi->param_count, n->method_call.arg_count);
                         exit(1);
                     }
@@ -881,7 +887,7 @@ static Type check_expr(Checker *c, Node *n) {
                             fprintf(stderr,
                                 "error:%d: argument %d of '%s.%s' "
                                 "expects '%s', got '%s'\n",
-                                n->line, j + 1, obj_name, m,
+                                n->line, j + 1, display_name, m,
                                 type_name(expected_t), type_name(arg_t));
                             exit(1);
                         }
@@ -893,7 +899,7 @@ static Type check_expr(Checker *c, Node *n) {
                             fprintf(stderr,
                                 "error:%d: argument %d of '%s.%s' is "
                                 "`ref` — spell `ref` at the call site\n",
-                                n->line, j + 1, obj_name, m);
+                                n->line, j + 1, display_name, m);
                             exit(1);
                         }
                         if (!param_ref && call_ref) {
@@ -901,7 +907,7 @@ static Type check_expr(Checker *c, Node *n) {
                                 "error:%d: argument %d of '%s.%s' is "
                                 "not `ref` — remove the `ref` from the "
                                 "call site\n",
-                                n->line, j + 1, obj_name, m);
+                                n->line, j + 1, display_name, m);
                             exit(1);
                         }
                     }

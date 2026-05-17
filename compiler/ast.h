@@ -220,6 +220,12 @@ struct Node {
             int *arg_is_ref;
             int arg_count;
             char *resolved_struct_name; // set by checker when this is a user method on a struct
+            // Codex P1-11 round 3: when an alias-qualified call like
+            // `math.max(...)` has its receiver IDENT rewritten to a
+            // canonical alias (e.g. `m1`) for symbol-prefix safety,
+            // the user-written alias is preserved here so checker
+            // diagnostics report `math.max`, not `m1.max`.
+            char *alias_display;
         } method_call;
 
         // NODE_BINARY

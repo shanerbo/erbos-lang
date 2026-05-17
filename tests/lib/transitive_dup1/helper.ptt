@@ -3,3 +3,11 @@
 // where two transitive `use helper`s from sibling dirs were
 // collapsed into one load by the raw-text dedupe.
 val_one() int { give 1 }
+
+// Codex round 3: `answer` here and `answer` in the sibling
+// transitive_dup2/helper.ptt both define a free function with
+// the same name. Pre-fix, both got emitted as `_h_answer` (the
+// alias text) and the assembler rejected the second definition.
+// Post-fix, each is emitted under the resolved-path canonical
+// alias and they coexist.
+answer() int { give 11 }

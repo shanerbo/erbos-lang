@@ -1,3 +1,5 @@
 use helper as h
 
 call_two() int { give h.val_two() }
+
+call_answer_two() int { give h.answer() }

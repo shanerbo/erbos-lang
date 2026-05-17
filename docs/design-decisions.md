@@ -1434,3 +1434,71 @@ has the shape "store extra metadata about each entry," ask
 whether *every* place that compares entries needs to use that
 metadata too. The load-loop and absorption-time dedupe were
 two such places.
+
+### P1-11 round 3: symbol prefix must follow resolved-module identity
+
+Round 2 fixed the load/dedupe layer so distinct transitive
+helpers were both queued and loaded. But the compiler still
+emitted free-function symbols as `_<alias>_<func>` — using the
+*alias text* the user wrote. With both lib1/a.ptt and
+lib2/b.ptt declaring `use helper as h`, both emitted
+`_h_<func>` symbols. Helper functions with overlapping names
+(e.g. both define `answer()`) collided at the assembler:
+
+    main.s:523:1: error: symbol '_h_answer' is already defined
+
+This is not a theoretical case; Codex's repro program is six
+files with the shared name `helper`. The shipped round-2
+regression test happened to use distinct names (`val_one` vs
+`val_two`), so it didn't exercise the symbol-collision path.
+
+The semantic the user wrote is clear: `h` in lib1/a.ptt means
+"the helper.ptt sibling to lib1/a.ptt", and `h` in lib2/b.ptt
+means "the helper.ptt sibling to lib2/b.ptt". The alias is
+*per-file lexical*; the compiler had been treating it as
+*global identity*.
+
+Fix: at import time, every `use X as A` (top-level or
+transitive) gets a canonical synthetic alias derived from the
+resolved file path. A small global map (`g_canon` in main.c)
+keeps `resolved_path → canonical_alias` stable across the
+program; the canonical strings are sequential `m0`, `m1`, ...
+
+For the importing file's body, the user-written alias `A` is
+mechanically rewritten to the canonical synthetic on every
+NODE_METHOD_CALL whose receiver is a bare NODE_IDENT matching
+`A`. This happens before checker / monomorph see the AST. The
+existing `<alias>_<func>` symbol-prefix scheme then naturally
+emits `<canonical>_<func>` symbols — one per resolved file.
+
+User-facing diagnostics keep the user's alias by stashing it
+in `method_call.alias_display` during the rewrite. The checker's
+"function 'math.max' expects 2 args" still says `math`, not
+`m1`.
+
+Why a synthetic name and not the resolved path itself: the
+canonical needs to be a valid C identifier suffix, short
+enough to keep symbol names readable, and stable per
+compilation. Sequential `m<N>` covers all three.
+
+Why mechanical rewrite at import time, not at check time: the
+existing checker logic for module-call dispatch already keys
+on `<alias>_<func>` symbol lookup. Rewriting at parse time
+keeps the checker untouched (modulo the diagnostic-display
+fallback), reuses every downstream pass without per-pass
+alias-scope plumbing.
+
+Test: `tests/test_transitive_imports_dup_filenames.ptt` now
+covers both the original "distinct symbols" case and the new
+"overlapping symbol names" case via two `answer()` functions
+in the sibling fixtures. ASan + UBSan clean across the full
+suite at -O0/-O1/-O2.
+
+What this teaches: when the compiler synthesises symbol
+names, the synthesis must use *module identity* (resolved
+file), not *user-supplied lexical names* (alias). Aliases
+exist for ergonomics; they're not unique. Resolved file
+paths are. Same lesson as P1-11 round 2 about dedupe keys —
+both rounds were the same root issue (one layer apart): "what
+identifies a module?" — and the right answer is always
+"resolved path," never "user text."
