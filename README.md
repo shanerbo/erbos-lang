@@ -65,10 +65,7 @@ The most distinctive part of the language. Three rules:
    borrow is over. No `&T` bindings, no lifetime annotations.
 
 ```
-Point is {
-  x int
-  y int
-}
+Point is { x int, y int }
 
 a is Point(x is 1, y is 2)            // construct
 b is now a                             // move — `a` is dead
@@ -166,10 +163,7 @@ x gt 5 ?{ yell("big") } nah { yell("smol") }
 add(a int, b int) int { give a + b }
 
 // Structs
-Point is {
-  x int
-  y int
-}
+Point is { x int, y int }
 p is Point(x is 1, y is 2)
 
 // Methods (with `ref self` for mutation)

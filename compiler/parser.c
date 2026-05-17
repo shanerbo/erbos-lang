@@ -1143,6 +1143,12 @@ static Node *parse_struct_def(Parser *p) {
         n->struct_def.field_names[n->struct_def.field_count] = fname;
         n->struct_def.field_types[n->struct_def.field_count] = ftype;
         n->struct_def.field_count++;
+        // Either separator works between fields: a comma (matches
+        // function-param syntax) or a newline (the canonical multi-
+        // line form). Trailing separators before `}` are also fine
+        // because skip_newlines + the loop's RBRACE check handle the
+        // empty case at the top of the next iteration.
+        if (at(p, TOK_COMMA)) p->pos++;
         skip_newlines(p);
     }
     eat(p, TOK_RBRACE);

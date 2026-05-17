@@ -1,0 +1,60 @@
+// Struct fields can be separated by either a comma OR a newline
+// (or both). Function-param syntax already uses commas; struct
+// definitions accept the same shape so users don't have to
+// remember a different rule.
+
+use std/string
+
+// Single-line, comma-separated multi-field.
+Point is { x int, y int }
+
+// Single-line, single-field — no separator needed.
+Counter is { value int }
+
+// Multiline, no commas — the canonical multiline form.
+Box is {
+  lo int
+  hi int
+}
+
+// Multiline with trailing commas — also valid.
+Edge is {
+  src int,
+  dst int,
+  weight int,
+}
+
+// Mixed commas and newlines on the same struct.
+Mix is {
+  a int, b int
+  c int
+  d int, e int
+}
+
+test "single-line comma-separated multi-field" {
+  p is Point(x is 1, y is 2)
+  assert(p.x eq 1)
+  assert(p.y eq 2)
+}
+
+test "single-field compact form" {
+  c is Counter(value is 42)
+  assert(c.value eq 42)
+}
+
+test "multiline newline-separated" {
+  b is Box(lo is 0 - 5, hi is 5)
+  assert(b.hi - b.lo eq 10)
+}
+
+test "multiline with trailing commas" {
+  e is Edge(src is 1, dst is 2, weight is 7)
+  assert(e.src eq 1)
+  assert(e.dst eq 2)
+  assert(e.weight eq 7)
+}
+
+test "mixed commas and newlines" {
+  m is Mix(a is 1, b is 2, c is 3, d is 4, e is 5)
+  assert(m.a + m.b + m.c + m.d + m.e eq 15)
+}

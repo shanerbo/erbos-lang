@@ -158,11 +158,18 @@ on int receivers.
 ## Structs
 
 ```
+Point is { x int, y int }
+
+// Or, equivalently, multiline (newlines also separate fields):
 Point is {
   x int
   y int
 }
 ```
+
+Fields can be separated by commas, newlines, or both. Use
+whichever fits — short structs read fine on one line; longer
+ones get the multiline form.
 
 There are two ways to construct a struct value:
 
