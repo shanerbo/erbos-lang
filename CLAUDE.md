@@ -167,6 +167,23 @@ Concretely:
   happens in their real driver — my repro budget shouldn't cap
   the conversation. Get the failing project, debug it there.
 
+### `AUDITING.md` is Codex's territory — DO NOT TOUCH
+
+`AUDITING.md` at the repo root is **owned by Codex 5.5**. It is
+**read-only for me**. Never:
+
+- modify it (`Edit` / `Write`)
+- delete or rename it
+- stage it via `git add`
+- include it in any commit
+
+I may **only read** it, and only when its content is directly
+relevant to a task — not preemptively.
+
+This is a hard rule. If a tool call would touch `AUDITING.md` in
+any way other than reading, abort and surface the situation
+instead of proceeding.
+
 ## Out of scope without explicit ask
 
 - Self-hosting the compiler in Potato (planned, not started).
