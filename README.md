@@ -385,10 +385,6 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 - [ ] Green-thread runtime integration in compiled output
 - [ ] Self-hosting (compiler written in Potato)
 
-[`OVERHAUL.md`](OVERHAUL.md) is the historical record of the major
-2025–2026 language overhaul (typed arrays, pure-Potato stdlib,
-keyword retirement, framework-only testing). All shipped.
-
 ---
 
 ## Testing
