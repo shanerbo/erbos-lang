@@ -558,15 +558,9 @@ static Node *parse_stmt(Parser *p) {
     if (at(p, TOK_STOP)) { p->pos++; return alloc_node(NODE_STOP, line); }
     if (at(p, TOK_SKIP)) { p->pos++; return alloc_node(NODE_SKIP, line); }
 
-    // Assert statement
-    if (at(p, TOK_ASSERT)) {
-        p->pos++;
-        eat(p, TOK_LPAREN);
-        Node *n = alloc_node(NODE_ASSERT, line);
-        n->assert_stmt.condition = parse_expr(p);
-        eat(p, TOK_RPAREN);
-        return n;
-    }
+    // γ3: TOK_ASSERT no longer exists; `assert(cond)` is a plain
+    // NODE_CALL parsed through the call path below. The checker
+    // recognises the name and emits the same `_assert_fail` lowering.
     if (at(p, TOK_THROUGH)) { return parse_through(p); }
 
     // Match expression

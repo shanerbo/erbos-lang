@@ -436,6 +436,34 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
             // Mirrors the dispatch in src/codegen.c so the IR backend
             // produces calls to symbols that actually exist.
             const char *call_name = n->call.name;
+            // γ3: `assert(cond)` lowers to the same conditional
+            // _assert_fail-with-line path that NODE_ASSERT used.
+            // Inlined here so we don't have to keep the special
+            // statement node alive once the parser drops TOK_ASSERT.
+            if (!strcmp(call_name, "assert") && n->call.arg_count == 1) {
+                VReg cond = gen_expr(c, n->call.args[0]);
+                int ok_lbl = new_label(c);
+                int fail_lbl = new_label(c);
+                emit(c, (IRInst){.op = IR_BR_COND, .a = cond,
+                                 .label = ok_lbl, .label2 = fail_lbl});
+                IRBlock *fail_b = new_block(c);
+                fail_b->label = fail_lbl;
+                switch_block(c, fail_b);
+                VReg line_no = new_vreg(c);
+                emit(c, (IRInst){.op = IR_CONST, .dst = line_no, .imm = n->line});
+                VReg *aa = malloc(sizeof(VReg));
+                aa[0] = line_no;
+                VReg ignored = new_vreg(c);
+                emit(c, (IRInst){.op = IR_CALL, .dst = ignored, .str = "assert_fail",
+                                 .args = aa, .arg_count = 1});
+                emit(c, (IRInst){.op = IR_BR, .label = ok_lbl});
+                IRBlock *ok_b = new_block(c);
+                ok_b->label = ok_lbl;
+                switch_block(c, ok_b);
+                VReg dummy = new_vreg(c);
+                emit(c, (IRInst){.op = IR_CONST, .dst = dummy, .imm = 0});
+                return dummy;
+            }
             if (!strcmp(call_name, "list"))      call_name = "list_new";
             else if (!strcmp(call_name, "map"))  call_name = "map_new";
             else if (!strcmp(call_name, "imap")) call_name = "imap_new";

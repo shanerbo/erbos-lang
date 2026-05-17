@@ -46,7 +46,12 @@ static TokenType keyword_type(const char *word) {
     if (!strcmp(word, "be"))      return TOK_BE;
     if (!strcmp(word, "match"))   return TOK_MATCH;
     if (!strcmp(word, "test"))    return TOK_TEST;
-    if (!strcmp(word, "assert"))  return TOK_ASSERT;
+    // γ3: `assert` is no longer a reserved keyword. `assert(cond)`
+    // parses as a regular NODE_CALL; the checker recognises the
+    // name and lowers it to the same `_assert_fail(line)`-on-false
+    // path NODE_ASSERT used to take. Conceptually it lives in
+    // std/test (the user opts in via `use std/test` once δ1 lands
+    // the bundle), but until then any source file can call it.
     if (!strcmp(word, "use"))     return TOK_USE;
     if (!strcmp(word, "as"))      return TOK_AS;
     if (!strcmp(word, "and"))     return TOK_AND;

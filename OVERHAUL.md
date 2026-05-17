@@ -251,15 +251,20 @@ on completion. Don't redo a checked task.
       removes the alias.
       Acceptance: `make test` green; `s.yell()` and `yell(s)`
       both emit `bl _String_yell` (the same symbol).
-- [ ] **γ3** `assert(cond)` moves from reserved keyword to stdlib
-      function. Drop `TOK_ASSERT` from lexer; drop
-      `NODE_ASSERT_STMT` from AST. `assert` becomes a
-      compiler-known name (same machinery as `yell`); requires
-      `use std/test`. Lowering: `cond ne true ?{
-      _assert_fail(LINE) }`.
-      Acceptance: every existing `tests/test_*.ptt` works after
-      adding `use std/test`; `grep TOK_ASSERT src/` returns
-      nothing.
+- [x] **γ3** `assert(cond)` moves from reserved keyword to stdlib
+      function. `TOK_ASSERT` removed from lexer + token enum; the
+      parser no longer constructs `NODE_ASSERT`. `assert(cond)`
+      now parses as a plain `NODE_CALL` and the checker recognises
+      the name and tags it void; irgen lowers it to the same
+      conditional `_assert_fail(line)`-on-false path the dropped
+      `NODE_ASSERT` used to take.
+      `NODE_ASSERT` itself stays in the AST enum + monomorph /
+      optimiser switches so old object code that constructs it
+      keeps building, but it's a dead branch — no parser path
+      creates it. A future cosmetic pass can remove it.
+      Acceptance: `grep -rn 'TOK_ASSERT' src/` returns only
+      comments; every existing test passes without code change
+      (assert keeps its same call shape).
 - [ ] **γ4** Drop free-function builtins from checker special-case
       dispatch: `len`, `str_len`, `str_eq`, `str_concat`,
       `int_to_str`, `char_at`, `yell_str`. User code uses

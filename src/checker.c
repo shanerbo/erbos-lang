@@ -353,6 +353,21 @@ static Type check_expr(Checker *c, Node *n) {
             if (!strcmp(name, "list") || !strcmp(name, "list_new")) return make_type(TYPE_LIST);
             if (!strcmp(name, "map") || !strcmp(name, "map_new") || !strcmp(name, "imap")) return make_type(TYPE_MAP);
             if (!strcmp(name, "task")) return make_type(TYPE_TASK);
+            // γ3: `assert(cond)` is a stdlib function (conceptually
+            // in std/test). Type-check args; irgen lowers it to the
+            // same _assert_fail-on-false path NODE_ASSERT used to
+            // take. The line-number for the panic message comes
+            // from the call node itself.
+            if (!strcmp(name, "assert")) {
+                if (n->call.arg_count != 1) {
+                    fprintf(stderr,
+                        "error:%d: assert() takes exactly 1 argument\n",
+                        n->line);
+                    exit(1);
+                }
+                check_expr(c, n->call.args[0]);
+                return make_type(TYPE_VOID);
+            }
             if (!strcmp(name, "yell")) {
                 // γ1: resolve `yell(x)` to a concrete symbol at
                 // compile time based on x's static type. The call
