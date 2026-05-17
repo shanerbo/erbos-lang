@@ -147,11 +147,28 @@ on completion. Don't redo a checked task.
 
 ### Phase β — Stdlib rewrite using `array of T`
 
-- [ ] **β1** Rewrite `std/list.ptt` against `array of T`. Replace
+- [x] **β1** Rewrite `std/list.ptt` against `array of T`. Replace
       every `mem_load`/`mem_store` with typed indexing, every
-      `heap_alloc(n*8)` with `array of T with cap n`.
-      Acceptance: `tests/test_list_methods.ptt` passes; `grep
-      'mem_\|heap_' std/list.ptt` returns nothing.
+      `heap_alloc(n*8)` with `array of T with cap n`. Compiler
+      changes folded in:
+        - monomorph: NODE_ARRAY_NEW + NODE_INDEX_ASSIGN handled
+          in substitute_in_node + mangle_in_node so generic
+          arrays get T substituted correctly.
+        - irgen: NODE_FIELD_ASSIGN with named-local RHS marks
+          the local moved (RAII-skips it on scope exit) — fixes
+          double-free of the array when `self.data be fresh`
+          pattern is used.
+        - runtime _ha_found path zero-fills recycled memory
+          (mmap pages are already zero, but free-list returns
+          blocks whose first 16 bytes were [next, size]
+          metadata; without zeroing, freshly-`_alloc_<X>`d
+          structs see garbage in default-zero fields like
+          List.data).
+        - checker NODE_FIELD_ACCESS recognises `arr.cap` for
+          TYPE_ARRAY receivers and emits a load at offset 0.
+      Acceptance: `tests/test_list_methods.ptt` passes (6
+      tests); `grep 'mem_\|heap_\|panic_oob' std/list.ptt`
+      returns only the comment line.
 - [ ] **β2** Rewrite `std/map.ptt` against `array of T`. Two
       parallel arrays (keys, values).
       Acceptance: `tests/test_map_methods.ptt` passes; clean grep.

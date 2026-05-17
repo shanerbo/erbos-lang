@@ -138,6 +138,21 @@ static void emit_heap_alloc(FILE *out) {
     fprintf(out, "_ha_found:\n");
     fprintf(out, "    ldr x14, [x11]\n");
     fprintf(out, "    str x14, [x12]\n");
+    // Zero-fill the recycled block (size = x9, in bytes). The bump
+    // path returns mmap pages which are already zero; the free-list
+    // path returns blocks whose first 16 bytes were overwritten by
+    // _heap_free with [next, size] metadata. User code (and the
+    // stdlib that builds on this) relies on freshly-allocated
+    // memory being zero — without it, a struct field defaulting
+    // to 0 (e.g. List.data) holds whatever was there.
+    fprintf(out, "    mov x13, #0\n");
+    fprintf(out, "_ha_zero:\n");
+    fprintf(out, "    cmp x13, x9\n");
+    fprintf(out, "    b.ge _ha_zero_done\n");
+    fprintf(out, "    str xzr, [x11, x13]\n");
+    fprintf(out, "    add x13, x13, #8\n");
+    fprintf(out, "    b _ha_zero\n");
+    fprintf(out, "_ha_zero_done:\n");
     fprintf(out, "    mov x0, x11\n");
     fprintf(out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n");
     fprintf(out, "_ha_bump:\n");

@@ -858,6 +858,16 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
             VReg obj = gen_expr(c, n->field_access.object);
             // Find field offset
             int offset = 0;
+            // β1: `arr.cap` for `arr : array of T` — the checker
+            // tags struct_name = "array" for this case. Cap is at
+            // offset 0 in the runtime header.
+            if (n->field_access.struct_name &&
+                !strcmp(n->field_access.struct_name, "array") &&
+                n->field_access.field && !strcmp(n->field_access.field, "cap")) {
+                VReg dst = new_vreg(c);
+                emit(c, (IRInst){.op = IR_LOAD, .dst = dst, .a = obj, .imm = 0});
+                return dst;
+            }
             if (c->program && n->field_access.struct_name) {
                 for (int si = 0; si < c->program->program.structs.count; si++) {
                     Node *s = c->program->program.structs.items[si];
@@ -971,6 +981,15 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
             break;
 
         case NODE_FIELD_ASSIGN: {
+            // β1: when the RHS is a named local that owns heap
+            // storage (array, struct), assigning it into a field
+            // transfers ownership. The local is "moved out" — RAII
+            // cleanup must skip it on scope exit, otherwise we
+            // double-free (the field still points at the buffer
+            // that the local also pointed at).
+            if (n->field_assign.value->type == NODE_IDENT) {
+                mark_moved_local(c, n->field_assign.value->ident.name);
+            }
             VReg val = gen_expr(c, n->field_assign.value);
             VReg obj = gen_expr(c, n->field_assign.object);
             // Resolve the field offset using the same per-struct policy

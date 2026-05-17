@@ -495,6 +495,21 @@ static void substitute_in_node(Node *n, char **params, char **concrete, int coun
             substitute_in_node(n->index_access.object, params, concrete, count);
             substitute_in_node(n->index_access.index, params, concrete, count);
             break;
+        case NODE_INDEX_ASSIGN:
+            substitute_in_node(n->index_assign.object, params, concrete, count);
+            substitute_in_node(n->index_assign.index, params, concrete, count);
+            substitute_in_node(n->index_assign.value, params, concrete, count);
+            break;
+        case NODE_ARRAY_NEW: {
+            // α: substitute T inside `array of T with cap N`. The
+            // elem_type field is a type-string ("T", "int", etc.);
+            // run it through sub() the same way var_decl type names
+            // are handled. The cap expression also gets substituted.
+            char *t = sub(n->array_new.elem_type, params, concrete, count);
+            if (t) { n->array_new.elem_type = t; }
+            substitute_in_node(n->array_new.cap, params, concrete, count);
+            break;
+        }
         case NODE_LIST_LIT:
             substitute_in_array(n->list_lit.items, n->list_lit.count, params, concrete, count);
             break;
@@ -596,6 +611,15 @@ static void mangle_in_node(Node *n) {
         case NODE_INDEX:
             mangle_in_node(n->index_access.object);
             mangle_in_node(n->index_access.index);
+            break;
+        case NODE_INDEX_ASSIGN:
+            mangle_in_node(n->index_assign.object);
+            mangle_in_node(n->index_assign.index);
+            mangle_in_node(n->index_assign.value);
+            break;
+        case NODE_ARRAY_NEW:
+            mangle_string_in_place(&n->array_new.elem_type);
+            mangle_in_node(n->array_new.cap);
             break;
         case NODE_LIST_LIT:
             mangle_in_array(n->list_lit.items, n->list_lit.count);

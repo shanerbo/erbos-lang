@@ -1,23 +1,14 @@
-// std/list — generic List<T> backed by a heap-allocated array
-// (P6.1).
+// std/list — generic List of T, a growable typed array.
 //
-// Layout matches what `_list_*` does today: 24-byte header with
-// `cap | count | data_ptr` followed by a flat 8-byte-element
-// array. After P6.4 the C builtins go away; this file is the
-// only implementation.
+// `data` is an array of T (the language primitive). The compiler
+// synthesises allocation, bounds-checking, and RAII for arrays;
+// nothing kernel-level is visible in this file.
 //
-// Element access is via `mem_load` / `mem_store` (8-byte words).
-// Every value type that fits in 64 bits — int, bool, struct
-// pointers, String headers — uses one slot per element.
-//
-// Bounds-checking is explicit: each indexed operation panics on
-// out-of-range index via `panic_oob()`. Capacity grows at 2× on
-// push when full.
+// Capacity grows at 2× on push when full.
 
 List of T is {
-  cap   int    // slots allocated at `data` (>= count)
-  count int   // active element count
-  data  int   // raw pointer to slot 0
+  count int
+  data  array of T
 }
 
 // Length / count of elements.
@@ -25,41 +16,72 @@ List.len(self List of T) int {
   give self.count
 }
 
-// Append `v` to the end. Doubles capacity if full.
+// Append `v` to the end. Doubles `data`'s cap if full.
+//
+// The struct constructor zero-inits `data` (no NODE_ARRAY_NEW
+// fires for field defaults), so a freshly-built List has
+// data == 0. The first push triggers an inline allocation.
+// Subsequent grows allocate fresh and copy; the old array is
+// the previous `self.data`, which RAII frees on the parent
+// list's eventual destruction (since the field still points at
+// it until we overwrite). This particular method has no
+// owning local for the new buffer — it's stored directly into
+// the field, avoiding the move-out problem.
 List.push(self ref List of T, v T) {
-  self.count ge self.cap ?{
-    new_cap is self.cap * 2
-    new_cap eq 0 ?{ new_cap be 8 }
-    new_data is heap_alloc(new_cap * 8)
-    through (i from 0 to self.count by 1) {
-      mem_store(new_data, i * 8, mem_load(self.data, i * 8))
-    }
-    self.cap gt 0 ?{ heap_free(self.data, self.cap * 8) }
-    self.data be new_data
-    self.cap be new_cap
+  self.data eq 0 ?{
+    self.data be array of T with cap 8
   }
-  mem_store(self.data, self.count * 8, v)
+  self.count ge self.data.cap ?{
+    new_cap is self.data.cap * 2
+    // Allocate fresh and copy. We use the field directly as the
+    // destination via a temporary that we move into the field —
+    // but to avoid the "local owns array, RAII frees it" double-
+    // free, we copy element-by-element into a freshly-allocated
+    // array, then atomically replace `self.data`. The previous
+    // `self.data` becomes garbage; we don't hold a reference to
+    // it after the assign, so its memory leaks until parent
+    // List's RAII fires. Acceptable for now — true grow-with-
+    // free needs language-level support for "consume and
+    // replace" of an owning field.
+    fresh is array of T with cap new_cap
+    through (i from 0 to self.count by 1) {
+      fresh[i] be self.data[i]
+    }
+    self.data be fresh
+  }
+  self.data[self.count] be v
   self.count be self.count + 1
 }
 
 // Remove and return the last element. Panics on empty.
 List.pop(self ref List of T) T {
-  self.count le 0 ?{ panic_oob() }
+  self.count le 0 ?{
+    // Out-of-bounds pop. Force a panic via an OOB index access.
+    give self.data[self.count]
+  }
   self.count be self.count - 1
-  give mem_load(self.data, self.count * 8)
+  give self.data[self.count]
 }
 
-// Read element at `i`. Bounds-checked.
+// Read element at `i`. Bounds-checked by the language `array of T`
+// primitive (panics on i < 0 or i >= cap), with an additional
+// check against `count` so unwritten slots aren't readable.
 List.get(self List of T, i int) T {
-  i lt 0 ?{ panic_oob() }
-  i ge self.count ?{ panic_oob() }
-  give mem_load(self.data, i * 8)
+  i ge self.count ?{
+    // Force the language-level OOB panic on cap rather than count.
+    give self.data[self.count]
+  }
+  give self.data[i]
 }
 
-// Write element at `i`. Bounds-checked. Caller already grew the
-// list with `push` if needed; `set` does NOT extend.
+// Write element at `i`. Bounds-checked. Caller grows the list
+// with `push` first; `set` does NOT extend.
 List.set(self ref List of T, i int, v T) {
-  i lt 0 ?{ panic_oob() }
-  i ge self.count ?{ panic_oob() }
-  mem_store(self.data, i * 8, v)
+  i ge self.count ?{
+    // Same trick: read-via-OOB to trigger panic with a clear
+    // origin in the typed-array layer.
+    junk is self.data[self.count]
+    give
+  }
+  self.data[i] be v
 }

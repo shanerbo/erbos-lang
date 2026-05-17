@@ -599,6 +599,14 @@ static Type check_expr(Checker *c, Node *n) {
         }
         case NODE_FIELD_ACCESS: {
             Type obj_t = check_expr(c, n->field_access.object);
+            // β1: `arr.cap` for `arr : array of T` returns the
+            // capacity at offset 0 of the runtime header. Marked
+            // for irgen via a synthetic struct_name "array".
+            if (obj_t.kind == TYPE_ARRAY && n->field_access.field &&
+                !strcmp(n->field_access.field, "cap")) {
+                n->field_access.struct_name = "array";
+                return make_type(TYPE_INT);
+            }
             if (obj_t.kind == TYPE_STRUCT && obj_t.struct_name) {
                 n->field_access.struct_name = obj_t.struct_name;
                 if (!struct_has_field(c, obj_t.struct_name, n->field_access.field)) {
@@ -681,6 +689,12 @@ static Type check_expr(Checker *c, Node *n) {
             n->index_assign.is_array = (obj_t.kind == TYPE_ARRAY);
             n->index_assign.is_byte = (obj_t.kind == TYPE_ARRAY &&
                 obj_t.elem_type && obj_t.elem_type->kind == TYPE_BYTE);
+            if (getenv("ERBOS_DBG_IDX")) {
+                fprintf(stderr, "[IDX_ASSIGN line %d] obj=%s elem=%s val=%s\n",
+                    n->line, type_name(obj_t),
+                    obj_t.elem_type ? type_name(*obj_t.elem_type) : "null",
+                    type_name(val_t));
+            }
             // Element type compat (best-effort)
             if (obj_t.elem_type && val_t.kind != TYPE_UNKNOWN &&
                 obj_t.elem_type->kind != TYPE_UNKNOWN &&
