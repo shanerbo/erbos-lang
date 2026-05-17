@@ -1,0 +1,11 @@
+// Codex audit P0-3: also for primitive locals — they're not on
+// the heap but the scope rule should be uniform.
+
+use std/string
+
+spark {
+  {
+    n is 42
+  }
+  yell(n)                 // <-- error: n is out of scope
+}

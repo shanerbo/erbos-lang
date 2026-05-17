@@ -1336,10 +1336,22 @@ static void check_stmt(Checker *c, Node *n) {
             for (int j = 0; j < n->infi.body->block.stmts.count; j++)
                 check_stmt(c, n->infi.body->block.stmts.items[j]);
             break;
-        case NODE_BLOCK:
+        case NODE_BLOCK: {
+            // Codex audit P0-3: NODE_BLOCK must be a lexical scope
+            // for the symbol table. Save the symbol count at block
+            // entry; restore it on exit. Without this, locals
+            // declared inside `{ ... }` remained visible to outer
+            // code, contradicting the documented "freed when owner
+            // goes out of scope" semantics — and at runtime irgen
+            // already freed the heap, so the outer read was a
+            // use-after-free hidden behind a successful checker
+            // pass.
+            int saved = c->count;
             for (int j = 0; j < n->block.stmts.count; j++)
                 check_stmt(c, n->block.stmts.items[j]);
+            c->count = saved;
             break;
+        }
         case NODE_MATCH: {
             // Type-check the matched expression. The match-arm
             // bodies need their binding parameters registered with

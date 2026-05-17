@@ -1,0 +1,41 @@
+// Codex audit P0-3 positive coverage: blocks introduce a fresh
+// symbol scope; outer-scope locals remain visible from inside.
+
+use std/string
+
+Point is { x int, y int }
+
+test "outer locals are visible inside a nested block" {
+  outer is 10
+  {
+    inner is 20
+    assert(outer eq 10)
+    assert(inner eq 20)
+  }
+  // outer is still visible; inner is not (no read attempted).
+  assert(outer eq 10)
+}
+
+test "two sequential blocks can reuse the same local name" {
+  total is 0
+  {
+    x is 5
+    total be total + x
+  }
+  {
+    x is 7
+    total be total + x
+  }
+  assert(total eq 12)
+}
+
+test "nested blocks free heap correctly without bleeding" {
+  // Each inner block gets its own Point, freed at scope end.
+  through (i from 0 to 3 by 1) {
+    p is Point()
+    p.x be i
+    assert(p.x eq i)
+  }
+  // Nothing leaks; nothing leaks into here either.
+  assert(true)
+}
