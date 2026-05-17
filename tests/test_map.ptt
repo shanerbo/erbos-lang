@@ -1,41 +1,47 @@
-test "map set and get" {
-  m is map of str to int
+use std/string
+use std/string_map
+use std/map
+
+test "string-map set and get" {
+  m is StringMap of int
   m.set("a", 10)
   m.set("b", 20)
   assert(m.get("a") eq 10)
   assert(m.get("b") eq 20)
-  assert(len(m) eq 2)
+  assert(m.len() eq 2)
 }
 
-test "map update" {
-  m is map of str to int
+test "string-map update" {
+  m is StringMap of int
   m.set("x", 1)
   m.set("x", 99)
   assert(m.get("x") eq 99)
-  assert(len(m) eq 1)
+  assert(m.len() eq 1)
 }
 
 test "map literal" {
+  // Map literals (`["k" to v]`) still route through the legacy
+  // `map` keyword today; phase ε4 retires it for StringMap of V.
   m is ["name" to 1, "age" to 2]
   assert(m.get("name") eq 1)
   assert(m.get("age") eq 2)
 }
 
-test "map growable" {
-  m is map of str to int
+test "string-map growable" {
+  m is StringMap of int
   through (i from 0 to 30 by 1) {
     m.set(i.to_string(), i)
   }
-  assert(len(m) eq 30)
+  assert(m.len() eq 30)
   assert(m.get("0") eq 0)
   assert(m.get("29") eq 29)
 }
 
-test "imap set and get" {
-  m is imap of int to int
-  imap_set(m, 42, 100)
-  imap_set(m, 7, 200)
-  assert(imap_get(m, 42) eq 100)
-  assert(imap_get(m, 7) eq 200)
-  assert(imap_get(m, 99) eq 0)
+test "int-map set and get" {
+  m is Map of int to int
+  m.set(42, 100)
+  m.set(7, 200)
+  assert(m.get(42) eq 100)
+  assert(m.get(7) eq 200)
+  assert(m.get(99) eq 0)
 }

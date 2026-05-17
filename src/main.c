@@ -364,6 +364,18 @@ int main(int argc, char **argv) {
                     s->struct_def.name, s->struct_def.name);                    \
             fprintf(ir_out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");\
             fprintf(ir_out, "    mov x0, #%d\n    bl _heap_alloc\n", size);     \
+            /* ε5 prerequisite: zero the freshly-allocated bytes.               \
+             * `_heap_alloc` returns either a fresh mmap'd page (already        \
+             * zeroed) or a recycled free-list block whose first 16 bytes       \
+             * still hold [next, size] metadata. Stdlib types like              \
+             * `List of T` rely on `self.data eq 0` as a lazy-init signal;      \
+             * without zeroing, recycled blocks read garbage and the lazy       \
+             * path doesn't fire. Zero up to `size` bytes in 8-byte strides.    \
+             * x0 holds the alloc pointer; preserve it across the loop. */     \
+            fprintf(ir_out, "    mov x9, x0\n    mov x10, #0\n");                \
+            for (int z = 0; z < size; z += 8) {                                  \
+                fprintf(ir_out, "    str xzr, [x9, #%d]\n", z);                  \
+            }                                                                    \
             fprintf(ir_out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n"); \
         }                                                                       \
         for (int i = 0; i < ir->func_count; i++) {                              \

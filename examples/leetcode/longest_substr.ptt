@@ -3,9 +3,10 @@
 // Time: O(n)  Space: O(min(n, alphabet))
 
 use std/string
+use std/string_map
 
 longest(s String, n int) int {
-  seen is map of str to int
+  seen is StringMap of int
   start is 0
   max_len is 0
   through (i from 0 to n by 1) {

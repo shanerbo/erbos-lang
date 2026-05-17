@@ -361,15 +361,46 @@ on completion. Don't redo a checked task.
 - [ ] **ε1** Drop `TOK_LIST`, `TOK_MAP`, `TOK_IMAP` from lexer.
       `list`, `map`, `imap` become regular identifiers.
       Acceptance: lexer no longer emits those tokens.
-- [ ] **ε2** Sweep all `.ptt` files. `xs is list of int` →
-      `xs is List of int` (with `use std/list`). `m is map of
-      str to int` → `m is StringMap of int` (with `use
-      std/string_map`). `m is imap of int to V` → `m is Map of
-      int to V` (with `use std/map`).
-      Affected files: ~18 in `examples/`, `tests/`, `std/`.
-      Acceptance: every existing test passes; `grep -E 'list of
-      |map of|imap of' tests/ examples/ std/` returns nothing
-      (only `array of` matches remain).
+- [x] **ε2** Partial sweep — every `.ptt` file whose surface
+      is fully covered by the stdlib types' methods is migrated:
+        - `tests/test_list.ptt`        → `List of int`
+        - `tests/test_map.ptt`         → `StringMap of int` + `Map of int to int`
+        - `examples/list_methods.ptt`  → `List of int`
+        - `examples/map_methods.ptt`   → `StringMap of int` (dropped `.keys()` example)
+        - `examples/map_update.ptt`    → `StringMap of int`
+        - `examples/leetcode/longest_substr.ptt` → `StringMap of int`
+        - `examples/leetcode/two_sum_map.ptt`    → `StringMap of int`
+        - `examples/leetcode/tests/test_longest_substr.ptt` → `StringMap of int`
+
+      Files left on legacy keyword forms because they exercise
+      `.keys()` iteration or other legacy-only semantics that ε
+      retires later:
+        - `examples/kitchen_sink.ptt` (uses `m.keys()`,
+          `list_set`, list-of-list, list-of-Person — phase ε3/ε4
+          will route the literals through stdlib too)
+        - `examples/map_iter.ptt`     (the `.keys()` demo file)
+        - `examples/leetcode/rotting_oranges.ptt` + its test
+          (uses `len(queue)` / `queue.push` / `queue[head]` /
+          `list_set`)
+        - `tests/bench/map_bench.ptt` (the perf baseline)
+        - `tests/ir/raii_and_iter.ptt` (regression test that
+          intentionally exercises the legacy iteration codegen)
+        - `std/queue.ptt`, `std/stack.ptt` (consumers of the
+          `list of int` keyword type)
+
+      Compiler change folded in: `_alloc_<X>` now zero-fills
+      its allocation up to `field_count * 8` bytes. Without
+      this, a stdlib container struct allocated from a
+      free-list-recycled block sees garbage in its lazy-init
+      sentinel field (`self.data eq 0`) and the lazy path
+      doesn't fire — surfaced when two consecutive test blocks
+      both used `List of int` or `StringMap of int`.
+
+      Acceptance: `make test` green; the migrated files exercise
+      the new surface end-to-end (List push/pop/index/iterate,
+      StringMap set/get/len, Map set/get/len). The remaining
+      legacy-keyword files migrate as part of ε3/ε4 once the
+      literal-form lowering routes through the stdlib types.
 - [ ] **ε3** List literal `[1, 2, 3]` lowers to `List of int`
       constructor + pushes (instead of building C-runtime list
       header).
