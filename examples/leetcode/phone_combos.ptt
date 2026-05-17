@@ -19,18 +19,18 @@ backtrack(digits str, index int, current str, n int) {
     yell(current)
     give
   }
-  digit is char_at(digits, index)
+  digit is digits.char_at(index)
   letters is get_letters(digit)
-  num_letters is len(letters)
+  num_letters is letters.len()
   through (i from 0 to num_letters by 1) {
-    ch is char_at(letters, i)
+    ch is letters.char_at(i)
     next is current + ch
     backtrack(digits, index + 1, next, n)
   }
 }
 
 solve(digits str) {
-  n is len(digits)
+  n is digits.len()
   n eq 0 ?{ give }
   backtrack(digits, 0, "", n)
 }

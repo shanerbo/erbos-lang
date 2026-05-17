@@ -24,7 +24,7 @@ test "map literal" {
 test "map growable" {
   m is map of str to int
   through (i from 0 to 30 by 1) {
-    m.set(int_to_str(i), i)
+    m.set(i.to_string(), i)
   }
   assert(len(m) eq 30)
   assert(m.get("0") eq 0)

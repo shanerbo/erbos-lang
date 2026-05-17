@@ -5,7 +5,7 @@ longest(s str, n int) int {
   start is 0
   max_len is 0
   through (i from 0 to n by 1) {
-    ch is char_at(s, i)
+    ch is s.char_at(i)
     prev is seen.get(ch)
     prev ne 0 ?{
       prev - 1 ge start ?{

@@ -4,6 +4,8 @@
 //        loops, conditionals, recursion, ownership, RAII, string ops,
 //        nested collections, chained indexing, methods, operators
 
+use std/string
+
 // === Structs ===
 Point is {
   x int
@@ -58,8 +60,8 @@ spark {
   age2 is 99
   yell("age is {age2}")
   yell(greet("world"))
-  yell(len("hello"))
-  yell(char_at("abcdef", 3))
+  yell("hello".len())
+  yell("abcdef".char_at(3))
   msg is "hi" + " " + "there"
   yell(msg)
   yell("---")
@@ -247,7 +249,7 @@ spark {
   // === 22. Growable map stress (50 entries) ===
   bigmap is map of str to int
   through (i from 0 to 50 by 1) {
-    bigmap.set(int_to_str(i), i * i)
+    bigmap.set(i.to_string(), i * i)
   }
   yell(len(bigmap))
   yell(bigmap.get("0"))

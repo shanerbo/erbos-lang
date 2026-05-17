@@ -3,16 +3,18 @@
 // Time: O(n)  Space: O(n)
 // Output: i*100+j encoding
 
+use std/string
+
 solve(nums list, size int, target int) int {
   seen is map of str to int
   through (i from 0 to size by 1) {
     complement is target - nums[i]
-    key is int_to_str(complement)
+    key is complement.to_string()
     found is seen.get(key)
     found ne 0 ?{
       give (found - 1) * 100 + i
     }
-    val_key is int_to_str(nums[i])
+    val_key is nums[i].to_string()
     seen.set(val_key, i + 1)
   }
   give -1

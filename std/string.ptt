@@ -43,6 +43,21 @@ String.byte_at(self String, i int) int {
   give self.data[i]
 }
 
+// Single-character access. Returns a freshly-allocated String
+// holding just the byte at `i`. Sugar over byte_at + a 1-byte
+// String allocation; ergonomic for callers that want to compare
+// against a string literal (`s.char_at(0) eq "a"`).
+String.char_at(self String, i int) String {
+  one is array of byte with cap 1
+  one[0] be self.data[i]
+  out is String()
+  out.cap be 1
+  out.count be 1
+  out.data be one
+  out.owned be 1
+  give out
+}
+
 // Concatenation. Allocates a fresh `array of byte` for the joined
 // bytes, then a fresh String header pointing at it.
 String.concat(self String, other String) String {

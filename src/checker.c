@@ -304,13 +304,22 @@ static Type check_expr(Checker *c, Node *n) {
             Type left = check_expr(c, n->binary.left);
             Type right = check_expr(c, n->binary.right);
             switch (n->binary.op) {
-                case TOK_PLUS: case TOK_ADD_WORD:
-                    if (left.kind == TYPE_STR && right.kind == TYPE_STR) {
+                case TOK_PLUS: case TOK_ADD_WORD: {
+                    // γ4: TYPE_STR and TYPE_STRUCT("String") are
+                    // interchangeable for `+` until γ7 deletes the
+                    // legacy TYPE_STR. Both lower to `_str_concat`.
+                    int left_is_str = (left.kind == TYPE_STR) ||
+                        (left.kind == TYPE_STRUCT && left.struct_name &&
+                         !strcmp(left.struct_name, "String"));
+                    int right_is_str = (right.kind == TYPE_STR) ||
+                        (right.kind == TYPE_STRUCT && right.struct_name &&
+                         !strcmp(right.struct_name, "String"));
+                    if (left_is_str && right_is_str) {
                         n->resolved_type = 2;
                         return make_type(TYPE_STR);
                     }
-                    if ((left.kind == TYPE_STR && right.kind == TYPE_UNKNOWN) ||
-                        (left.kind == TYPE_UNKNOWN && right.kind == TYPE_STR)) {
+                    if ((left_is_str && right.kind == TYPE_UNKNOWN) ||
+                        (left.kind == TYPE_UNKNOWN && right_is_str)) {
                         n->resolved_type = 2;
                         return make_type(TYPE_STR);
                     }
@@ -324,6 +333,7 @@ static Type check_expr(Checker *c, Node *n) {
                     }
                     n->resolved_type = 1;
                     return make_type(TYPE_INT);
+                }
                 case TOK_MINUS: case TOK_STAR: case TOK_SLASH: case TOK_PERCENT: case TOK_MOD_WORD:
                     if (left.kind == TYPE_UNKNOWN || right.kind == TYPE_UNKNOWN) {
                         n->resolved_type = 1;
@@ -337,9 +347,23 @@ static Type check_expr(Checker *c, Node *n) {
                     return make_type(TYPE_INT);
                 case TOK_EQ: case TOK_NEQ: case TOK_LT: case TOK_GT: case TOK_LTE: case TOK_GTE:
                 case TOK_EQ_WORD: case TOK_NE_WORD: case TOK_LT_WORD: case TOK_GT_WORD: case TOK_LE_WORD: case TOK_GE_WORD:
-                    if (left.kind == TYPE_STR && right.kind == TYPE_STR) n->resolved_type = 2;
+                {
+                    // γ4: until TYPE_STR is deleted (γ7), `String`
+                    // (TYPE_STRUCT("String")) and `str` (TYPE_STR)
+                    // are interchangeable for binary operators.
+                    // Both lower to the same `_str_eq` symbol that
+                    // walks the byte buffer through the array-of-byte
+                    // header.
+                    int left_is_str = (left.kind == TYPE_STR) ||
+                        (left.kind == TYPE_STRUCT && left.struct_name &&
+                         !strcmp(left.struct_name, "String"));
+                    int right_is_str = (right.kind == TYPE_STR) ||
+                        (right.kind == TYPE_STRUCT && right.struct_name &&
+                         !strcmp(right.struct_name, "String"));
+                    if (left_is_str && right_is_str) n->resolved_type = 2;
                     else n->resolved_type = 1;
                     return make_type(TYPE_BOOL);
+                }
                 case TOK_AND: case TOK_OR:
                     return make_type(TYPE_BOOL);
                 default: return make_type(TYPE_UNKNOWN);
@@ -419,11 +443,13 @@ static Type check_expr(Checker *c, Node *n) {
                 else n->call.args[0]->resolved_type = 3;
                 return make_type(TYPE_INT);
             }
-            if (!strcmp(name, "str_len")) { if (n->call.arg_count > 0) check_expr(c, n->call.args[0]); return make_type(TYPE_INT); }
-            if (!strcmp(name, "str_eq")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_INT); }
-            if (!strcmp(name, "char_at")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_STR); }
-            if (!strcmp(name, "yell_str")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_VOID); }
-            if (!strcmp(name, "panic_oob")) { return make_type(TYPE_VOID); }
+            // γ4: free-function string builtins (str_len, str_eq,
+            // str_concat, char_at, int_to_str, yell_str, panic_oob)
+            // are no longer dispatched in the checker. User code uses
+            // method form: `s.len()`, `s.equals(t)`, `s + t`,
+            // `n.to_string()`, `s.char_at(i)`, `s.yell()`. Calls
+            // using the old free-function names hit the generic
+            // "unknown function" error path.
             // β5: ptr_of / as_string were type-system-only escape
             // hatches needed when std/map stored String values in
             // int slots. With β2/β3's `array of T` rewrite the
@@ -438,16 +464,11 @@ static Type check_expr(Checker *c, Node *n) {
             if (!strcmp(name, "map_keys")) return make_type(TYPE_LIST);
             if (!strcmp(name, "map_set") || !strcmp(name, "map_len") || !strcmp(name, "list_len") || !strcmp(name, "list_push")) return make_type(TYPE_VOID);
             if (!strcmp(name, "list_pop")) return make_type(TYPE_INT);
-            // P3.4: these helpers return String headers now. We
-            // type them as TYPE_STR for back-compat with the
-            // existing dispatch (the operators + interpolation
-            // path keys on TYPE_STR), but allow them to flow into
-            // String-typed positions too. types_equal treats
-            // TYPE_STR as compatible with TYPE_STRUCT("String")
-            // for the same-bytes-different-spelling situation —
-            // see types_equal in this file.
-            if (!strcmp(name, "str_concat")) return make_type(TYPE_STR);
-            if (!strcmp(name, "int_to_str")) return make_type(TYPE_STR);
+            // γ4: str_concat / int_to_str dispatch dropped — user
+            // code uses `a + b` and `n.to_string()`. Same machinery
+            // resolves them to the existing _str_concat / _int_to_str
+            // runtime symbols (binary op via NODE_BINARY tag,
+            // method via NODE_METHOD_CALL on int receiver).
             // β5: raw memory primitives (heap_alloc, heap_free,
             // mem_load, mem_store, mem_load_byte, mem_store_byte,
             // write_bytes) are NOT user-callable. They were the
@@ -533,6 +554,13 @@ static Type check_expr(Checker *c, Node *n) {
                 receiver_type_name = "int";
             } else if (obj_t.kind == TYPE_BOOL) {
                 receiver_type_name = "bool";
+            } else if (obj_t.kind == TYPE_UNKNOWN) {
+                // γ4: legacy untyped collections produce TYPE_UNKNOWN
+                // values on indexing. Try int methods first — that's
+                // by far the most common case (`list of int`-shaped
+                // data). If no int method matches, fall back to str /
+                // String the same way TYPE_STR receivers do below.
+                receiver_type_name = "int";
             }
             if (receiver_type_name) {
                 FuncInfo *user_method = find_method(c, receiver_type_name, m);
@@ -588,11 +616,22 @@ static Type check_expr(Checker *c, Node *n) {
                 return make_type(TYPE_UNKNOWN);
             }
             if (!strcmp(m, "get")) {
+                // γ4: type-check args so any nested method call (e.g.
+                // `m.get(i.to_string())`) gets resolved_struct_name set.
+                for (int j = 0; j < n->method_call.arg_count; j++)
+                    check_expr(c, n->method_call.args[j]);
                 if (obj_t.val_type) return *obj_t.val_type;
                 return make_type(TYPE_UNKNOWN);
             }
             if (!strcmp(m, "keys")) return make_type(TYPE_LIST);
-            if (!strcmp(m, "set") || !strcmp(m, "fire") || !strcmp(m, "collapse")) return make_type(TYPE_VOID);
+            if (!strcmp(m, "set") || !strcmp(m, "fire") || !strcmp(m, "collapse")) {
+                // γ4: same as get — recurse into args. Without this,
+                // `m.set(i.to_string(), i * i)` left the inner method
+                // call untagged and irgen emitted bare `bl _to_string`.
+                for (int j = 0; j < n->method_call.arg_count; j++)
+                    check_expr(c, n->method_call.args[j]);
+                return make_type(TYPE_VOID);
+            }
             // User method via free-function fallback
             FuncInfo *fi = find_func(c, m);
             if (fi) return fi->return_type;

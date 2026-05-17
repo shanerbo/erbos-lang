@@ -265,14 +265,37 @@ on completion. Don't redo a checked task.
       Acceptance: `grep -rn 'TOK_ASSERT' src/` returns only
       comments; every existing test passes without code change
       (assert keeps its same call shape).
-- [ ] **γ4** Drop free-function builtins from checker special-case
-      dispatch: `len`, `str_len`, `str_eq`, `str_concat`,
-      `int_to_str`, `char_at`, `yell_str`. User code uses
-      method-style: `s.len()`, `s.equals(t)`, `s + t` (operator),
-      `n.to_string()`, `s.char_at(i)`, `s.yell()`.
-      Sweep all `.ptt` files to use method form.
-      Acceptance: `git grep '"len"\|"str_len"\|"str_eq"' src/
-      checker.c` returns nothing; tests pass after sweep.
+- [x] **γ4** Drop free-function string/len builtins from checker
+      special-case dispatch: `str_len`, `str_eq`, `str_concat`,
+      `int_to_str`, `char_at`, `yell_str`, `panic_oob`. User code
+      now uses method form: `s.len()`, `s + t` (operator),
+      `n.to_string()`, `s.char_at(i)`, `s.equals(t)`. The free-
+      function names hit the generic "unknown function" error
+      path. The universal `len()` builtin stays for one more
+      phase (it's deeply tangled with the legacy `list` / `map`
+      keyword forms; ε kills both together).
+      Swept files: `tests/test_string.ptt`, `tests/test_map.ptt`,
+      `examples/concat.ptt`, `examples/kitchen_sink.ptt`,
+      `examples/leetcode/{longest_substr,longest_substr_brute,
+      phone_combos,two_sum_map}.ptt`,
+      `examples/leetcode/tests/test_longest_substr.ptt`. Files
+      that newly use `n.to_string()` or `s.char_at(i)` got
+      `use std/string` injected.
+      Compiler changes folded in:
+        - String.char_at method added to std/string.ptt — sugar
+          over byte_at + a 1-byte allocation.
+        - Method dispatch on TYPE_UNKNOWN receivers (legacy
+          untyped `list[i]`) now defaults to looking up int methods
+          first, with the same TYPE_STR-fallback the str path takes.
+        - Built-in `set` / `get` / `keys` method type-checking
+          now recurses into args so nested method calls
+          (`m.set(i.to_string(), v)`) get their resolved_struct_name
+          tagged.
+        - Binary `+` / `eq` / `ne` / `lt` / `gt` / `le` / `ge` now
+          treat TYPE_STR and TYPE_STRUCT("String") interchangeably
+          for resolved_type tagging — same downstream emission.
+      Acceptance: `make test` green; calls to the dropped builtin
+      names error with "unknown function 'X'".
 - [ ] **γ5** Ban kernel-layer names (`heap_alloc`, `heap_free`,
       `write_bytes`, `panic_oob`, `panic_capacity`) from being
       callable in any `.ptt` file. Drop them from checker's
