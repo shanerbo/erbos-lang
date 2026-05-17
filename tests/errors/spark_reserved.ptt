@@ -1,0 +1,7 @@
+// `spark` is a reserved keyword for the program entry point.
+// Defining a function or variable named `spark` should error
+// at parse time.
+
+spark(x int) int { give x + 1 }
+
+spark { yell(0) }

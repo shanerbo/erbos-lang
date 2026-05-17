@@ -1167,8 +1167,33 @@ Node *parser_parse(Parser *p) {
     }
 
     while (!at(p, TOK_EOF)) {
+        // Entry point: spark { ... } — α0.2.
+        // `spark` is now a reserved keyword (TOK_SPARK); user code
+        // can't shadow the entry-point name. The shape is fixed:
+        // exactly `spark` followed by `{ body }`. No parameters, no
+        // return type. Synthesised into a regular NODE_FUNC_DEF
+        // with name="spark" so the rest of the pipeline (checker,
+        // monomorph, irgen) treats it like any free function. The
+        // runtime entry point in main.c emits `bl _spark`, which
+        // matches the mangled name.
+        if (at(p, TOK_SPARK)) {
+            int line = cur(p)->line;
+            p->pos++; // consume `spark`
+            Node *n = alloc_node(NODE_FUNC_DEF, line);
+            n->func_def.name = "spark";
+            n->func_def.param_names = NULL;
+            n->func_def.param_types = NULL;
+            n->func_def.param_is_ref = NULL;
+            n->func_def.param_count = 0;
+            n->func_def.return_type = NULL;
+            n->func_def.receiver_type = NULL;
+            n->func_def.receiver_type_args = NULL;
+            n->func_def.receiver_type_arg_count = 0;
+            n->func_def.body = parse_block(p);
+            list_push(&program->program.funcs, n);
+        }
         // Test block: test "name" { }
-        if (at(p, TOK_TEST)) {
+        else if (at(p, TOK_TEST)) {
             p->pos++;
             Node *t = alloc_node(NODE_TEST_DEF, cur(p)->line);
             t->test_def.name = eat(p, TOK_STR_LIT)->value;

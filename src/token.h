@@ -51,6 +51,9 @@ typedef enum {
     TOK_IMAP,
     TOK_OF,
     TOK_TASK,
+    TOK_SPARK,        // entry-point keyword (α0). Reserves the
+                      // `spark` identifier so user code can't
+                      // shadow the program's main symbol.
 
     // Types
     TOK_INT,

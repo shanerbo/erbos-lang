@@ -93,10 +93,10 @@ on completion. Don't redo a checked task.
 
 ### Phase α0 — Reserve `spark`
 
-- [ ] **α0.1** Add `TOK_SPARK` to lexer; map `spark` keyword to it.
-- [ ] **α0.2** Update parser entry-point detection to use `TOK_SPARK`
+- [x] **α0.1** Add `TOK_SPARK` to lexer; map `spark` keyword to it.
+- [x] **α0.2** Update parser entry-point detection to use `TOK_SPARK`
       instead of identifier matching.
-- [ ] **α0.3** Verify existing `spark { ... }` programs still work.
+- [x] **α0.3** Verify existing `spark { ... }` programs still work.
       Acceptance: every test passes; user code that defines a
       function named `spark` errors with "reserved keyword."
 

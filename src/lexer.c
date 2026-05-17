@@ -67,6 +67,7 @@ static TokenType keyword_type(const char *word) {
     if (!strcmp(word, "imap"))    return TOK_IMAP;
     if (!strcmp(word, "of"))      return TOK_OF;
     if (!strcmp(word, "task"))    return TOK_TASK;
+    if (!strcmp(word, "spark"))   return TOK_SPARK;
     if (!strcmp(word, "int"))     return TOK_INT;
     if (!strcmp(word, "str"))     return TOK_STR_TYPE;
     if (!strcmp(word, "bool"))    return TOK_BOOL;
