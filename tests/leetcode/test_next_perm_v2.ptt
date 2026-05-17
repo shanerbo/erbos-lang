@@ -2,8 +2,8 @@
 // implementation. Result must match the v1 implementation on
 // every input.
 
-use leetcode/next_perm
-use leetcode/next_perm_v2 as v2
+use tests/lib/leetcode/next_perm
+use tests/lib/leetcode/next_perm_v2 as v2
 
 test "next perm v2 ascending" {
   a is [1, 2, 3]

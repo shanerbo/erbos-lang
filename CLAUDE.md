@@ -48,11 +48,11 @@ std/               Potato stdlib (.ptt source — pure Potato, no C)
   map.ptt          Map of K to V
   string.ptt       String struct
   math.ptt, queue.ptt, stack.ptt
-examples/
-  leetcode/        library .ptt files (no spark blocks; tests import them)
+examples/          standalone demo programs (have spark blocks; readable as tutorials)
 tests/
   compiler/        C runtime tests
-  leetcode/        framework tests for examples/leetcode
+  lib/leetcode/    library .ptt files (no spark blocks); imported by leetcode tests
+  leetcode/        framework tests that import tests/lib/leetcode/<name>
   ir/              IR backend regression matrix (-O0/-O1/-O2)
   errors/          expected-compile-failure tests
   bench/           perf benchmarks

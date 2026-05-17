@@ -1,7 +1,7 @@
 // Next Permutation tests — next_perm() comes from
-// examples/leetcode/next_perm.ptt via `use leetcode/next_perm`.
+// tests/lib/leetcode/next_perm.ptt.
 
-use leetcode/next_perm
+use tests/lib/leetcode/next_perm
 
 test "next perm ascending" {
   a is [1, 2, 3]

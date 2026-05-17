@@ -1,8 +1,7 @@
-// Two Sum tests — solve() comes from examples/leetcode/two_sum.ptt
-// via the `use leetcode/two_sum` import (resolved by the compiler's
-// examples/ search root).
+// Two Sum tests — solve() comes from tests/lib/leetcode/two_sum.ptt
+// via project-root resolution of `use tests/lib/leetcode/two_sum`.
 
-use leetcode/two_sum
+use tests/lib/leetcode/two_sum
 
 test "two sum basic" {
   assert(two_sum.solve([2, 7], 2, 9) eq 1)

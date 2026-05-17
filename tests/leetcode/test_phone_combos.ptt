@@ -1,9 +1,9 @@
 // Phone Combinations tests — solve() comes from
-// examples/leetcode/phone_combos.ptt and returns a List of String.
+// tests/lib/leetcode/phone_combos.ptt and returns a List of String.
 
 use std/string
 use std/list
-use leetcode/phone_combos
+use tests/lib/leetcode/phone_combos
 
 test "phone combos: single digit '2'" {
   result is phone_combos.solve("2")

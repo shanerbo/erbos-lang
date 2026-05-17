@@ -1,4 +1,4 @@
-# Leetcode Examples — Library Files
+# Leetcode — Library Files
 
 Each `.ptt` here is a **library** that exposes the algorithm
 (`solve()` and any helpers) — no `spark { }`, no entry point. The
@@ -7,27 +7,28 @@ import the algorithm and exercise it via assertions.
 
 ## Importing
 
-The compiler's import resolver searches three roots for a `use`
-path: the importing file's directory, `std/`, then `examples/`.
-That's why a test file can write:
+The compiler's import resolver finds these via project-root
+walk-up (`potato.toml` lives at the repo root). Test files
+write:
 
 ```
-use leetcode/two_sum
+use tests/lib/leetcode/two_sum
 
 test "basic" {
   assert(two_sum.solve([2, 7], 2, 9) eq 1)
 }
 ```
 
-with no relative-path gymnastics.
+The path is the file's location relative to the project root.
+Same rule for any other shared library elsewhere in the tree.
 
 ## File Structure
 
 ```
-examples/leetcode/
+tests/lib/leetcode/
   problem_name.ptt              # library: defines solve() + helpers, no spark
 tests/leetcode/
-  test_problem_name.ptt         # framework tests; uses `use leetcode/problem_name`
+  test_problem_name.ptt         # framework tests; uses `use tests/lib/leetcode/problem_name`
 ```
 
 ## Solution Format

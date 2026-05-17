@@ -1,11 +1,11 @@
 // Longest Substring Without Repeating Characters tests —
-// `longest()` comes from examples/leetcode/longest_substr.ptt
+// `longest()` comes from tests/lib/leetcode/longest_substr.ptt
 // (the sliding-window version) and
-// examples/leetcode/longest_substr_brute.ptt (the O(n^2)
+// tests/lib/leetcode/longest_substr_brute.ptt (the O(n^2)
 // brute-force, exposed under the alias `brute`).
 
-use leetcode/longest_substr
-use leetcode/longest_substr_brute as brute
+use tests/lib/leetcode/longest_substr
+use tests/lib/leetcode/longest_substr_brute as brute
 
 test "longest substr easy" {
   assert(longest_substr.longest("a", 1) eq 1)

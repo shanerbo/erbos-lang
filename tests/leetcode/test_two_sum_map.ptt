@@ -1,10 +1,10 @@
 // Two Sum (Map approach) tests — solve() comes from
-// examples/leetcode/two_sum_map.ptt. Verifies the O(n) Map-keyed
+// tests/lib/leetcode/two_sum_map.ptt. Verifies the O(n) Map-keyed
 // implementation produces the same answers as the O(n^2) brute
 // force.
 
-use leetcode/two_sum_map
-use leetcode/two_sum
+use tests/lib/leetcode/two_sum_map
+use tests/lib/leetcode/two_sum
 
 test "two sum map basic" {
   assert(two_sum_map.solve([2, 7], 2, 9) eq 1)

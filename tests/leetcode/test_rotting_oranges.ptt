@@ -1,7 +1,7 @@
 // Rotting Oranges tests — solve() comes from
-// examples/leetcode/rotting_oranges.ptt.
+// tests/lib/leetcode/rotting_oranges.ptt.
 
-use leetcode/rotting_oranges
+use tests/lib/leetcode/rotting_oranges
 
 test "rotting oranges basic" {
   assert(rotting_oranges.solve([2,1,1, 1,1,0, 0,1,1], 3, 3) eq 4)

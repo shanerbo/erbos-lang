@@ -440,23 +440,17 @@ int main(int argc, char **argv) {
         if (last_slash) *(last_slash + 1) = '\0';
         else dir[0] = '\0';
 
-        // Resolve `use <path>` against four roots in order:
+        // Resolve `use <path>` against three roots in order:
         //   1. <dir-of-input>/<path>.ptt          — sibling to importer
         //   2. <project-root>/<path>.ptt          — anywhere under
         //                                            the user's project
         //                                            tree, found by
-        //                                            walking up looking
+        //                                            walking up from the
+        //                                            source file looking
         //                                            for `potato.toml`
         //   3. <compiler-binary-dir>/<path>.ptt   — bundled stdlib
         //                                            (e.g. `std/list`,
         //                                            `std/string`)
-        //   4. examples/<path>.ptt                — legacy fixture root,
-        //                                            removed in a follow-up
-        //                                            commit.
-        // Cwd-relative is also tried as a last resort so the existing
-        // dev workflow (`make test` from the project root) keeps
-        // working without requiring a potato.toml in the Potato repo
-        // itself yet — that's a follow-up.
         const char *upath_resolved = program->program.use_paths[ui];
         snprintf(import_path, sizeof(import_path), "%s%s.ptt", dir, upath_resolved);
         FILE *test_f = fopen(import_path, "r");
@@ -475,17 +469,6 @@ int main(int argc, char **argv) {
                          "%s%s.ptt", comp_dir, upath_resolved);
                 test_f = fopen(import_path, "r");
             }
-        }
-        if (!test_f) {
-            // Cwd fallback. Preserves the dev workflow where
-            // `make test` runs from the project root and expects
-            // `std/...` to resolve there.
-            snprintf(import_path, sizeof(import_path), "%s.ptt", upath_resolved);
-            test_f = fopen(import_path, "r");
-        }
-        if (!test_f) {
-            snprintf(import_path, sizeof(import_path), "examples/%s.ptt", upath_resolved);
-            test_f = fopen(import_path, "r");
         }
         if (!test_f) {
             fprintf(stderr, "error: cannot find module '%s'\n", upath_resolved);

@@ -38,14 +38,14 @@ test-pass: $(OUT)
 		fi; \
 	done; \
 	echo "=== leetcode library compile check ==="; \
-	for f in examples/leetcode/*.ptt; do \
+	for f in tests/lib/leetcode/*.ptt; do \
 		b=$$(basename $$f); \
 		if ! ./$(OUT) ir "$$f" > /dev/null 2>&1; then \
 			echo "  FAIL: $$b (won't compile to IR)"; fail=1; \
 		else \
 			echo "  OK:   $$b"; \
 		fi; \
-		rm -f examples/leetcode/$${b%.ptt}.s; \
+		rm -f tests/lib/leetcode/$${b%.ptt}.s; \
 	done; \
 	[ $$fail -eq 0 ] || (echo "Some passing tests failed"; exit 1)
 
