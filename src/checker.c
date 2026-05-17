@@ -745,8 +745,7 @@ static Type check_expr(Checker *c, Node *n) {
             if (obj_t.kind == TYPE_STRUCT && obj_t.struct_name) {
                 const char *sn = obj_t.struct_name;
                 if (!strncmp(sn, "List__", 6) || !strcmp(sn, "List") ||
-                    !strncmp(sn, "Map__", 5) || !strcmp(sn, "Map") ||
-                    !strncmp(sn, "StringMap__", 11) || !strcmp(sn, "StringMap")) {
+                    !strncmp(sn, "Map__", 5) || !strcmp(sn, "Map")) {
                     n->index_access.method_struct = strdup(sn);
                 }
             }
@@ -803,8 +802,7 @@ static Type check_expr(Checker *c, Node *n) {
             if (obj_t.kind == TYPE_STRUCT && obj_t.struct_name) {
                 const char *sn = obj_t.struct_name;
                 if (!strncmp(sn, "List__", 6) || !strcmp(sn, "List") ||
-                    !strncmp(sn, "Map__", 5) || !strcmp(sn, "Map") ||
-                    !strncmp(sn, "StringMap__", 11) || !strcmp(sn, "StringMap")) {
+                    !strncmp(sn, "Map__", 5) || !strcmp(sn, "Map")) {
                     n->index_assign.method_struct = strdup(sn);
                 }
             }
@@ -884,10 +882,10 @@ static Type check_expr(Checker *c, Node *n) {
                 }
             }
             // ε4: when val_type_name is set the literal lowers to
-            // a `StringMap__<V>` struct in irgen; type accordingly.
+            // a `Map__String__<V>` struct in irgen; type accordingly.
             if (n->map_lit.val_type_name) {
                 char buf[256];
-                snprintf(buf, sizeof(buf), "StringMap__%s",
+                snprintf(buf, sizeof(buf), "Map__String__%s",
                     n->map_lit.val_type_name);
                 return make_struct(strdup(buf));
             }
@@ -1048,8 +1046,7 @@ static void check_stmt(Checker *c, Node *n) {
             if (col.kind == TYPE_STRUCT && col.struct_name) {
                 const char *sn = col.struct_name;
                 if (!strncmp(sn, "List__", 6) || !strcmp(sn, "List") ||
-                    !strncmp(sn, "Map__", 5) || !strcmp(sn, "Map") ||
-                    !strncmp(sn, "StringMap__", 11) || !strcmp(sn, "StringMap")) {
+                    !strncmp(sn, "Map__", 5) || !strcmp(sn, "Map")) {
                     n->through_in.method_struct = strdup(sn);
                 }
             }
@@ -1119,23 +1116,49 @@ void checker_run(Node *program) {
     c.import_aliases = program->program.use_aliases;
     c.import_count = program->program.use_count;
 
-    // Register structs
+    // Register structs.
+    // Type-name convention: every struct / enum name must start
+    // with an uppercase letter (PascalCase). The grammar relies
+    // on this to disambiguate `Foo()` (struct constructor) from
+    // `foo()` (function call) at parse time, and the convention
+    // matches every other modern statically-typed language.
     c.struct_count = program->program.structs.count;
     c.structs = malloc(c.struct_count * sizeof(StructInfo));
     for (int i = 0; i < c.struct_count; i++) {
         Node *s = program->program.structs.items[i];
+        const char *nm = s->struct_def.name;
+        if (nm && nm[0] && !(nm[0] >= 'A' && nm[0] <= 'Z')) {
+            char cap = (nm[0] >= 'a' && nm[0] <= 'z')
+                ? (char)(nm[0] - 32) : nm[0];
+            fprintf(stderr,
+                "error:%d: struct name '%s' must start with an "
+                "uppercase letter (try '%c%s')\n",
+                s->line, nm, cap, nm + 1);
+            exit(1);
+        }
         c.structs[i].name = s->struct_def.name;
         c.structs[i].field_names = s->struct_def.field_names;
         c.structs[i].field_types = s->struct_def.field_types;
         c.structs[i].field_count = s->struct_def.field_count;
     }
 
-    // Register enum names as known types (treat like structs for type resolution)
+    // Register enum names as known types (treat like structs for
+    // type resolution). Same uppercase-first convention.
     for (int i = 0; i < program->program.enums.count; i++) {
-        // Add enum names to struct list so is_struct/parse_type_str recognizes them
+        Node *e = program->program.enums.items[i];
+        const char *nm = e->enum_def.name;
+        if (nm && nm[0] && !(nm[0] >= 'A' && nm[0] <= 'Z')) {
+            char cap = (nm[0] >= 'a' && nm[0] <= 'z')
+                ? (char)(nm[0] - 32) : nm[0];
+            fprintf(stderr,
+                "error:%d: enum name '%s' must start with an "
+                "uppercase letter (try '%c%s')\n",
+                e->line, nm, cap, nm + 1);
+            exit(1);
+        }
         c.struct_count++;
         c.structs = realloc(c.structs, c.struct_count * sizeof(StructInfo));
-        c.structs[c.struct_count - 1].name = program->program.enums.items[i]->enum_def.name;
+        c.structs[c.struct_count - 1].name = (char *)nm;
         c.structs[c.struct_count - 1].field_names = NULL;
         c.structs[c.struct_count - 1].field_types = NULL;
         c.structs[c.struct_count - 1].field_count = 0;

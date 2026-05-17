@@ -10,6 +10,7 @@
     { "include": "#operators" },
     { "include": "#types" },
     { "include": "#builtins" },
+    { "include": "#methods" },
     { "include": "#functions" },
     { "include": "#structs" }
   ],
@@ -54,11 +55,11 @@
       "patterns": [
         {
           "name": "keyword.control.ptt",
-          "match": "\\b(spark|give|through|from|to|by|in|infi|stop|skip|nah)\\b"
+          "match": "\\b(spark|give|through|from|to|by|in|infi|stop|skip|nah|match|test)\\b"
         },
         {
           "name": "keyword.declaration.ptt",
-          "match": "\\b(is|be|nomut|now|rep|ref)\\b"
+          "match": "\\b(is|be|nomut|now|rep|ref|use|as|of|with|cap)\\b"
         },
         {
           "name": "keyword.operator.logical.ptt",
@@ -70,7 +71,7 @@
         },
         {
           "name": "constant.language.boolean.ptt",
-          "match": "\\b(true|false)\\b"
+          "match": "\\b(true|false|nil)\\b"
         }
       ]
     },
@@ -78,23 +79,36 @@
       "patterns": [
         {
           "name": "keyword.operator.ptt",
-          "match": "(\\?\\{|==|!=|>=|<=|>|<|\\+|-|\\*|/|%)"
+          "match": "(\\?\\{|=>|==|!=|>=|<=|>|<|\\+|-|\\*|/|%)"
         }
       ]
     },
     "types": {
       "patterns": [
         {
-          "name": "storage.type.ptt",
-          "match": "\\b(int|str|bool|void|list|map|task|of)\\b"
+          "name": "storage.type.primitive.ptt",
+          "match": "\\b(int|bool|byte|void|array|task)\\b"
+        },
+        {
+          "name": "support.class.stdlib.ptt",
+          "match": "\\b(String|List|Map|StringMap)\\b"
         }
       ]
     },
     "builtins": {
       "patterns": [
         {
-          "name": "support.function.ptt",
-          "match": "\\b(yell|len|str_concat)\\b"
+          "name": "support.function.builtin.ptt",
+          "match": "\\b(yell|assert)\\b"
+        }
+      ]
+    },
+    "methods": {
+      "patterns": [
+        {
+          "comment": "Highlight known stdlib method names when called via the .method() syntax. Catches the common surface (push/pop/get/set/len/keys/byte_at/char_at/to_string/equals/empty/concat) without false-positive on user-defined methods that happen to share names.",
+          "name": "support.function.method.ptt",
+          "match": "(?<=\\.)\\b(push|pop|get|set|keys|len|byte_at|char_at|to_string|equals|empty|concat|yell|fire|collapse)\\b"
         }
       ]
     },

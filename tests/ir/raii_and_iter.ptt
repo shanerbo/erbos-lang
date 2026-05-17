@@ -23,7 +23,7 @@
 //   cherry
 //   3
 
-use std/string_map
+use std/map
 use std/list
 
 spark {
@@ -46,7 +46,7 @@ spark {
   pad15 is "padding-string-15"
   pad16 is "padding-string-16"
 
-  fruits is StringMap of int
+  fruits is Map of String to int
   fruits.set("apple", 1)
   fruits.set("banana", 2)
   fruits.set("cherry", 3)

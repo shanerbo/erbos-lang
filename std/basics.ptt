@@ -1,17 +1,16 @@
 // std/basics — re-export bundle.
 //
-// One `use std/basics` line brings the whole "comfortable Potato"
-// surface into scope: String, List, Map, StringMap, plus the
-// built-in `assert` / `yell` resolution paths that depend on them.
-// Programs that want only one of these types still write the
-// targeted import (`use std/list`); std/basics is for the
-// quick-script / kitchen-sink case.
+// One `use std/basics` line brings the comfortable-defaults
+// surface into scope: String, List, and Map. Programs that want
+// only one of these types still write the targeted import
+// (`use std/list`); std/basics is for the quick-script /
+// kitchen-sink case.
 //
-// Once ε1 retires the legacy `list` / `map` / `imap` keyword
-// forms this becomes the *only* way most programs reach the
-// container types.
+// `Map of String to V` covers the string-keyed map use case
+// — binary `eq` on String operands routes through `_str_eq`
+// (byte-equality) inside generic code, so two `"foo"` literals
+// from different rodata addresses still match.
 
 use std/string
 use std/list
 use std/map
-use std/string_map

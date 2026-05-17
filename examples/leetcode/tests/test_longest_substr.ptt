@@ -1,10 +1,10 @@
 // Longest Substring Without Repeating Characters tests
 
 use std/string
-use std/string_map
+use std/map
 
 longest(s String, n int) int {
-  seen is StringMap of int
+  seen is Map of String to int
   start is 0
   max_len is 0
   through (i from 0 to n by 1) {

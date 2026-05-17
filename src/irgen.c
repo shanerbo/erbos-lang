@@ -831,20 +831,19 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
         }
 
         case NODE_MAP_LIT: {
-            // ε4: when val_type_name is set (StringMap template
-            // is in scope), route through the stdlib StringMap of V
-            // constructor + per-pair set:
-            //   tmp is StringMap of <V>
-            //   tmp.set(keys[0], values[0]); ...
-            // Otherwise fall back to the legacy `_map_new` /
-            // `_map_set` C-runtime path.
+            // ε4: when val_type_name is set (Map template is in
+            // scope), route through `Map of String to V` —
+            // _alloc_Map__String__<V> + per-pair _Map__String__<V>_set.
+            // The map literal `["k" to v]` is always String-keyed
+            // (the key syntax requires a string literal); the
+            // monomorph instantiation seeds `Map<String,V>`.
             if (n->map_lit.val_type_name) {
                 char alloc_sym[256];
                 char set_sym[256];
                 snprintf(alloc_sym, sizeof(alloc_sym),
-                    "alloc_StringMap__%s", n->map_lit.val_type_name);
+                    "alloc_Map__String__%s", n->map_lit.val_type_name);
                 snprintf(set_sym, sizeof(set_sym),
-                    "StringMap__%s_set", n->map_lit.val_type_name);
+                    "Map__String__%s_set", n->map_lit.val_type_name);
                 VReg map = new_vreg(c);
                 emit(c, (IRInst){.op = IR_CALL, .dst = map,
                     .str = strdup(alloc_sym),

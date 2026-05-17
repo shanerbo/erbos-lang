@@ -1,14 +1,10 @@
-use std/string_map
+use std/map
 
 spark {
-  m is StringMap of int
+  m is Map of String to int
   m.set("x", 10)
   m.set("y", 20)
   yell(m.get("x"))
   yell(m.get("y"))
-  // Iteration via .keys() is still a legacy-list-only feature
-  // — StringMap doesn't expose .keys() yet. Once ε retires the
-  // legacy map keyword the stdlib types will gain explicit
-  // iteration; for now demonstrate len().
   yell(m.len())
 }

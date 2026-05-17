@@ -1,0 +1,13 @@
+// Struct names must start with an uppercase letter.
+// The checker rejects lowercase-leading names with a clear
+// error message that suggests the capitalized form.
+
+point is {
+  x int
+  y int
+}
+
+spark {
+  p is point()
+  yell(p.x)
+}

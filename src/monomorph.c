@@ -925,7 +925,7 @@ static void normalize_program(Node *program) {
 static void normalize_program(Node *program);
 
 // ε3 / ε4: walk the program AST and, for every list/map literal,
-// add the corresponding `List<elem>` / `StringMap<V>` parametric
+// add the corresponding `List<elem>` / `Map<String,V>` parametric
 // form to `seen` (only when the matching template is available).
 static void seed_literals_in_node(Node *n, StrSet *seen,
                                   int has_list, int has_string_map);
@@ -962,12 +962,18 @@ static void seed_literals_in_node(Node *n, StrSet *seen,
                 seen, has_list, has_string_map);
             seed_literals_in_array(n->map_lit.values, n->map_lit.count,
                 seen, has_list, has_string_map);
-            // ε4: same conditional dance as ε3 for `StringMap`.
+            // ε4: seed `Map<String,V>` for the literal's value
+            // type. Map keys are always String for the literal
+            // syntax (`["k" to v]`); values default to int.
+            // `has_string_map` is the legacy flag name from when
+            // the literal lowered to `StringMap<V>` — kept as the
+            // gate variable but the resulting parametric form is
+            // `Map<String,V>` after the StringMap merge.
             if (has_string_map) {
                 if (!n->map_lit.val_type_name)
                     n->map_lit.val_type_name = xstrdup("int");
                 char buf[256];
-                snprintf(buf, sizeof(buf), "StringMap<%s>",
+                snprintf(buf, sizeof(buf), "Map<String,%s>",
                     n->map_lit.val_type_name);
                 strset_add(seen, buf);
             }
@@ -1168,15 +1174,15 @@ void monomorph_run(Node *program) {
     // and methods. If the template is NOT available, the literal
     // falls back to the legacy header-form lowering in irgen.
     int has_list_template = 0;
-    int has_string_map_template = 0;
+    int has_map_template = 0;
     for (int i = 0; i < struct_template_count; i++) {
         const char *nm = struct_templates[i]->struct_def.name;
         if (!strcmp(nm, "List")) has_list_template = 1;
-        if (!strcmp(nm, "StringMap")) has_string_map_template = 1;
+        if (!strcmp(nm, "Map")) has_map_template = 1;
     }
-    if (has_list_template || has_string_map_template) {
+    if (has_list_template || has_map_template) {
         seed_literals(program, &seen, has_list_template,
-            has_string_map_template);
+            has_map_template);
     }
 
     // 3. For each unprocessed parametric form, find its template, clone,

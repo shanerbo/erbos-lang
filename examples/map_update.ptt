@@ -1,7 +1,7 @@
-use std/string_map
+use std/map
 
 spark {
-  m is StringMap of int
+  m is Map of String to int
   m.set("score", 50)
   yell(m.get("score"))
   m.set("score", 99)

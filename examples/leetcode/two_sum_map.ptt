@@ -4,11 +4,11 @@
 // Output: i*100+j encoding
 
 use std/string
-use std/string_map
+use std/map
 use std/list
 
 solve(nums List of int, size int, target int) int {
-  seen is StringMap of int
+  seen is Map of String to int
   through (i from 0 to size by 1) {
     complement is target - nums[i]
     key is complement.to_string()

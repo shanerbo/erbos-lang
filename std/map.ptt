@@ -2,11 +2,14 @@
 // arrays (keys, vals). Linear-probe scan for lookup; capacity
 // doubles on insert when full.
 //
-// K must be comparable via the `==` operator at the IR level —
-// works for K = int and any pointer-shaped value. For string
-// keys (where two distinct String headers can carry equal byte
-// content), use std/string_map's StringMap of V which dispatches
-// equality through String.equals.
+// K can be int, any pointer-shaped value, or `String`. The
+// binary `eq` operator on String operands is rewritten by the
+// checker to `_str_eq` (byte-by-byte compare) — that rewrite
+// fires inside generic code post-monomorph too, so
+// `Map of String to V` lookups match by content, not by header
+// pointer.
+
+use std/list
 
 Map of K to V is {
   count int
@@ -60,4 +63,15 @@ Map.get(self Map of K to V, k K) V {
     }
   }
   give 0
+}
+
+// keys() — return a fresh List of K holding the keys in
+// insertion order. Allocates; iteration order is stable for
+// repeated calls on the same map.
+Map.keys(self Map of K to V) List of K {
+  out is List of K
+  through (i from 0 to self.count by 1) {
+    out.push(self.keys[i])
+  }
+  give out
 }

@@ -144,11 +144,18 @@ spark {
 ```
 
 Rules:
-- The first parameter is the receiver. Use `ref` to allow mutation; without
-  `ref`, the method cannot modify struct fields (same enforcement as
-  ordinary `ref` parameters).
+- The first parameter is the receiver. By convention it's named
+  `self` (matching Rust / Python / Swift). Use `ref` to allow
+  mutation; without `ref`, the method cannot modify struct fields
+  (same enforcement as ordinary `ref` parameters).
 - The receiver's declared type must match the type the method is attached
   to. `Foo.bar(self Bar) { ... }` is a compile error.
+- Struct and enum names must start with an uppercase letter
+  (PascalCase). The grammar uses the leading-case rule to
+  disambiguate `Foo()` (struct constructor) from `foo()`
+  (function call) at parse time. The checker errors with a
+  suggested capitalized form on any lowercase-leading struct
+  or enum.
 - Methods on enum types work the same way:
   ```
   Result.tag(self Result) int { give 99 }
@@ -156,10 +163,9 @@ Rules:
 - Method dispatch is statically resolved. The compiler emits each method as
   `_<Type>_<name>` (for example `_Counter_bump`), so different types can
   share method names without collision.
-- Built-in collection methods (`push`, `pop`, `set`, `get`, `keys`, `len`)
-  on the literal `list` / `map` / `imap` / `task` types still lower to
-  their built-in symbols. User methods on user types take precedence over
-  any same-named free function.
+- Built-in `task` methods (`fire`, `collapse`) lower to runtime
+  stubs. User methods on user types take precedence over any
+  same-named free function.
 
 ## Generics
 

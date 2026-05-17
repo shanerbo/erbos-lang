@@ -165,7 +165,7 @@ spark {
   yell("---")
 
   // === 14. Typed maps ===
-  scores is StringMap of int
+  scores is Map of String to int
   scores.set("alice", 95)
   scores.set("bob", 87)
   scores.set("charlie", 92)
@@ -206,7 +206,7 @@ spark {
   yell("---")
 
   // === 17. Nested: map + list combo ===
-  registry is StringMap of int
+  registry is Map of String to int
   people is List of Person
   p1 is Person()
   p1.age be 25
@@ -259,7 +259,7 @@ spark {
   yell("---")
 
   // === 22. Growable map stress (50 entries) ===
-  bigmap is StringMap of int
+  bigmap is Map of String to int
   through (i from 0 to 50 by 1) {
     bigmap.set(i.to_string(), i * i)
   }

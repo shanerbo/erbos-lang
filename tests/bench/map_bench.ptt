@@ -1,6 +1,6 @@
-// Microbenchmark for StringMap of int set/get/keys.
+// Microbenchmark for Map of String to int set/get/keys.
 //
-// This is the post-overhaul reference for `StringMap of int`
+// This is the post-overhaul reference for `Map of String to int`
 // (pure-Potato, backed by `array of T`). It supersedes the
 // pre-overhaul baseline that measured the C-emitted `_map_*`
 // helpers; θ4 captures the wall-clock comparison externally.
@@ -16,10 +16,10 @@
 
 use std/string
 use std/list
-use std/string_map
+use std/map
 
 spark {
-  m is StringMap of int
+  m is Map of String to int
 
   // Phase 1: set 512 distinct keys.
   through (i from 0 to 512 by 1) {
