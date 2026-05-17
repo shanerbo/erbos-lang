@@ -645,3 +645,112 @@ pattern" for the full worked example.
 - File-scope `nomut` (compile-time constants only, no mutable
   globals) is a separate proposal that could land cheaply if
   there's demand. Not on the roadmap today.
+
+---
+
+## Import system — `use` resolution + `potato.toml`
+**Date:** 2026-05-17
+**Status:** decided (shipped — commits 38a0b14 / f49abed / db16ce2 / 95604ec / f034bf7)
+**Decision:** Three-tier resolution (sibling, project-root,
+compiler-bundled stdlib). Project root identified by `potato.toml`
+walk-up. Stdlib resolved relative to the compiler binary, not
+cwd. No auto-loaded modules; every `use` is explicit. `as`
+aliasing kept for free-function namespacing.
+
+### What was broken before
+
+Five separate problems in the old resolver:
+
+1. **Stdlib resolution was cwd-anchored.** Running `erbos run
+   /tmp/x.ptt` with `use std/list` failed unless cwd had a
+   sibling `std/`. Made Potato unusable outside its own repo.
+2. **`std/string` was implicitly auto-loaded.** A ~95-line
+   special case in main.c hardcoded the auto-load. Singled out
+   one stdlib module from all the others; violated the stated
+   "no magic" rule.
+3. **`examples/` was a third search root.** Hack to make
+   leetcode tests find shared libraries. Conflated "browsable
+   demo programs" with "shared library code."
+4. **No project-root concept.** Every non-stdlib import had to
+   be a sibling or hit cwd. Real projects (multi-directory,
+   `lib/` + `src/` shape) couldn't be expressed.
+5. **Generic error messages.** `error: cannot find module 'x'`
+   didn't tell the user what to do — typo? broken install?
+   missing project root? Each requires a different fix.
+
+### What ships
+
+Resolver tries three roots, in order:
+
+```
+1. <dir-of-source-file>/<path>.ptt       — sibling
+2. <project-root>/<path>.ptt             — via potato.toml walk-up
+3. <compiler-binary-dir>/<path>.ptt      — bundled stdlib
+```
+
+Three tiers, three honest roles. No special cases for any one
+module.
+
+**`potato.toml`** marks a project root. The file can be empty;
+the format is reserved for future build/dependency metadata.
+Walk-up from the source file finds the first ancestor with the
+marker. Programs that only use stdlib + sibling imports don't
+need a marker.
+
+**Stdlib is bundled with the compiler binary.** Found via
+`_NSGetExecutablePath` on macOS. `use std/list` works regardless
+of cwd or project structure. The Potato repo's own `std/`
+directory IS the bundled stdlib (the binary lives at the same
+level), so dev workflow is unchanged.
+
+**No auto-loaded modules.** Every `use std/string` (or any
+other import) is explicit. The runtime built-ins (`_String_yell`,
+`_String_concat`, etc.) remain — those are compiler intrinsics,
+not stdlib methods. So bare `yell("hi")` still works, but
+`s.len()` requires `use std/string` because it dispatches to
+the user-Potato `String.len` method.
+
+**`as` aliasing kept.** Audit found two real uses
+(`tests/leetcode/test_next_perm_v2.ptt`,
+`tests/leetcode/test_longest_substr.ptt`) — both legitimate:
+two libraries with similar long prefixes get aliased to short
+names (`v2`, `brute`). The keyword stays. `as` only affects
+the free-function namespace; types are global and methods
+dispatch by receiver type, so the alias has no effect on
+either.
+
+### What's deliberately NOT in the import system
+
+| Feature | Status | Why |
+|---|---|---|
+| `..` paths | rejected at parse time | Forward-only by grammar. Sibling-of-parent code goes in a real location, or in `std/`. |
+| Absolute paths (`use /abs/path`) | rejected | Same reason. |
+| Quoted paths (`use "x"`) | rejected | Identifier segments only. |
+| Selective imports (`use std/math.{max}`) | not added | Doesn't pay rent. Bring in the whole module. |
+| Wildcard imports (`use std/math.*`) | rejected | Footgun. Same as Python's `from x import *`. |
+| Third-party packages | not yet | When we have a package manager, deps go in potato.toml. |
+| Cross-project linking | not yet | Same. |
+
+### Conditions under which to revisit
+
+- A real third-party library ecosystem develops. At that point
+  potato.toml gets `[dependencies]` and the resolver learns to
+  consult a vendor / cache directory.
+- Cross-platform install layout differs from "binary + std/
+  side-by-side." On Linux/Windows we may want
+  `<compiler-dir>/../share/potato/std/` or an environment
+  variable override.
+- Selective imports become important enough that wildcard-
+  module-loads cause real friction. Today they don't.
+
+### Tracking
+
+- `compiler/main.c` — `compiler_dir()` and `find_project_root()`
+  helpers; resolver loop unified.
+- `tests/lib/leetcode/` — moved from `examples/leetcode/` since
+  the latter was the legacy fixture root.
+- `potato.toml` at repo root — empty marker so the walk-up rule
+  works for `make test`.
+- 48 .ptt files updated with explicit `use std/string`.
+- Helpful error messages cover the three failure modes (stdlib
+  typo, missing project root, missing file in present project).

@@ -518,21 +518,98 @@ signatures are clearer about what the function depends on.
 
 ```
 use std/math
-use utils/helper as h
+use lib/helper/str_ops
+use lib/helper/parse_helpers as parse
 
 spark {
   yell(math.max(10, 20))
-  h.do_thing()
+  yell(str_ops.upper("hello"))
+  parse.run()
 }
 ```
 
-Standard library:
-- `std/basics` — bundle (re-exports String + List + Map)
+### Resolution rules
+
+A `use <path>` statement is resolved against three roots in order.
+First match wins.
+
+| # | Root | What it's for |
+|---|------|---------------|
+| 1 | `<dir-of-source-file>/<path>.ptt` | Sibling files. Two files in the same directory can `use` each other by basename. |
+| 2 | `<project-root>/<path>.ptt` | Anywhere under your project. Project root is found by walking up from the source file looking for `potato.toml`. |
+| 3 | `<compiler-binary-dir>/<path>.ptt` | Bundled stdlib. `use std/list` always works regardless of cwd or project structure. |
+
+The path is **a sequence of identifier-shaped segments separated
+by `/`**, with `.ptt` stripped. There are no quoted paths
+(`use "foo"` is a parse error), no upward-relative paths
+(`use ../foo` is a parse error), no absolute paths.
+
+### `potato.toml` — the project root marker
+
+Any directory containing a `potato.toml` file is treated as a
+project root. The file can be empty for now; the format is
+reserved for future build/dependency metadata.
+
+```
+my-project/
+  potato.toml          ← marker — empty file is fine
+  lib/
+    helper/
+      str_ops.ptt
+  src/
+    main.ptt
+```
+
+In `src/main.ptt`, `use lib/helper/str_ops` resolves to
+`my-project/lib/helper/str_ops.ptt`. Run `erbos run src/main.ptt`
+from anywhere on the filesystem — the walk-up finds the marker.
+
+Programs that only use stdlib + sibling imports don't need a
+`potato.toml`. As soon as you write `use lib/...` or any other
+non-stdlib path, the marker is required.
+
+### `as` aliasing — for free functions only
+
+`use lib/foo as f` makes `f` the alias prefix for free functions
+defined in `lib/foo.ptt`. So instead of `lib_foo.bar(x)` you write
+`f.bar(x)`.
+
+Aliases only rename the **free-function namespace**. They have no
+effect on:
+- **Types** — types are global; `Counter` is `Counter` regardless
+  of which file defined it. There's no `lib_foo.Counter`.
+- **Methods** — dispatched by receiver type, not by importer.
+  `c.bump()` works the same whether the file imported `lib/foo`
+  or `lib/foo as f`.
+
+If your import path is short and readable already, skip the alias.
+Use `as` when two imported files have similar prefixes
+(`use tests/lib/leetcode/longest_substr_brute as brute`).
+
+### What the language deliberately doesn't have
+
+- **No `..` in paths.** Forward-only, by grammar.
+- **No selective imports** (`use std/math.{max,min}`). Adds
+  complexity without paying rent. Bring in the whole module.
+- **No wildcard imports** (`use std/math.*`). Footgun.
+- **No third-party library system** (no Cargo / go get
+  equivalent yet). When we have one, it'll go in `potato.toml`.
+- **No module-level globals.** See "Larger programs — the App
+  pattern" above.
+
+### Standard library
+
 - `std/string` — `String`, `String.*`, `int.to_string`
 - `std/list` — `List of T`
-- `std/map` — `Map of K to V` (works for K = int, pointer-shaped, or String)
+- `std/map` — `Map of K to V` (K = int, pointer-shaped, or String)
 - `std/math` — `min`, `max`, `abs`, `pow`
 - `std/queue`, `std/stack` — bounded fixed-cap queues / stacks
+- `std/basics` — bundle (re-exports String + List + Map)
+
+`use std/string` is required whenever your program uses `String`
+in any form (literal `"..."`, type name, method call). The
+auto-load that used to make this implicit is gone — every import
+is now explicit.
 
 ## Testing
 

@@ -22,7 +22,9 @@ all shipped.
 2. **No `<T>` template syntax anywhere.** Generics are word-style:
    `Box of T`, `Map of K to V`. Period.
 3. **No `str` ↔ `String` sugar.** `str` is gone. `String` is the
-   stdlib struct, defined in `std/string.ptt`.
+   stdlib struct, defined in `std/string.ptt`. Every program that
+   uses `String` (literal `"..."`, type name, method call) must
+   write `use std/string` explicitly — no auto-load.
 4. **PascalCase for user-defined types** (struct, enum). lowercase
    for primitives (`int`, `bool`, `byte`, `void`). The case
    difference is a deliberate signal — see
@@ -59,6 +61,28 @@ tests/
 docs/              everything below
 editor/vscode/     syntax highlighting extension
 ```
+
+## Import system at a glance
+
+A `use <path>` resolves against three roots in order:
+
+1. `<dir-of-source-file>/<path>.ptt` — sibling
+2. `<project-root>/<path>.ptt` — found by walking up from the
+   source file looking for `potato.toml`
+3. `<compiler-binary-dir>/<path>.ptt` — bundled stdlib
+
+A "Potato project" is any directory containing `potato.toml`.
+The repo root has one. Programs using only stdlib + sibling
+imports don't need a marker.
+
+`as` aliasing only renames the free-function namespace
+(`use foo as f` → `f.bar()`). Types are global, methods dispatch
+by receiver — neither uses the alias. Two real uses in
+`tests/leetcode/`.
+
+No `..` paths, no quoted paths, no absolute paths, no selective
+imports, no auto-loads. Every `use` is explicit; every path is
+forward-only and identifier-shaped.
 
 ## Doc index — read on demand
 
