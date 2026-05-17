@@ -1041,6 +1041,13 @@ static void check_stmt(Checker *c, Node *n) {
             if (n->var_decl.is_move && n->var_decl.value->type == NODE_IDENT) {
                 mark_moved_sym(c, n->var_decl.value->ident.name);
             }
+            // `b is rep a` deep-clones the source. Stash the source's
+            // struct name (when known) into type_name so irgen can
+            // emit `bl _clone_<StructName>`. Without this, irgen has
+            // no way to recover the type of a moved-by-pointer value.
+            if (n->var_decl.is_rep && t.kind == TYPE_STRUCT && t.struct_name) {
+                n->var_decl.type_name = (char *)t.struct_name;
+            }
             // Bind the new variable; carry its `nomut` flag so future
             // assigns can be rejected.
             set_sym_with_flags(c, n->var_decl.name, t, n->var_decl.is_nomut);

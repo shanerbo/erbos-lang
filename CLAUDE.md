@@ -145,5 +145,5 @@ position relative to the subcommand. Default is `-O1`.
 - Integrating the green-thread runtime into compiled `.ptt`
   output (the runtime exists in `compiler/runtime/` but is not
   wired in).
-- Operator overloading, traits, deep clone, `Result`/`Option` as
-  built-in types — all on the roadmap, none in flight.
+- Operator overloading, traits, `Result`/`Option` as built-in
+  types — all on the roadmap, none in flight.

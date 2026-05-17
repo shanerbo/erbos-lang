@@ -631,6 +631,125 @@ int main(int argc, char **argv) {
                 fprintf(ir_out, "    ldp x29, x30, [sp], #32\n");               \
                 fprintf(ir_out, "    ret\n\n");                                 \
             }                                                                   \
+            /* `_clone_<X>(src) -> dst` — deep clone of one struct.             \
+             * Used by `b is rep a`. Allocates a fresh block of the             \
+             * same size and copies each field according to its type:           \
+             *   - primitive (int/bool/byte/anything not a struct or            \
+             *     `array__*`)            : 8-byte field copy                  \
+             *   - struct in this program   : recurse via _clone_<FieldType>   \
+             *     (skipped when src field is null — store null in dst)        \
+             *   - `array__<elem>`          : alloc fresh 16-byte header +     \
+             *     fresh data buffer, memcpy data bytes, store new header     \
+             *     pointer in dst (skipped — store null — when src field is   \
+             *     null)                                                       \
+             *                                                                  \
+             * x0 in: src pointer. x0 out: dst pointer (fresh block).           \
+             * Frame: 48 bytes — x29/x30 + x19/x20 + x21/x22.                   \
+             *   x19 = src, x20 = dst across the body.                          \
+             *   x21/x22 are scratch saved across `bl` calls inside array       \
+             *   field handling. */                                              \
+            fprintf(ir_out, ".globl _clone_%s\n.p2align 2\n_clone_%s:\n",       \
+                    s->struct_def.name, s->struct_def.name);                    \
+            fprintf(ir_out, "    stp x29, x30, [sp, #-48]!\n");                 \
+            fprintf(ir_out, "    stp x19, x20, [sp, #16]\n");                   \
+            fprintf(ir_out, "    stp x21, x22, [sp, #32]\n");                   \
+            fprintf(ir_out, "    mov x29, sp\n");                               \
+            /* x19 := src */                                                    \
+            fprintf(ir_out, "    mov x19, x0\n");                               \
+            /* x20 := alloc(size); zero-fill so any path that doesn't write    \
+             * a field (e.g. recursion skipped on null) leaves a clean 0. */    \
+            fprintf(ir_out, "    mov x0, #%d\n    bl _heap_alloc\n", size);     \
+            fprintf(ir_out, "    mov x20, x0\n");                               \
+            for (int z = 0; z < size; z += 8) {                                 \
+                fprintf(ir_out, "    str xzr, [x20, #%d]\n", z);                \
+            }                                                                   \
+            for (int fi = 0; fi < s->struct_def.field_count; fi++) {            \
+                const char *ft = s->struct_def.field_types[fi];                 \
+                int off = fi * 8;                                               \
+                /* Identify field kind. */                                      \
+                int is_struct_field = 0;                                        \
+                if (ft) for (int sj = 0; sj < program->program.structs.count; sj++) { \
+                    if (sj == si) continue;                                     \
+                    if (!strcmp(program->program.structs.items[sj]->struct_def.name, ft)) { \
+                        is_struct_field = 1;                                    \
+                        break;                                                  \
+                    }                                                           \
+                }                                                               \
+                int is_array_field = ft && !strncmp(ft, "array__", 7);          \
+                int is_byte_array  = ft && !strcmp(ft, "array__byte");          \
+                if (is_struct_field) {                                          \
+                    /* Recurse if non-null; else leave dst field as 0. */       \
+                    fprintf(ir_out, "    ldr x9, [x19, #%d]\n", off);           \
+                    fprintf(ir_out, "    cbz x9, _clone_%s_skip%d\n",           \
+                        s->struct_def.name, fi);                                \
+                    fprintf(ir_out, "    mov x0, x9\n");                        \
+                    fprintf(ir_out, "    bl _clone_%s\n", ft);                  \
+                    fprintf(ir_out, "    str x0, [x20, #%d]\n", off);           \
+                    fprintf(ir_out, "_clone_%s_skip%d:\n",                      \
+                        s->struct_def.name, fi);                                \
+                } else if (is_array_field) {                                    \
+                    /* Inline copy of the array: 16-byte header (cap@0,         \
+                     * data@8) + cap*esz data bytes. Skip on null source.       \
+                     * Layout assumptions match emit_scope_cleanup's array      \
+                     * cleanup path in compiler/irgen.c. */                     \
+                    int esz = is_byte_array ? 1 : 8;                            \
+                    fprintf(ir_out, "    ldr x21, [x19, #%d]\n", off);          \
+                    fprintf(ir_out, "    cbz x21, _clone_%s_skip%d\n",          \
+                        s->struct_def.name, fi);                                \
+                    /* Alloc new 16-byte header. x21 = src array ptr,           \
+                     * stays alive across bl in callee-save x21. */             \
+                    fprintf(ir_out, "    mov x0, #16\n    bl _heap_alloc\n");   \
+                    fprintf(ir_out, "    mov x22, x0\n");                       \
+                    /* cap := src_arr.cap; new_arr.cap := cap. */               \
+                    fprintf(ir_out, "    ldr x9, [x21, #0]\n");                 \
+                    fprintf(ir_out, "    str x9, [x22, #0]\n");                 \
+                    /* Allocate cap*esz bytes for the new data buffer. */       \
+                    if (esz == 1) {                                             \
+                        fprintf(ir_out, "    mov x0, x9\n");                    \
+                    } else {                                                    \
+                        fprintf(ir_out, "    lsl x0, x9, #3\n");                \
+                    }                                                           \
+                    fprintf(ir_out, "    bl _heap_alloc\n");                    \
+                    fprintf(ir_out, "    mov x10, x0\n");                       \
+                    /* Store new data ptr in new header. */                     \
+                    fprintf(ir_out, "    str x10, [x22, #8]\n");                \
+                    /* Memcpy data bytes: src = src_arr.data, dst = new data,   \
+                     * len = cap*esz. */                                         \
+                    fprintf(ir_out, "    ldr x11, [x21, #8]\n");                \
+                    fprintf(ir_out, "    ldr x12, [x21, #0]\n");                \
+                    if (esz == 1) {                                             \
+                        fprintf(ir_out, "    mov x13, x12\n");                  \
+                    } else {                                                    \
+                        fprintf(ir_out, "    lsl x13, x12, #3\n");              \
+                    }                                                           \
+                    fprintf(ir_out, "    cbz x13, _clone_%s_done%d\n",          \
+                        s->struct_def.name, fi);                                \
+                    fprintf(ir_out, "    mov x14, #0\n");                       \
+                    fprintf(ir_out, "_clone_%s_loop%d:\n",                      \
+                        s->struct_def.name, fi);                                \
+                    fprintf(ir_out, "    ldrb w15, [x11, x14]\n");              \
+                    fprintf(ir_out, "    strb w15, [x10, x14]\n");              \
+                    fprintf(ir_out, "    add x14, x14, #1\n");                  \
+                    fprintf(ir_out, "    cmp x14, x13\n");                      \
+                    fprintf(ir_out, "    b.lt _clone_%s_loop%d\n",              \
+                        s->struct_def.name, fi);                                \
+                    fprintf(ir_out, "_clone_%s_done%d:\n",                      \
+                        s->struct_def.name, fi);                                \
+                    /* Store new header ptr in dst field. */                    \
+                    fprintf(ir_out, "    str x22, [x20, #%d]\n", off);          \
+                    fprintf(ir_out, "_clone_%s_skip%d:\n",                      \
+                        s->struct_def.name, fi);                                \
+                } else {                                                        \
+                    /* Primitive (int/bool/byte/etc.). Plain 8-byte copy. */    \
+                    fprintf(ir_out, "    ldr x9, [x19, #%d]\n", off);           \
+                    fprintf(ir_out, "    str x9, [x20, #%d]\n", off);           \
+                }                                                               \
+            }                                                                   \
+            fprintf(ir_out, "    mov x0, x20\n");                               \
+            fprintf(ir_out, "    ldp x21, x22, [sp, #32]\n");                   \
+            fprintf(ir_out, "    ldp x19, x20, [sp, #16]\n");                   \
+            fprintf(ir_out, "    ldp x29, x30, [sp], #48\n");                   \
+            fprintf(ir_out, "    ret\n\n");                                     \
         }                                                                       \
         for (int i = 0; i < ir->func_count; i++) {                              \
             RegAllocResult alloc = regalloc_run(&ir->funcs[i]);                 \

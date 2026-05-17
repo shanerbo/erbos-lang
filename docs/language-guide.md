@@ -435,7 +435,7 @@ match r {
 // Move
 b is now a                    // a is dead
 
-// Clone (shallow)
+// Deep clone — fresh independent copy
 c is rep b
 
 // Ref params (mutable borrow)

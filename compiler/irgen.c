@@ -952,14 +952,41 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
     if (!n) return;
     switch (n->type) {
         case NODE_VAR_DECL: {
-            VReg v = gen_expr(c, n->var_decl.value);
+            // `is rep` deep-clones the source rather than just rebinding.
+            // The checker stashed the source's struct name in
+            // var_decl.type_name when the source had a known struct
+            // type; we route through `_clone_<StructName>` to allocate
+            // a fresh block and recursively copy fields. The result is
+            // the new pointer; the source is unchanged and still owns
+            // its original block.
+            //
+            // Without type_name (source type wasn't a struct, or
+            // checker couldn't determine it) we fall through to the
+            // legacy shallow rebind. That path is the latent UAF bug;
+            // the checker always sets type_name for struct-shaped
+            // sources today, so the legacy path should be unreachable.
+            VReg v;
+            if (n->var_decl.is_rep && n->var_decl.type_name) {
+                VReg src = gen_expr(c, n->var_decl.value);
+                v = new_vreg(c);
+                char clone_sym[256];
+                snprintf(clone_sym, sizeof(clone_sym), "clone_%s",
+                    n->var_decl.type_name);
+                VReg *args = malloc(sizeof(VReg));
+                args[0] = src;
+                emit(c, (IRInst){.op = IR_CALL, .dst = v,
+                                 .str = strdup(clone_sym),
+                                 .args = args, .arg_count = 1});
+            } else {
+                v = gen_expr(c, n->var_decl.value);
+            }
             set_local(c, n->var_decl.name, v);
             // RAII: mirror src/codegen.c's heap-marking. `is now`
             // transfers ownership: the source is dead, the target is
-            // heap. `is rep` is shallow-clone and the new local also
-            // owns a heap copy. Plain decls of struct constructors and
-            // collection allocators are heap. Sizes follow the same
-            // conventions the direct codegen uses.
+            // heap. `is rep` returns a fresh independent heap block
+            // that the new local owns. Plain decls of struct
+            // constructors and collection allocators are heap. Sizes
+            // follow the same conventions the direct codegen uses.
             if (n->var_decl.is_move) {
                 if (n->var_decl.value->type == NODE_IDENT)
                     mark_moved_local(c, n->var_decl.value->ident.name);

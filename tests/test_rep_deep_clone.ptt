@@ -1,0 +1,101 @@
+// Regression tests for `is rep` deep clone (task #113).
+//
+// Before deep clone landed, `b is rep a` was a *shallow* pointer
+// copy: both names ended up holding the same heap pointer, both
+// were registered as heap-owning, and the scope-end cleanup
+// double-freed. The fix emits a per-struct `_clone_<X>` symbol
+// that allocates a fresh block, copies primitive fields, and
+// recurses into struct-typed and array-of-T fields.
+
+use std/string
+use std/list
+
+Point is { x int, y int }
+
+Inner is { v int }
+Outer is { inner Inner }
+
+test "rep deep-clones primitive struct: independent storage" {
+  a is Point(x is 100, y is 200)
+  b is rep a
+  // Mutate each — neither must touch the other.
+  a.x be 1
+  b.x be 2
+  assert(a.x eq 1)
+  assert(b.x eq 2)
+  assert(a.y eq 200)
+  assert(b.y eq 200)
+}
+
+test "rep deep-clones nested struct fields" {
+  a is Outer()
+  a.inner.v be 42
+  b is rep a
+  b.inner.v be 999
+  // a.inner and b.inner must be independent Inner blocks.
+  assert(a.inner.v eq 42)
+  assert(b.inner.v eq 999)
+}
+
+test "rep deep-clones a List, including its array storage" {
+  a is List of int
+  a.push(10)
+  a.push(20)
+  a.push(30)
+  b is rep a
+  // Mutate b — a's storage must not move.
+  b.push(99)
+  assert(a.len() eq 3)
+  assert(b.len() eq 4)
+  assert(a.get(0) eq 10)
+  assert(a.get(1) eq 20)
+  assert(a.get(2) eq 30)
+  assert(b.get(3) eq 99)
+}
+
+test "rep multiple times produces independent copies" {
+  // Reproduces the original "b is ref a; c is ref a; d is ref a"
+  // question — each clone is fully independent.
+  a is Point(x is 1, y is 1)
+  b is rep a
+  c is rep a
+  d is rep a
+  a.x be 100
+  b.x be 200
+  c.x be 300
+  d.x be 400
+  assert(a.x eq 100)
+  assert(b.x eq 200)
+  assert(c.x eq 300)
+  assert(d.x eq 400)
+  // y was never touched on any clone — all stay at 1.
+  assert(a.y eq 1)
+  assert(b.y eq 1)
+  assert(c.y eq 1)
+  assert(d.y eq 1)
+}
+
+test "rep'd value survives source destruction (no UAF)" {
+  // Pre-fix: cloning a in inner scope freed a's block when b died,
+  // and a subsequent allocation reclaimed the same block — so a's
+  // fields read garbage. Post-fix: a still owns its original block,
+  // independent of whatever b's clone did.
+  a is Point(x is 100, y is 200)
+  {
+    b is rep a
+    b.x be 999
+  }
+  // b's block freed; a's block is still alive and unchanged.
+  c is Point(x is 7, y is 8)
+  assert(a.x eq 100)
+  assert(a.y eq 200)
+  assert(c.x eq 7)
+  assert(c.y eq 8)
+}
+
+test "rep on String produces an equal but independent String" {
+  a is "hello"
+  b is rep a
+  assert(b.len() eq 5)
+  assert(a.equals(b))
+}

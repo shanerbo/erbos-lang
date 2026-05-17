@@ -1,0 +1,44 @@
+// IR regression for `is rep` deep clone (task #113).
+//
+// Runs at -O0/-O1/-O2 to ensure the optimizer's stackify and
+// SRA passes don't accidentally elide the `_clone_<X>` calls or
+// rebind the source to the destination.
+
+use std/string
+use std/list
+
+Point is { x int, y int }
+Inner is { v int }
+Outer is { inner Inner }
+
+test "rep + mutate-source after — source unchanged at every -O level" {
+  a is Point(x is 100, y is 200)
+  b is rep a
+  b.x be 999
+  // Source must read its original values, not b's.
+  assert(a.x eq 100)
+  assert(a.y eq 200)
+  assert(b.x eq 999)
+}
+
+test "rep'd List survives source push at every -O level" {
+  a is List of int
+  a.push(1)
+  a.push(2)
+  b is rep a
+  a.push(3)
+  // a now has 3 elements, b still has 2.
+  assert(a.len() eq 3)
+  assert(b.len() eq 2)
+  assert(a.get(2) eq 3)
+}
+
+test "rep recurses into struct fields at every -O level" {
+  a is Outer()
+  a.inner.v be 42
+  b is rep a
+  a.inner.v be 100
+  // a.inner and b.inner must be different blocks.
+  assert(a.inner.v eq 100)
+  assert(b.inner.v eq 42)
+}

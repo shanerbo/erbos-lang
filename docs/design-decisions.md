@@ -201,7 +201,7 @@ confusing.
 
 ## `is rep` shallow-copy + double-free (latent UAF)
 **Date:** 2026-05-16
-**Status:** known bug — fix on the roadmap (deep clone for `rep`)
+**Status:** ✅ FIXED 2026-05-17 — see "is rep deep clone" entry below.
 
 ### The bug
 
@@ -754,3 +754,88 @@ either.
 - 48 .ptt files updated with explicit `use std/string`.
 - Helpful error messages cover the three failure modes (stdlib
   typo, missing project root, missing file in present project).
+
+---
+
+## `is rep` deep clone (UAF fixed)
+**Date:** 2026-05-17
+**Status:** decided (shipped)
+**Decision:** `b is rep a` allocates a fresh heap block of the
+same size as `a`, recursively deep-clones every struct-typed
+field, and inline-copies every `array__*` field's header + data
+buffer. The two locals own independent blocks; mutating one
+doesn't affect the other.
+
+### What ships
+
+For every struct registered in the program (user-defined or
+post-monomorphisation stdlib like `List__int`,
+`Map__String__int`, `String`), the compiler emits a
+`_clone_<X>(src) -> dst` symbol alongside the existing
+`_alloc_<X>`. The body:
+
+1. Allocates `size = field_count * 8` bytes; zero-fills.
+2. Per field, three cases:
+
+   | Field type | Action |
+   |---|---|
+   | Primitive (`int`, `bool`, `byte`, anything not in struct registry and not `array__*`) | 8-byte copy `[dst+off] := [src+off]` |
+   | Struct in this program (user struct or monomorphised stdlib) | Recurse: `bl _clone_<FieldType>` after null-guard |
+   | `array__<elem>` | Inline copy: alloc fresh 16-byte header, alloc fresh `cap*esz` data buffer, byte-loop memcpy data, store new header pointer in dst (skipped on null source) |
+
+   `esz` is 1 for `array__byte`, 8 for everything else (the only
+   two element sizes the language supports today).
+
+3. Returns the new block in x0.
+
+Frame: 48 bytes preserving x29/x30 + x19 (src) + x20 (dst) +
+x21/x22 (scratch saved across `_heap_alloc` calls inside the
+array-field path).
+
+The checker stashes the source's struct name into
+`var_decl.type_name` when the source has a known struct type;
+irgen reads it and emits `IR_CALL clone_<TypeName>` instead of
+the old shallow rebind.
+
+### Why this implementation
+
+We considered three options earlier:
+
+| Option | What | Why rejected |
+|---|---|---|
+| A. Mark source as moved | After `b is rep a`, `a` is dead. | Defeats the point of `rep` — that's already `is now`. |
+| B. Don't free the rep destination | `b` is a non-owning alias; only `a` frees. | Tactical band-aid. Falls apart if `a is now b` later (no owner). |
+| C. Real deep-clone | Per-struct `_clone_<X>` recursing through fields. | **Picked.** The README already advertised `rep` as deep clone. The bug was the implementation lying. |
+
+### Tradeoffs accepted
+
+- **Code-size cost.** Every struct now emits both `_alloc_<X>`
+  AND `_clone_<X>`. For programs that never use `is rep`, this
+  is dead code in the binary. Acceptable — the alternative is
+  emitting clone lazily, which complicates symbol resolution.
+  Linker dead-strip eventually picks it up.
+- **No deep-clone for raw `array of T` locals.** Only structs
+  get a clone symbol. A bare `array of int` local cloned via
+  `is rep` would fall into the legacy shallow path. We don't
+  have a use case for that today (`array of T` is always wrapped
+  in `List`/`Map`/`String` in user code). If a use case appears,
+  we can either generate a `_clone_array__<T>` symbol or refuse
+  the clone with a checker error.
+- **Cyclic struct graphs would infinite-loop.** Today no struct
+  in the codebase contains a field of its own type, so cycles
+  can't be constructed. If/when we permit recursive types, deep
+  clone needs cycle detection. Not a problem today.
+
+### Tracking
+
+- `compiler/main.c` — `_clone_<X>` emission alongside `_alloc_<X>`.
+- `compiler/checker.c` — stashes source struct name into
+  `var_decl.type_name` for `is_rep` decls.
+- `compiler/irgen.c` — `is_rep` + `type_name` → emit
+  `IR_CALL clone_<TypeName>` instead of shallow rebind.
+- `tests/test_rep_deep_clone.ptt` — 6 framework tests
+  (primitive struct, nested struct, list with array storage,
+  4-way independence, source-survives-rep'd-destruction, String).
+- `tests/ir/rep_deep_clone.ptt` — 3 IR regression tests at
+  -O0/-O1/-O2.
+- ASan + UBSan clean on every test.

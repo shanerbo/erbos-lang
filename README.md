@@ -216,14 +216,11 @@ Five-pass IR optimizer (inlining, SRA, escape analysis, BCE, LICM).
 Bounds-checked array/list/map access.
 
 **In flight.**
-- `is rep` is currently shallow copy; deep clone is the v0.2 fix
-  (a latent UAF until then; see design-decisions log).
 - Green-thread runtime exists in `compiler/runtime/` but isn't
   wired into compiled output.
 
-**Roadmap.** Deep clone for `rep`. `Result of T to E`. Caret +
-source-context error messages. File I/O. Default
-`_<Type>_yell` for debugging.
+**Roadmap.** `Result of T to E`. Caret + source-context error
+messages. File I/O. Default `_<Type>_yell` for debugging.
 
 **Explicitly NOT on the roadmap** (see design-decisions log):
 operator overloading, traits/interfaces, async, macros,
