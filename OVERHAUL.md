@@ -202,12 +202,23 @@ on completion. Don't redo a checked task.
       pass; full `make test` green; `grep 'mem_\|heap_\|write_\|
       panic_oob\|ptr_of\|as_string' std/string.ptt` returns nothing
       (`String.yell` waits for γ2 to land via the user-method path).
-- [ ] **β5** Drop `mem_load` / `mem_store` / `mem_load_byte` /
-      `mem_store_byte` / `ptr_of` / `as_string` from
-      `src/checker.c` and `src/irgen.c`. Compiler errors on user
-      code calling them.
-      Acceptance: `git grep mem_load src/checker.c` returns
-      nothing in dispatch positions; tests green.
+- [x] **β5** Drop `mem_load` / `mem_store` / `mem_load_byte` /
+      `mem_store_byte` / `ptr_of` / `as_string` / `heap_alloc` /
+      `heap_free` / `write_bytes` from `src/checker.c` and
+      `src/irgen.c`. User code calling them errors with "unknown
+      function 'X'" through the normal undefined-function path.
+      The compiler still emits `bl _heap_alloc` / `bl _heap_free`
+      / `bl _write_bytes` directly when lowering `array of T`
+      construction, RAII drop, and `String.yell` (γ2).
+      Removed regression tests (`tests/ir/raw_mem.ptt`,
+      `tests/ir/byte_mem.ptt`, `tests/ir/string_header.ptt`) — they
+      tested user-callable primitives that no longer exist. The
+      same machinery is exercised end-to-end by `array_basic.ptt`
+      and `array_byte.ptt` through the language-level `array of T`
+      surface.
+      Acceptance: `git grep -E 'mem_load|mem_store|ptr_of|as_string'
+      src/checker.c src/irgen.c` returns nothing in dispatch
+      positions; `make test` green.
 
 ### Phase γ — Tier-2 compiler-known names + ban kernel layer
 

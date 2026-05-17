@@ -1,8 +1,8 @@
-// Regression test: P6.1 std/list — generic List of T with
+// Regression test: std/list — generic List of T with
 // push/pop/get/set/len.
 //
-// These methods are pure Potato (heap_alloc + mem_load/mem_store
-// per element). Capacity grows at 2× on push when full.
+// These methods are pure Potato, backed by `array of T`. Capacity
+// grows at 2× on push when full.
 
 use std/string
 use std/list

@@ -367,22 +367,12 @@ static Type check_expr(Checker *c, Node *n) {
             if (!strcmp(name, "char_at")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_STR); }
             if (!strcmp(name, "yell_str")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_VOID); }
             if (!strcmp(name, "panic_oob")) { return make_type(TYPE_VOID); }
-            // Pointer-shape coercions (P6.3 prep): the language has
-            // no cast operator, so to store a `String` (or any
-            // pointer-shaped struct) into an int-typed slot, we
-            // expose `ptr_of(x)` as an identity primitive that
-            // re-types its argument as int. Same shape in reverse
-            // for the store-then-load round-trip via mem_load:
-            // `as_string(p)` re-types an int as a String. Both
-            // generate zero IR — they're type-system-only.
-            if (!strcmp(name, "ptr_of")) {
-                if (n->call.arg_count > 0) check_expr(c, n->call.args[0]);
-                return make_type(TYPE_INT);
-            }
-            if (!strcmp(name, "as_string")) {
-                if (n->call.arg_count > 0) check_expr(c, n->call.args[0]);
-                return make_struct("String");
-            }
+            // β5: ptr_of / as_string were type-system-only escape
+            // hatches needed when std/map stored String values in
+            // int slots. With β2/β3's `array of T` rewrite the
+            // hatches are no longer needed — typed arrays carry
+            // String directly — and the overhaul bans kernel-layer
+            // names from being callable in any .ptt file. Removed.
             if (!strcmp(name, "list_set")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_VOID); }
             if (!strcmp(name, "imap_set")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_VOID); }
             if (!strcmp(name, "imap_get")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_INT); }
@@ -401,55 +391,18 @@ static Type check_expr(Checker *c, Node *n) {
             // see types_equal in this file.
             if (!strcmp(name, "str_concat")) return make_type(TYPE_STR);
             if (!strcmp(name, "int_to_str")) return make_type(TYPE_STR);
-            // Raw memory primitives (P6.0) — callable from Potato so
-            // pure-Potato std/list, std/map, etc. can implement
-            // array-backed collections without going through the
-            // hardcoded `list of T` / `map of K to V` keywords.
-            //
-            //   heap_alloc(size int) int      — returns pointer (held in int)
-            //   heap_free(p int, size int)    — void
-            //   mem_load(p int, off int) int  — *(int*)(p + off)
-            //   mem_store(p int, off int, v int) — *(int*)(p + off) = v
-            //
-            // Pointers are represented as int64_t (a Potato `int`); the
-            // language has no separate pointer type. Use sparingly — these
-            // are unsafe and exist exclusively for stdlib internals.
-            if (!strcmp(name, "heap_alloc")) {
-                for (int j = 0; j < n->call.arg_count; j++) check_expr(c, n->call.args[j]);
-                return make_type(TYPE_INT);
-            }
-            if (!strcmp(name, "heap_free")) {
-                for (int j = 0; j < n->call.arg_count; j++) check_expr(c, n->call.args[j]);
-                return make_type(TYPE_VOID);
-            }
-            if (!strcmp(name, "mem_load")) {
-                for (int j = 0; j < n->call.arg_count; j++) check_expr(c, n->call.args[j]);
-                return make_type(TYPE_INT);
-            }
-            if (!strcmp(name, "mem_store")) {
-                for (int j = 0; j < n->call.arg_count; j++) check_expr(c, n->call.args[j]);
-                return make_type(TYPE_VOID);
-            }
-            // Byte-level mem primitives (P3.3a) — for std/string and any
-            // other byte-array work in pure Potato. mem_load reads/writes
-            // 8 bytes at a time which is wrong for UTF-8 byte access;
-            // these read/write a single byte (zero-extended to int on
-            // load, low byte stored on write).
-            if (!strcmp(name, "mem_load_byte")) {
-                for (int j = 0; j < n->call.arg_count; j++) check_expr(c, n->call.args[j]);
-                return make_type(TYPE_INT);
-            }
-            if (!strcmp(name, "mem_store_byte")) {
-                for (int j = 0; j < n->call.arg_count; j++) check_expr(c, n->call.args[j]);
-                return make_type(TYPE_VOID);
-            }
-            // Direct byte-buffer write to stdout (P3.3a) — what
-            // String.yell will be implemented in terms of. Bypasses
-            // _yell_str's null-terminator scan; takes (ptr, len).
-            if (!strcmp(name, "write_bytes")) {
-                for (int j = 0; j < n->call.arg_count; j++) check_expr(c, n->call.args[j]);
-                return make_type(TYPE_VOID);
-            }
+            // β5: raw memory primitives (heap_alloc, heap_free,
+            // mem_load, mem_store, mem_load_byte, mem_store_byte,
+            // write_bytes) are NOT user-callable. They were the
+            // bootstrap kernel surface that pure-Potato std/list /
+            // std/map / std/string used before the `array of T`
+            // primitive existed. With α + β1..β4 they're never
+            // referenced from any .ptt file. The compiler emits
+            // `bl _heap_alloc` / `bl _heap_free` / `bl _write_bytes`
+            // / `bl _panic_oob` directly when lowering language
+            // constructs (array allocation, RAII drop, bounds-check
+            // failure). User code that calls these names hits the
+            // generic "unknown function" error below.
             // User function
             FuncInfo *fi = find_func(c, name);
             if (!fi) {

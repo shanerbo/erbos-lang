@@ -50,7 +50,9 @@ Map.set(self ref Map of K to V, k K, v V) {
   self.count be self.count + 1
 }
 
-// Lookup. Returns the value for `k`, or 0 if absent.
+// Lookup. Returns the value for `k`, or 0 if absent. Linear scan;
+// O(n). A future change can swap the storage layout (open-address
+// hash, btree, etc.) without breaking callers.
 Map.get(self Map of K to V, k K) V {
   through (i from 0 to self.count by 1) {
     self.keys[i] eq k ?{

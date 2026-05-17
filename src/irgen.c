@@ -451,83 +451,14 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
             // (the checker tagged resolved_type on the arg, but it isn't
             // re-read here), so dispatch via a single _len helper which
             // does the same heuristic as direct codegen at runtime.
-            // Raw memory primitives (P6.0) — lower directly to IR
-            // instead of going through a `bl` to a non-existent symbol.
-            //   mem_load(p, off)       → IR_LOAD %dst, %p, off (if off const)
-            //                          → ADD/LOAD pair otherwise
-            //   mem_store(p, off, v)   → IR_STORE %p, %v, off (if const)
-            else if (!strcmp(call_name, "mem_load") && n->call.arg_count == 2) {
-                VReg ptr = gen_expr(c, n->call.args[0]);
-                Node *off_node = n->call.args[1];
-                VReg dst = new_vreg(c);
-                if (off_node->type == NODE_INT_LIT) {
-                    emit(c, (IRInst){.op = IR_LOAD, .dst = dst, .a = ptr, .imm = off_node->int_lit.value});
-                } else {
-                    VReg off_v = gen_expr(c, off_node);
-                    VReg addr = new_vreg(c);
-                    emit(c, (IRInst){.op = IR_ADD, .dst = addr, .a = ptr, .b = off_v});
-                    emit(c, (IRInst){.op = IR_LOAD, .dst = dst, .a = addr, .imm = 0});
-                }
-                return dst;
-            }
-            else if (!strcmp(call_name, "mem_store") && n->call.arg_count == 3) {
-                VReg ptr = gen_expr(c, n->call.args[0]);
-                Node *off_node = n->call.args[1];
-                VReg val = gen_expr(c, n->call.args[2]);
-                if (off_node->type == NODE_INT_LIT) {
-                    emit(c, (IRInst){.op = IR_STORE, .a = ptr, .b = val, .imm = off_node->int_lit.value});
-                } else {
-                    VReg off_v = gen_expr(c, off_node);
-                    VReg addr = new_vreg(c);
-                    emit(c, (IRInst){.op = IR_ADD, .dst = addr, .a = ptr, .b = off_v});
-                    emit(c, (IRInst){.op = IR_STORE, .a = addr, .b = val, .imm = 0});
-                }
-                VReg dummy = new_vreg(c);
-                emit(c, (IRInst){.op = IR_CONST, .dst = dummy, .imm = 0});
-                return dummy;
-            }
-            // Byte-level mem primitives (P3.3a). Mirror mem_load /
-            // mem_store but emit ldrb / strb which read/write a single
-            // byte. The dst of mem_load_byte is zero-extended into a
-            // 64-bit register; mem_store_byte writes only the low 8
-            // bits of the value.
-            else if (!strcmp(call_name, "mem_load_byte") && n->call.arg_count == 2) {
-                VReg ptr = gen_expr(c, n->call.args[0]);
-                Node *off_node = n->call.args[1];
-                VReg dst = new_vreg(c);
-                if (off_node->type == NODE_INT_LIT) {
-                    emit(c, (IRInst){.op = IR_LOAD_BYTE, .dst = dst, .a = ptr, .imm = off_node->int_lit.value});
-                } else {
-                    VReg off_v = gen_expr(c, off_node);
-                    VReg addr = new_vreg(c);
-                    emit(c, (IRInst){.op = IR_ADD, .dst = addr, .a = ptr, .b = off_v});
-                    emit(c, (IRInst){.op = IR_LOAD_BYTE, .dst = dst, .a = addr, .imm = 0});
-                }
-                return dst;
-            }
-            // Type-only coercions (P6.3 prep). Both produce zero IR
-            // — the argument's vreg flows through unchanged, only
-            // the checker's view of its type is different.
-            else if ((!strcmp(call_name, "ptr_of") || !strcmp(call_name, "as_string"))
-                     && n->call.arg_count == 1) {
-                return gen_expr(c, n->call.args[0]);
-            }
-            else if (!strcmp(call_name, "mem_store_byte") && n->call.arg_count == 3) {
-                VReg ptr = gen_expr(c, n->call.args[0]);
-                Node *off_node = n->call.args[1];
-                VReg val = gen_expr(c, n->call.args[2]);
-                if (off_node->type == NODE_INT_LIT) {
-                    emit(c, (IRInst){.op = IR_STORE_BYTE, .a = ptr, .b = val, .imm = off_node->int_lit.value});
-                } else {
-                    VReg off_v = gen_expr(c, off_node);
-                    VReg addr = new_vreg(c);
-                    emit(c, (IRInst){.op = IR_ADD, .dst = addr, .a = ptr, .b = off_v});
-                    emit(c, (IRInst){.op = IR_STORE_BYTE, .a = addr, .b = val, .imm = 0});
-                }
-                VReg dummy = new_vreg(c);
-                emit(c, (IRInst){.op = IR_CONST, .dst = dummy, .imm = 0});
-                return dummy;
-            }
+            // β5: raw memory primitives (mem_load / mem_store /
+            // mem_load_byte / mem_store_byte / ptr_of / as_string)
+            // are no longer user-callable. The checker rejects them
+            // before we get here. The compiler still emits the
+            // underlying IR opcodes (IR_LOAD / IR_STORE /
+            // IR_LOAD_BYTE / IR_STORE_BYTE) directly when lowering
+            // language constructs — typed array indexing, struct
+            // field access, etc.
             else if (!strcmp(call_name, "len")) {
                 if (n->call.arg_count == 1) {
                     Node *arg = n->call.args[0];

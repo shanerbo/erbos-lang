@@ -1,11 +1,11 @@
-// Regression test: P6.2 std/map — generic Map of K to V with
+// Regression test: std/map — generic Map of K to V with
 // set/get/len for int-comparable keys (K is `int` or any
 // pointer-shaped value).
 //
-// Pure Potato: heap_alloc + mem_load/mem_store. Linear-probe
-// scan for lookup; capacity doubles on insert when full.
-// String-keyed maps are deferred — they need K.equals dispatch
-// which doesn't exist yet.
+// Pure Potato, backed by parallel `array of K` and `array of V`.
+// Linear-probe scan for lookup; capacity doubles on insert when
+// full. String-keyed maps live in std/string_map's StringMap
+// (which uses String.equals).
 
 use std/map
 
