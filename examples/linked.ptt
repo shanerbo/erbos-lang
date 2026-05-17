@@ -2,19 +2,19 @@ use std/string
 
 Node is {
   value int
-  next int
+  next Node
 }
 
 spark {
   n1 is Node()
   n1.value be 10
-  n1.next be 0
+  // n1.next stays auto-init'd (the chain ends here).
 
   n2 is Node()
   n2.value be 20
-  n2.next be n1
+  n2.next be now n1
 
   yell(n2.value)
-  yell(n1.value)
+  yell(n2.next.value)
   yell("linked list works")
 }

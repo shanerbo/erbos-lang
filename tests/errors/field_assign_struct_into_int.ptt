@@ -1,0 +1,14 @@
+// Codex audit P0-4: assigning a struct value into an int field
+// is no longer permitted (the legacy "store struct pointer as
+// int" idiom is gone). Use a self-referential struct field
+// (`next Node`) for linked-list patterns.
+
+use std/string
+
+Node is { value int, next int }
+
+spark {
+  n1 is Node()
+  n2 is Node()
+  n2.next be n1
+}

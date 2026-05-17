@@ -1,0 +1,8 @@
+// Codex audit P0-5: explicit annotations must constrain the
+// initializer's type. `x is int "hi"` should be rejected.
+
+use std/string
+
+spark {
+  x is int "hi"
+}

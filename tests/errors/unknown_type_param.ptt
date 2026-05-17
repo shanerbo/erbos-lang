@@ -1,0 +1,10 @@
+// Codex audit P0-6: unknown type names in parameter position
+// must be a hard checker error, not silently compile as int.
+
+use std/string
+
+f(p Foo) int {
+  give 0
+}
+
+spark { yell(0) }

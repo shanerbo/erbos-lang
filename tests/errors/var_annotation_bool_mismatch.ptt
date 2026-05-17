@@ -1,0 +1,7 @@
+// Codex audit P0-5: bool annotation with int value rejected.
+
+use std/string
+
+spark {
+  flag is bool 42
+}

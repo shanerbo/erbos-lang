@@ -273,7 +273,16 @@ static Type parse_type_str(Checker *c, const char *t) {
         }
         return r;
     }
-    return make_type(TYPE_INT);
+    // Codex audit P0-6: unknown type names must be a hard error.
+    // Pre-fix this fell through to TYPE_INT, so misspelled type
+    // names silently compiled and behaved as int. After
+    // monomorphisation every type-parameter T should already be
+    // substituted to a concrete name, so any name we don't
+    // recognize at this point is genuinely unknown.
+    fprintf(stderr,
+        "error: unknown type name '%s' (no struct, enum, or "
+        "primitive matches)\n", t);
+    exit(1);
 }
 
 static const char *type_name(Type t) {
@@ -1150,6 +1159,42 @@ static void check_stmt(Checker *c, Node *n) {
                 t = make_map_of(parse_type_str(c, n->var_decl.key_type_name),
                                 parse_type_str(c, n->var_decl.val_type_name));
             }
+            // Codex audit P0-5: explicit type annotations must
+            // constrain the initializer's type. The form
+            // `x is int 10` parses with type_name="int" + value 10;
+            // `x is int "hi"` should be rejected. The annotation is
+            // a constraint, not a hint.
+            //
+            // Skip for is_now / is_rep / is_nomut because for those
+            // forms the parser may set type_name from the parse path
+            // (see var-decl auto-construct in parser.c) — that's a
+            // different role (carry the source's struct name through
+            // to irgen). And skip when the annotation is itself a
+            // generic-stdlib name we already overwrote above.
+            if (n->var_decl.type_name && !n->var_decl.is_move && !n->var_decl.is_rep) {
+                // Parametric type names like "List__int" / "Map__String__int"
+                // were already handled above via elem/key/val_type_name.
+                // Skip those to avoid a redundant comparison that
+                // would error on equivalent-but-non-identical Type
+                // shapes.
+                int is_parametric_handled =
+                    (n->var_decl.elem_type_name &&
+                     !strncmp(n->var_decl.type_name, "List", 4)) ||
+                    (n->var_decl.key_type_name &&
+                     !strncmp(n->var_decl.type_name, "Map", 3));
+                if (!is_parametric_handled) {
+                    Type ann = parse_type_str(c, n->var_decl.type_name);
+                    if (t.kind != TYPE_UNKNOWN && ann.kind != TYPE_UNKNOWN &&
+                        !types_equal(ann, t)) {
+                        fprintf(stderr,
+                            "error:%d: variable '%s' annotated as '%s' "
+                            "but initializer has type '%s'\n",
+                            n->line, n->var_decl.name,
+                            type_name(ann), type_name(t));
+                        exit(1);
+                    }
+                }
+            }
             // `b is now a` transfers ownership: mark `a` as moved so any
             // subsequent `a` reference produces a use-after-move error.
             if (n->var_decl.is_move && n->var_decl.value->type == NODE_IDENT) {
@@ -1251,6 +1296,37 @@ static void check_stmt(Checker *c, Node *n) {
                     fprintf(stderr, "error:%d: struct '%s' has no field '%s'\n",
                         n->line, obj_t.struct_name, n->field_assign.field);
                     exit(1);
+                }
+                // Codex audit P0-4: field reassignment must check
+                // RHS type against the declared field type. Pre-fix
+                // `p.x be "hi"` (int field) compiled silently and
+                // miscompiled the int slot to a String pointer.
+                //
+                // For self-referential structs (`Node.next Node`),
+                // declare the field with the proper struct type,
+                // not `int`. The "store struct pointers as int"
+                // idiom is no longer permitted.
+                StructInfo *si = find_struct(c, obj_t.struct_name);
+                if (si) {
+                    for (int fi = 0; fi < si->field_count; fi++) {
+                        if (!strcmp(si->field_names[fi], n->field_assign.field)) {
+                            Type expected = parse_type_str(c, si->field_types[fi]);
+                            if (val_t.kind != TYPE_UNKNOWN &&
+                                expected.kind != TYPE_UNKNOWN &&
+                                !types_equal(expected, val_t)) {
+                                fprintf(stderr,
+                                    "error:%d: field '%s.%s' has type "
+                                    "'%s' but assigned value has type "
+                                    "'%s'\n",
+                                    n->line, obj_t.struct_name,
+                                    n->field_assign.field,
+                                    type_name(expected),
+                                    type_name(val_t));
+                                exit(1);
+                            }
+                            break;
+                        }
+                    }
                 }
             }
             // Enforce ref: if object is a non-ref param, block mutation.

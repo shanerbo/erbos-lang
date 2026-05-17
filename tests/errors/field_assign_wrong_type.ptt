@@ -1,0 +1,11 @@
+// Codex audit P0-4: field reassignment must check value type
+// against declared field type.
+
+use std/string
+
+Point is { x int, y int }
+
+spark {
+  p is Point()
+  p.x be "hi"
+}

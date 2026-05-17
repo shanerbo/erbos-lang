@@ -1,0 +1,13 @@
+// Codex audit P0-6: unknown type names in field position must
+// be a hard checker error when the field is read or assigned.
+
+use std/string
+
+Box is {
+  inner Foo
+}
+
+spark {
+  b is Box()
+  yell(b.inner)
+}
