@@ -1298,3 +1298,90 @@ Lesson: when adding a recursive operation over struct
 fields, classify each field by *runtime ownership* not just
 *static type*. Heap and rodata both have type `String`;
 they need different treatment.
+
+## 2026-05-17 — Import resolution (P1-11) and duplicate-alias rejection (P1-12)
+
+### P1-11 — transitive imports resolve from the *importing* file's directory
+
+The `use <path>` resolver had three roots:
+1. sibling to the source file
+2. project root (walks up to `potato.toml`)
+3. compiler binary dir (stdlib)
+
+But "sibling" was implemented as `<dir-of-input>/<path>.ptt`,
+where `input` is the top-level file the user invoked the
+compiler on. So when `main.ptt` imported `lib/a.ptt` and
+`a.ptt` did `use helper`, the resolver looked for
+`<main's dir>/helper.ptt` instead of `<lib>/helper.ptt`. Real
+projects with internal lib modules failed.
+
+Fix: track the originating directory per `use` in a parallel
+array (`use_origin_dirs`) maintained only at codegen time.
+Top-level `use`s record the input file's dir. When the
+import loop absorbs an imported file's `use`s into the parent
+program, each absorbed entry records the *imported file's*
+directory. Resolution then uses `use_origin_dirs[ui]` as the
+sibling base instead of the global `dir`.
+
+Why a side-array rather than adding `use_origin_dirs` to the
+Program AST: this is purely a codegen-time concern. The AST
+already exposes paths and aliases for the checker; origin
+dirs only matter for file lookup. Keeping the side-table in
+main.c localises the change.
+
+Project root and compiler binary dir tiers are unchanged;
+they were always absolute and never relative to the wrong
+file.
+
+### P1-12 — same module imported under two aliases
+
+Pre-fix, dedupe was path-based:
+
+    use lib as a
+    use lib as b
+
+would load `lib.ptt` once (under whichever alias's `use`
+ran first), and the other alias bound to nothing. Calls
+through the second alias surfaced as either a checker error
+("module 'b' has no function 'greet'") with the source
+location wrong, or — on older revisions before P0-1 — as a
+linker error for an undefined `_b_greet`.
+
+Two reasonable resolutions:
+- (a) reject the duplicate path at use-resolution time.
+- (b) load the module twice and prefix free functions with
+  every alias.
+
+(a) is simpler and forces the user to pick a single name for
+the module. (b) implies that two aliases imply two
+dispatch tables; for free functions that's just symbol
+duplication, but for any future module-level state it's
+genuinely two modules. The audit's expected direction
+explicitly preferred "an early checker error unless multiple
+aliases are a deliberate language feature." They're not, so
+we reject.
+
+Implementation: a quadratic scan over `use_paths` /
+`use_aliases` before the load loop. If two entries share a
+path but differ in alias, emit:
+
+    error: module 'lib' imported twice under different
+           aliases ('a' and 'b')
+      note: each module loads once; only the first alias is
+            bound to its free functions.
+      help: pick a single alias for `lib`
+
+Same path + same alias remains a no-op (path-based dedupe
+catches it).
+
+### Tests
+
+- `tests/test_transitive_imports.ptt` (positive) — top-level
+  imports `lib/transitive/inner`; `inner.ptt` does
+  `use helper` (sibling to itself). Pre-P1-11 this failed
+  to compile.
+- `tests/lib/transitive/inner.ptt`, `helper.ptt` — the
+  fixture pair under `tests/lib/`.
+- `tests/errors/dup_alias.ptt` — `use std/math as a` and
+  `use std/math as b`; expected to fail compilation with
+  the new diagnostic.

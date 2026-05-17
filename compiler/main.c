@@ -346,6 +346,62 @@ int main(int argc, char **argv) {
     int loaded_cap = 8;
     int loaded_count = 0;
     char **loaded_paths = malloc(loaded_cap * sizeof(char *));
+
+    // Codex P1-11: each `use` resolves against the directory of the
+    // file that *contains* it, not the top-level input file. Track
+    // the originating dir parallel to use_paths so transitive
+    // imports use their importer's dir as the sibling base. Without
+    // this, `lib/a.ptt` doing `use helper` looks for
+    // `<input-dir>/helper.ptt` instead of `<lib>/helper.ptt`.
+    //
+    // The Program AST today carries use_paths + use_aliases but no
+    // origin info; we maintain origin_dirs only in main.c — it's a
+    // codegen-time concern and adding a third Node field would
+    // require sweeping the AST.
+    char **use_origin_dirs = malloc(program->program.use_count * sizeof(char *));
+    char top_dir[512] = {0};
+    {
+        strncpy(top_dir, input, sizeof(top_dir) - 1);
+        char *ts = strrchr(top_dir, '/');
+        if (ts) *(ts + 1) = '\0';
+        else top_dir[0] = '\0';
+    }
+    for (int ui = 0; ui < program->program.use_count; ui++) {
+        use_origin_dirs[ui] = strdup(top_dir);
+    }
+
+    // Codex P1-12: catch the same module imported under two
+    // aliases up front. Pre-fix: dedupe was path-only, so
+    //   use lib as a
+    //   use lib as b
+    // loaded the file once (under whichever alias's `use` ran
+    // first), then `b.greet()` failed at the checker (or worse,
+    // at the linker) because functions were emitted with `_a_`
+    // prefixes only. Reject with a clear error pointing at the
+    // duplicate.
+    for (int i = 0; i < program->program.use_count; i++) {
+        for (int j = i + 1; j < program->program.use_count; j++) {
+            if (!strcmp(program->program.use_paths[i],
+                        program->program.use_paths[j]) &&
+                strcmp(program->program.use_aliases[i],
+                       program->program.use_aliases[j]) != 0) {
+                fprintf(stderr,
+                    "error: module '%s' imported twice under different "
+                    "aliases ('%s' and '%s')\n",
+                    program->program.use_paths[i],
+                    program->program.use_aliases[i],
+                    program->program.use_aliases[j]);
+                fprintf(stderr,
+                    "  note: each module loads once; only the first alias "
+                    "is bound to its free functions.\n");
+                fprintf(stderr,
+                    "  help: pick a single alias for `%s`\n",
+                    program->program.use_paths[i]);
+                return 1;
+            }
+        }
+    }
+
     for (int ui = 0; ui < program->program.use_count; ui++) {
         // Skip if already loaded (implicit-link or earlier explicit `use`).
         const char *upath = program->program.use_paths[ui];
@@ -361,15 +417,18 @@ int main(int argc, char **argv) {
         loaded_paths[loaded_count++] = strdup(upath);
 
         char import_path[512];
-        // Try relative to input file directory
-        char dir[256] = {0};
-        strncpy(dir, input, sizeof(dir) - 1);
-        char *last_slash = strrchr(dir, '/');
-        if (last_slash) *(last_slash + 1) = '\0';
-        else dir[0] = '\0';
+        // Sibling base is the originating file's directory, recorded
+        // when the `use` was queued. For top-level `use`s in the
+        // input file this equals strrchr(input)/; for transitive
+        // imports it's the directory of the file that contained the
+        // nested `use`.
+        const char *dir = use_origin_dirs[ui];
 
         // Resolve `use <path>` against three roots in order:
-        //   1. <dir-of-input>/<path>.ptt          — sibling to importer
+        //   1. <importer's dir>/<path>.ptt        — sibling to the
+        //                                            *importing* file,
+        //                                            not the top-level
+        //                                            input. Codex P1-11.
         //   2. <project-root>/<path>.ptt          — anywhere under
         //                                            the user's project
         //                                            tree, found by
@@ -530,6 +589,18 @@ int main(int argc, char **argv) {
         // pull `String` into the parent program's struct table — no
         // explicit re-import needed at the top of the user's file.
         // Deduplicate: skip a path that's already present.
+        //
+        // Codex P1-11: each absorbed use records the imported file's
+        // directory as its sibling base, so the next loop iteration
+        // resolves nested `use`s relative to where they were
+        // declared rather than the top-level input dir.
+        char imp_dir[512] = {0};
+        strncpy(imp_dir, import_path, sizeof(imp_dir) - 1);
+        {
+            char *ts = strrchr(imp_dir, '/');
+            if (ts) *(ts + 1) = '\0';
+            else imp_dir[0] = '\0';
+        }
         for (int rui = 0; rui < imp_prog->program.use_count; rui++) {
             const char *rpath = imp_prog->program.use_paths[rui];
             int already = 0;
@@ -542,11 +613,18 @@ int main(int argc, char **argv) {
                 program->program.use_count * sizeof(char *));
             program->program.use_aliases = realloc(program->program.use_aliases,
                 program->program.use_count * sizeof(char *));
+            use_origin_dirs = realloc(use_origin_dirs,
+                program->program.use_count * sizeof(char *));
             program->program.use_paths[idx2] = strdup(rpath);
             program->program.use_aliases[idx2] = strdup(imp_prog->program.use_aliases[rui]);
+            use_origin_dirs[idx2] = strdup(imp_dir);
         }
         free(imp_src);
     }
+    for (int ui = 0; ui < program->program.use_count; ui++) {
+        free(use_origin_dirs[ui]);
+    }
+    free(use_origin_dirs);
 
     // Monomorphize generic structs and methods. After this pass the
     // AST is fully concrete; the checker, optimizer, and codegen need

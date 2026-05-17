@@ -1,0 +1,15 @@
+// P1-11 regression: transitive `use` declarations resolve
+// against the directory of the file that *contains* them, not
+// the top-level input file.
+//
+// This file imports lib/transitive/inner, and inner.ptt does
+// `use helper`. helper.ptt sits next to inner.ptt; pre-fix
+// the resolver searched for helper.ptt next to *this* file,
+// failed, and aborted compilation.
+
+use lib/transitive/inner as inner
+
+test "transitive sibling import resolves against importer's dir" {
+  assert(inner.bump(7) eq 8)
+  assert(inner.bump(0) eq 1)
+}

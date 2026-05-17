@@ -1,0 +1,8 @@
+// `use helper` is a sibling-to-this-file import. Pre-P1-11 the
+// resolver looked for `helper.ptt` next to the *top-level input
+// file* and failed. Post-fix it resolves against this file's dir.
+use helper as h
+
+bump(x int) int {
+  give h.add_one(x)
+}

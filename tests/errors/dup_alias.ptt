@@ -1,0 +1,17 @@
+// Codex audit P1-12: importing the same module under two
+// different aliases should be a clean compile-time error,
+// not a downstream linker / checker mystery.
+//
+// Pre-fix the second `use` was silently dropped (path-based
+// dedupe) and `b.max(...)` failed at the checker complaining
+// the alias didn't exist; older revisions linked with an
+// undefined `_b_max` symbol. Either way the diagnostic
+// pointed at the call site, not the duplicate import.
+
+use std/math as a
+use std/math as b
+
+spark {
+  yell(a.max(1, 2))
+  yell(b.max(3, 4))
+}

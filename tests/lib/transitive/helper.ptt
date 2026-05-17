@@ -1,0 +1,4 @@
+// helper sits next to inner.ptt; inner.ptt imports it as a sibling.
+add_one(x int) int {
+  give x + 1
+}
