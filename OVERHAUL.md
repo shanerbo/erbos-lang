@@ -174,14 +174,34 @@ on completion. Don't redo a checked task.
       Acceptance: `tests/test_map_methods.ptt` passes; clean grep.
 - [ ] **β3** Rewrite `std/string_map.ptt` against `array of T`.
       Acceptance: clean grep; tests pass.
-- [ ] **β4** Rewrite `std/string.ptt` against `array of byte`.
+- [x] **β4** Rewrite `std/string.ptt` against `array of byte`.
       `String.data` becomes `array of byte`. `String.equals`,
-      `String.byte_at`, `String.char_at` use typed indexing.
-      `String.concat` allocates via `array of byte with cap N`.
-      `String.yell` waits on γ2.
-      Acceptance: `tests/test_string_methods.ptt` passes; `grep
-      'mem_\|heap_\|write_' std/string.ptt` returns only the
-      `String.yell` line which γ fixes next.
+      `String.byte_at` use typed indexing on the byte array.
+      `String.concat` allocates via `array of byte with cap N` and
+      builds a fresh `String` header. `int.to_string` uses the same
+      pattern. `String.yell` waits on γ2.
+      Codegen contract:
+        - `iremit_finalize_data` emits each literal as three blocks:
+          `_strbytes<i>` (rodata), `_strarr<i>` (16-byte array-of-byte
+          header pointing at `_strbytes<i>`), `_str<i>` (32-byte
+          String header whose data field points at `_strarr<i>`).
+        - C runtime helpers (`_yell_str`, `_str_eq`, `_str_concat`,
+          `_int_to_str`, `_char_at`) two-step deref through the
+          array-of-byte header to reach the raw byte buffer.
+        - Panic / pass / assert / test_name data sections all use
+          the matching two-tier layout (`_oob_arr`/`_oob_str`,
+          `_pass_prefix_arr`/`_pass_prefix`,
+          `_test_name_<i>_arr`/`_test_name_<i>`).
+      Stack-discipline fix folded into the same task: `_int_to_str`'s
+      epilogue freed its 32-byte scratch buffer BEFORE popping x21,
+      reading garbage into x21 in the caller. Reordered so the pop
+      precedes the scratch free; otherwise the loop variable held in
+      x21 across `bl _int_to_str` got corrupted (which surfaced as
+      `tests/test_map.ptt`'s "map growable" producing only one entry).
+      Acceptance: `tests/test_map.ptt` and `tests/test_string_methods.ptt`
+      pass; full `make test` green; `grep 'mem_\|heap_\|write_\|
+      panic_oob\|ptr_of\|as_string' std/string.ptt` returns nothing
+      (`String.yell` waits for γ2 to land via the user-method path).
 - [ ] **β5** Drop `mem_load` / `mem_store` / `mem_load_byte` /
       `mem_store_byte` / `ptr_of` / `as_string` from
       `src/checker.c` and `src/irgen.c`. Compiler errors on user

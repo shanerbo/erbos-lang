@@ -1,32 +1,40 @@
-// Regression test: P3.4 string literals lower to a `String` struct
-// value (a 4-quad header at offsets 0/8/16/24 — cap, count, data,
-// owned).
+// Regression test: string literals lower to a `String` struct value.
 //
-// We don't yet declare `String` in stdlib (that lands in P6.0b),
-// so the test reaches into the header via raw mem_load — confirming
-// codegen lays out the bytes the way the design doc spells out.
+// β4 layout (the layout std/string.ptt declares and codegen emits):
+//
+//   String header (32 bytes):
+//     [0]  cap
+//     [8]  count
+//     [16] data ptr -> array of byte header (16 bytes)
+//     [24] owned
+//
+//   array of byte header (16 bytes, pointed at by String.data):
+//     [0]  cap
+//     [8]  data ptr -> raw rodata bytes
+//
+// We reach into both headers via raw mem_load to confirm the codegen
+// lays out the bytes the way std/string.ptt + iremit's literal emit
+// agree on. Once user code uses `s.byte_at(i)` exclusively this test
+// becomes redundant; until then it's the single regression that
+// guards the literal layout contract.
 //
 // Expected output:
-//   5            // count of "hello"
-//   1            // first data byte: 104 ('h')... wait, we test count, not byte
-//   104          // bytes[0] = 'h'
-//   101          // bytes[1] = 'e'
-//   108          // bytes[2] = 'l'
-//   0            // owned = 0 (literal is borrowed rodata)
+//   5            // String.count
+//   1            // sentinel
+//   104          // arr.data[0] = 'h'
+//   101          // arr.data[1] = 'e'
+//   108          // arr.data[2] = 'l'
+//   0            // String.owned (borrowed rodata literal)
 
 spark {
   s is "hello"
-  // mem_load reads 8 bytes; we use the offset-byte primitive to
-  // avoid endianness questions on the data ptr's byte content.
-  count is mem_load(s, 8)        // count field
-  yell(count)                    // 5
-  // count != 0 sentinel just to keep the second yell stable
+  count is mem_load(s, 8)               // String.count
+  yell(count)                           // 5
   yell(1)
-  // Data ptr is at offset 16; read first 3 bytes.
-  data is mem_load(s, 16)
-  yell(mem_load_byte(data, 0))   // 104 = 'h'
-  yell(mem_load_byte(data, 1))   // 101 = 'e'
-  yell(mem_load_byte(data, 2))   // 108 = 'l'
-  // Owned flag at offset 24.
-  yell(mem_load(s, 24))          // 0
+  arr is mem_load(s, 16)                // array of byte header ptr
+  data is mem_load(arr, 8)              // raw bytes ptr
+  yell(mem_load_byte(data, 0))          // 104 = 'h'
+  yell(mem_load_byte(data, 1))          // 101 = 'e'
+  yell(mem_load_byte(data, 2))          // 108 = 'l'
+  yell(mem_load(s, 24))                 // 0
 }

@@ -43,15 +43,18 @@ static void emit_yell_int(FILE *out) {
 }
 
 static void emit_yell_str(FILE *out) {
-    // P3.4: x0 is now a `String` header pointer (4 quads:
-    // cap, count, data, owned). We pull `count` from offset 8 and
-    // `data` from offset 16, then write that many bytes plus a
-    // newline. No null-terminator scan needed.
+    // β4: x0 is a String header (4 quads: cap, count, data,
+    // owned) where data is an `array of byte` ptr. We pull
+    // count from offset 8 and the byte buffer via TWO loads:
+    // first the array of byte header from String.data
+    // ([x0,#16]), then the byte ptr from that array's data
+    // field ([arr,#8]). Then write count bytes + newline.
     fprintf(out, "// built-in: _yell_str (x0 = String header ptr)\n");
     fprintf(out, ".globl _yell_str\n.p2align 2\n_yell_str:\n");
     fprintf(out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
     fprintf(out, "    ldr x2, [x0, #8]\n");      // count -> x2
-    fprintf(out, "    ldr x1, [x0, #16]\n");     // data ptr -> x1
+    fprintf(out, "    ldr x1, [x0, #16]\n");     // array-of-byte hdr -> x1
+    fprintf(out, "    ldr x1, [x1, #8]\n");      // byte ptr -> x1
     fprintf(out, "    mov x0, #1\n");            // fd=stdout
     fprintf(out, "    mov x16, #4\n    svc #0x80\n");
     // Trailing newline.
@@ -138,21 +141,6 @@ static void emit_heap_alloc(FILE *out) {
     fprintf(out, "_ha_found:\n");
     fprintf(out, "    ldr x14, [x11]\n");
     fprintf(out, "    str x14, [x12]\n");
-    // Zero-fill the recycled block (size = x9, in bytes). The bump
-    // path returns mmap pages which are already zero; the free-list
-    // path returns blocks whose first 16 bytes were overwritten by
-    // _heap_free with [next, size] metadata. User code (and the
-    // stdlib that builds on this) relies on freshly-allocated
-    // memory being zero — without it, a struct field defaulting
-    // to 0 (e.g. List.data) holds whatever was there.
-    fprintf(out, "    mov x13, #0\n");
-    fprintf(out, "_ha_zero:\n");
-    fprintf(out, "    cmp x13, x9\n");
-    fprintf(out, "    b.ge _ha_zero_done\n");
-    fprintf(out, "    str xzr, [x11, x13]\n");
-    fprintf(out, "    add x13, x13, #8\n");
-    fprintf(out, "    b _ha_zero\n");
-    fprintf(out, "_ha_zero_done:\n");
     fprintf(out, "    mov x0, x11\n");
     fprintf(out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n");
     fprintf(out, "_ha_bump:\n");
@@ -184,16 +172,19 @@ static void emit_heap_alloc(FILE *out) {
 }
 
 static void emit_str_eq(FILE *out) {
-    // P3.4: x0, x1 are now `String` header pointers. Compare counts
-    // first (fast unequal short-circuit), then walk count bytes.
+    // β4: x0, x1 are String header ptrs. data field is an
+    // `array of byte` (16-byte header), so two-step load to
+    // get the byte ptr. Then walk count bytes.
     fprintf(out, "// built-in: _str_eq(x0=String, x1=String) -> bool int\n");
     fprintf(out, ".globl _str_eq\n.p2align 2\n_str_eq:\n");
     fprintf(out, "    ldr x4, [x0, #8]\n");      // count_a
     fprintf(out, "    ldr x5, [x1, #8]\n");      // count_b
     fprintf(out, "    cmp x4, x5\n");
     fprintf(out, "    b.ne _se_no\n");
-    fprintf(out, "    ldr x0, [x0, #16]\n");     // data_a
-    fprintf(out, "    ldr x1, [x1, #16]\n");     // data_b
+    fprintf(out, "    ldr x0, [x0, #16]\n");     // arr_a hdr
+    fprintf(out, "    ldr x0, [x0, #8]\n");      // bytes_a
+    fprintf(out, "    ldr x1, [x1, #16]\n");     // arr_b hdr
+    fprintf(out, "    ldr x1, [x1, #8]\n");      // bytes_b
     fprintf(out, "    mov x6, #0\n");            // i = 0
     fprintf(out, "_se_loop:\n");
     fprintf(out, "    cmp x6, x4\n");
@@ -209,18 +200,17 @@ static void emit_str_eq(FILE *out) {
 }
 
 static void emit_str_concat(FILE *out) {
-    // P3.4: inputs are `String` headers (each: cap, count, data,
-    // owned at offsets 0/8/16/24). Output is a freshly allocated
-    // `String` header whose data points at heap-allocated bytes
-    // holding s1.bytes ++ s2.bytes (owned=1). The bytes are also
-    // null-terminated for compatibility with anything still doing
-    // pointer-based scans (panic strings, etc.) but the count field
-    // is what matters going forward.
+    // β4: inputs are String headers; data field is `array of byte`
+    // (16-byte header). Output is a freshly allocated String
+    // (32 bytes) whose data is a freshly allocated array-of-byte
+    // header (16 bytes) pointing at freshly allocated bytes
+    // holding s1.bytes ++ s2.bytes.
     //
     // x19 = s1 header, x20 = s2 header,
     // x21 = count_a, x22 = count_b,
-    // x23 = data_a,  x24 = data_b,
-    // x25 = result data ptr, x26 = result header ptr.
+    // x23 = bytes_a,  x24 = bytes_b,
+    // x25 = result bytes ptr, x26 = result String header,
+    // x27 = result array-of-byte header.
     fprintf(out, "// built-in: _str_concat(x0=String, x1=String) -> new String\n");
     fprintf(out, ".globl _str_concat\n.p2align 2\n_str_concat:\n");
     fprintf(out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
@@ -228,15 +218,15 @@ static void emit_str_concat(FILE *out) {
     fprintf(out, "    stp x21, x22, [sp, #-16]!\n");
     fprintf(out, "    stp x23, x24, [sp, #-16]!\n");
     fprintf(out, "    stp x25, x26, [sp, #-16]!\n");
+    fprintf(out, "    str x27, [sp, #-16]!\n");
     fprintf(out, "    mov x19, x0\n    mov x20, x1\n");
     fprintf(out, "    ldr x21, [x19, #8]\n");      // count_a
     fprintf(out, "    ldr x22, [x20, #8]\n");      // count_b
-    fprintf(out, "    ldr x23, [x19, #16]\n");     // data_a
-    fprintf(out, "    ldr x24, [x20, #16]\n");     // data_b
-    // Allocate count_a + count_b + 1 bytes for the joined data
-    // (the +1 is for a trailing NUL — keeps the bytes printable
-    // through legacy null-terminator-scanning code paths if any
-    // remain).
+    fprintf(out, "    ldr x23, [x19, #16]\n");     // arr_a hdr
+    fprintf(out, "    ldr x23, [x23, #8]\n");      // bytes_a
+    fprintf(out, "    ldr x24, [x20, #16]\n");     // arr_b hdr
+    fprintf(out, "    ldr x24, [x24, #8]\n");      // bytes_b
+    // Allocate count_a + count_b + 1 bytes for the joined data.
     fprintf(out, "    add x0, x21, x22\n    add x0, x0, #1\n    bl _heap_alloc\n");
     fprintf(out, "    mov x25, x0\n");
     // Copy s1 bytes.
@@ -245,18 +235,24 @@ static void emit_str_concat(FILE *out) {
     // Copy s2 bytes after s1.
     fprintf(out, "_sc_c2s:\n    mov x5, #0\n");
     fprintf(out, "_sc_c2:\n    cmp x5, x22\n    b.ge _sc_end\n    ldrb w6, [x24, x5]\n    add x7, x21, x5\n    strb w6, [x25, x7]\n    add x5, x5, #1\n    b _sc_c2\n");
-    // NUL-terminate.
     fprintf(out, "_sc_end:\n    add x7, x21, x22\n    strb wzr, [x25, x7]\n");
-    // Allocate the String header (32 bytes) and populate.
+    // Allocate array-of-byte header (16 bytes) for the result data.
+    fprintf(out, "    mov x0, #16\n    bl _heap_alloc\n");
+    fprintf(out, "    mov x27, x0\n");
+    fprintf(out, "    add x0, x21, x22\n");        // total
+    fprintf(out, "    str x0, [x27, #0]\n");       // arr.cap = total
+    fprintf(out, "    str x25, [x27, #8]\n");      // arr.data = bytes
+    // Allocate String header (32 bytes).
     fprintf(out, "    mov x0, #32\n    bl _heap_alloc\n");
     fprintf(out, "    mov x26, x0\n");
-    fprintf(out, "    add x0, x21, x22\n");        // total = count_a + count_b
-    fprintf(out, "    str x0, [x26, #0]\n");       // cap = total
-    fprintf(out, "    str x0, [x26, #8]\n");       // count = total
-    fprintf(out, "    str x25, [x26, #16]\n");     // data
+    fprintf(out, "    add x0, x21, x22\n");
+    fprintf(out, "    str x0, [x26, #0]\n");       // String.cap
+    fprintf(out, "    str x0, [x26, #8]\n");       // String.count
+    fprintf(out, "    str x27, [x26, #16]\n");     // String.data = arr hdr
     fprintf(out, "    mov x0, #1\n");
-    fprintf(out, "    str x0, [x26, #24]\n");      // owned = 1
+    fprintf(out, "    str x0, [x26, #24]\n");      // String.owned = 1
     fprintf(out, "    mov x0, x26\n");
+    fprintf(out, "    ldr x27, [sp], #16\n");
     fprintf(out, "    ldp x25, x26, [sp], #16\n");
     fprintf(out, "    ldp x23, x24, [sp], #16\n");
     fprintf(out, "    ldp x21, x22, [sp], #16\n");
@@ -309,15 +305,29 @@ static void emit_int_to_str(FILE *out) {
     // Copy scratch -> heap.
     fprintf(out, "    mov x4, #0\n");
     fprintf(out, "_its_cp:\n    ldrb w5, [x19, x4]\n    strb w5, [x25, x4]\n    add x4, x4, #1\n    cmp x4, x20\n    b.le _its_cp\n");
-    // Allocate the String header (32 bytes).
+    // β4: wrap heap bytes in an array-of-byte header (16 bytes),
+    // then build the String header (32 bytes) referencing it.
+    // x21 = result array-of-byte hdr.
+    fprintf(out, "    str x21, [sp, #-16]!\n");
+    fprintf(out, "    mov x0, #16\n    bl _heap_alloc\n");
+    fprintf(out, "    mov x21, x0\n");
+    fprintf(out, "    str x20, [x21, #0]\n");      // arr.cap = digit_count
+    fprintf(out, "    str x25, [x21, #8]\n");      // arr.data = bytes
     fprintf(out, "    mov x0, #32\n    bl _heap_alloc\n");
     fprintf(out, "    mov x26, x0\n");
-    fprintf(out, "    str x20, [x26, #0]\n");      // cap = count
-    fprintf(out, "    str x20, [x26, #8]\n");      // count
-    fprintf(out, "    str x25, [x26, #16]\n");     // data
+    fprintf(out, "    str x20, [x26, #0]\n");      // String.cap
+    fprintf(out, "    str x20, [x26, #8]\n");      // String.count
+    fprintf(out, "    str x21, [x26, #16]\n");     // String.data = arr hdr
     fprintf(out, "    mov x0, #1\n");
-    fprintf(out, "    str x0, [x26, #24]\n");      // owned = 1
+    fprintf(out, "    str x0, [x26, #24]\n");      // String.owned = 1
     fprintf(out, "    mov x0, x26\n");
+    // Unwind in reverse-push order: pop x21 first (pushed last), then
+    // free the 32-byte scratch buffer, then pop x25/x26 / x19/x20 /
+    // x29/x30. The previous order ran `add sp, sp, #32` BEFORE popping
+    // x21, which read garbage from the scratch buffer into x21 and
+    // returned with x21 trashed in the caller — corrupting any loop
+    // variable held in x21 across `bl _int_to_str`.
+    fprintf(out, "    ldr x21, [sp], #16\n");
     fprintf(out, "    add sp, sp, #32\n");
     fprintf(out, "    ldp x25, x26, [sp], #16\n");
     fprintf(out, "    ldp x19, x20, [sp], #16\n");
@@ -325,39 +335,46 @@ static void emit_int_to_str(FILE *out) {
 }
 
 static void emit_str_builtins(FILE *out) {
-    // P3.4: _str_len now reads count from the String header at
-    // offset 8. No more byte-walking.
+    // β4: _str_len reads count from the String header at offset 8.
     fprintf(out, "// built-in: _str_len(x0=String) -> int\n");
     fprintf(out, ".globl _str_len\n.p2align 2\n_str_len:\n");
     fprintf(out, "    ldr x0, [x0, #8]\n");
     fprintf(out, "    ret\n\n");
 
     // _char_at(x0=String header, x1=index) -> new 1-char String.
-    // Allocates a 1-byte buffer + a 32-byte String header (owned=1).
-    // x19 = saved data ptr, x20 = saved index, x25 = result data,
-    // x26 = result header.
+    // β4: source data field is array of byte (16-byte hdr); load
+    // bytes ptr via two-step. Result: allocate bytes (2), array
+    // of byte hdr (16), and String hdr (32).
     fprintf(out, "// built-in: _char_at(x0=String, x1=int) -> String\n");
     fprintf(out, ".globl _char_at\n.p2align 2\n_char_at:\n");
     fprintf(out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
     fprintf(out, "    stp x19, x20, [sp, #-16]!\n");
     fprintf(out, "    stp x25, x26, [sp, #-16]!\n");
-    fprintf(out, "    ldr x19, [x0, #16]\n");      // src data ptr
+    fprintf(out, "    str x27, [sp, #-16]!\n");
+    fprintf(out, "    ldr x19, [x0, #16]\n");      // arr hdr
+    fprintf(out, "    ldr x19, [x19, #8]\n");      // src bytes ptr
     fprintf(out, "    mov x20, x1\n");             // index
-    // Allocate 2 bytes (char + NUL).
     fprintf(out, "    mov x0, #2\n    bl _heap_alloc\n");
     fprintf(out, "    mov x25, x0\n");
     fprintf(out, "    ldrb w2, [x19, x20]\n");
     fprintf(out, "    strb w2, [x25, #0]\n");
     fprintf(out, "    strb wzr, [x25, #1]\n");
-    // Allocate the String header.
+    // array-of-byte header for result.
+    fprintf(out, "    mov x0, #16\n    bl _heap_alloc\n");
+    fprintf(out, "    mov x27, x0\n");
+    fprintf(out, "    mov x4, #1\n");
+    fprintf(out, "    str x4, [x27, #0]\n");       // arr.cap
+    fprintf(out, "    str x25, [x27, #8]\n");      // arr.data
+    // String header.
     fprintf(out, "    mov x0, #32\n    bl _heap_alloc\n");
     fprintf(out, "    mov x26, x0\n");
-    fprintf(out, "    mov x0, #1\n");
-    fprintf(out, "    str x0, [x26, #0]\n");       // cap = 1
-    fprintf(out, "    str x0, [x26, #8]\n");       // count = 1
-    fprintf(out, "    str x25, [x26, #16]\n");     // data
-    fprintf(out, "    str x0, [x26, #24]\n");      // owned = 1
+    fprintf(out, "    mov x4, #1\n");
+    fprintf(out, "    str x4, [x26, #0]\n");
+    fprintf(out, "    str x4, [x26, #8]\n");
+    fprintf(out, "    str x27, [x26, #16]\n");     // data = arr hdr
+    fprintf(out, "    str x4, [x26, #24]\n");      // owned = 1
     fprintf(out, "    mov x0, x26\n");
+    fprintf(out, "    ldr x27, [sp], #16\n");
     fprintf(out, "    ldp x25, x26, [sp], #16\n");
     fprintf(out, "    ldp x19, x20, [sp], #16\n");
     fprintf(out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
@@ -707,23 +724,30 @@ void runtime_emit_builtins(FILE *out) {
     fprintf(out, "    bl _yell_str\n");
     fprintf(out, "    mov x16, #1\n    mov x0, #1\n    svc #0x80\n\n");
 
-    // Data: panic messages (bytes + adjacent String headers), test
-    // runner prefix (also a String header), heap-allocator state.
-    // Each header is { cap, count, data, owned=0 } — borrowed because
-    // the bytes live in our own data section, never to be freed.
+    // β4: panic / pass / assert messages need both an
+    // array-of-byte header (cap, data) and a String header
+    // (cap, count, data=arr_hdr, owned=0). Each lives in __DATA.
     fprintf(out, ".section __DATA,__data\n");
     fprintf(out, "_oob_msg: .asciz \"panic: index out of bounds\"\n");
-    fprintf(out, ".p2align 3\n_oob_str:\n");
-    fprintf(out, "    .quad 26\n    .quad 26\n    .quad _oob_msg\n    .quad 0\n");
+    fprintf(out, ".p2align 3\n_oob_arr:\n");
+    fprintf(out, "    .quad 26\n    .quad _oob_msg\n");
+    fprintf(out, "_oob_str:\n");
+    fprintf(out, "    .quad 26\n    .quad 26\n    .quad _oob_arr\n    .quad 0\n");
     fprintf(out, "_cap_msg: .asciz \"panic: capacity overflow\"\n");
-    fprintf(out, ".p2align 3\n_cap_str:\n");
-    fprintf(out, "    .quad 24\n    .quad 24\n    .quad _cap_msg\n    .quad 0\n");
+    fprintf(out, ".p2align 3\n_cap_arr:\n");
+    fprintf(out, "    .quad 24\n    .quad _cap_msg\n");
+    fprintf(out, "_cap_str:\n");
+    fprintf(out, "    .quad 24\n    .quad 24\n    .quad _cap_arr\n    .quad 0\n");
     fprintf(out, "_assert_msg: .asciz \" assertion failed\"\n");
-    fprintf(out, ".p2align 3\n_assert_str:\n");
-    fprintf(out, "    .quad 17\n    .quad 17\n    .quad _assert_msg\n    .quad 0\n");
+    fprintf(out, ".p2align 3\n_assert_arr:\n");
+    fprintf(out, "    .quad 17\n    .quad _assert_msg\n");
+    fprintf(out, "_assert_str:\n");
+    fprintf(out, "    .quad 17\n    .quad 17\n    .quad _assert_arr\n    .quad 0\n");
     fprintf(out, "_pass_prefix_msg: .asciz \"pass: \"\n");
-    fprintf(out, ".p2align 3\n_pass_prefix:\n");
-    fprintf(out, "    .quad 6\n    .quad 6\n    .quad _pass_prefix_msg\n    .quad 0\n");
+    fprintf(out, ".p2align 3\n_pass_prefix_arr:\n");
+    fprintf(out, "    .quad 6\n    .quad _pass_prefix_msg\n");
+    fprintf(out, "_pass_prefix:\n");
+    fprintf(out, "    .quad 6\n    .quad 6\n    .quad _pass_prefix_arr\n    .quad 0\n");
     fprintf(out, ".section __DATA,__bss\n.p2align 3\n");
     fprintf(out, "_heap_ptr: .quad 0\n");
     fprintf(out, "_heap_end: .quad 0\n");

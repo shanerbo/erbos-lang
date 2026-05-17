@@ -58,37 +58,44 @@ void iremit_finalize_data(FILE *out) {
     if (g_string_pool.count == 0) return;
     fprintf(out, ".section __DATA,__data\n");
     for (int i = 0; i < g_string_pool.count; i++) {
-        // P3.4: every string literal is now lowered to a `String`
-        // struct value (cap, count, data, owned). The rodata for one
-        // literal is laid out as:
+        // β4: every string literal is now lowered to a `String`
+        // struct value (cap, count, data, owned), where `data` is
+        // an `array of byte` value (a 16-byte header pointing at
+        // the actual bytes). Three rodata blocks per literal:
         //
-        //   _strbytes<i>: .asciz "..."        (the raw UTF-8 bytes,
-        //                                      null-terminated for
-        //                                      compatibility with
-        //                                      C-runtime helpers that
-        //                                      still walk to NUL)
+        //   _strbytes<i>: .asciz "..."        (raw UTF-8 bytes,
+        //                                      NUL-terminated)
         //   .p2align 3
-        //   _str<i>:
-        //     .quad cap                       (== count for literals)
-        //     .quad count                     (byte length)
-        //     .quad _strbytes<i>              (data ptr)
-        //     .quad 0                         (owned=0; never free)
+        //   _strarr<i>:                       (array of byte header)
+        //     .quad N                          (cap)
+        //     .quad _strbytes<i>               (data ptr)
+        //   _str<i>:                          (String struct)
+        //     .quad N                          (cap, mirrored from
+        //                                      array — used by the
+        //                                      `s.cap`-style access
+        //                                      if any)
+        //     .quad N                          (count)
+        //     .quad _strarr<i>                 (data: array of byte)
+        //     .quad 0                          (owned; literals are
+        //                                       borrowed)
         //
-        // IR_LOAD_STR loads the address of `_str<i>`, which IS the
-        // `String` value. C-runtime helpers (_str_eq, _str_concat,
-        // _str_len, _yell_str, _int_to_str, _char_at) take/return
-        // these headers and unpack the data pointer at offset 16.
+        // IR_LOAD_STR loads the address of `_str<i>` which IS the
+        // String value. Methods on String (and the runtime panic/
+        // yell paths) read count from offset 8 and data (the array
+        // of byte) from offset 16. The array-of-byte header at
+        // offset 16 then carries cap@0 and bytes-ptr@8 — same
+        // layout the language synthesises for any `array of byte`.
         const char *s = g_string_pool.items[i];
         int n = (int)strlen(s);
-        // For Potato source today, strings only contain printable
-        // ASCII without quotes, so verbatim emission is enough; if
-        // that ever changes, escape backslash and quote here.
         fprintf(out, "_strbytes%d: .asciz \"%s\"\n", i, s);
         fprintf(out, ".p2align 3\n");
+        fprintf(out, "_strarr%d:\n", i);
+        fprintf(out, "    .quad %d\n", n);
+        fprintf(out, "    .quad _strbytes%d\n", i);
         fprintf(out, "_str%d:\n", i);
         fprintf(out, "    .quad %d\n", n);
         fprintf(out, "    .quad %d\n", n);
-        fprintf(out, "    .quad _strbytes%d\n", i);
+        fprintf(out, "    .quad _strarr%d\n", i);
         fprintf(out, "    .quad 0\n");
     }
     g_string_pool.count = 0;

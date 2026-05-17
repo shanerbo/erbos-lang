@@ -1,28 +1,19 @@
-// std/map — generic Map of K to V backed by a heap-allocated
-// linear-probe table (P6.2).
+// std/map — generic Map of K to V, backed by two parallel typed
+// arrays (keys, vals). Linear-probe scan for lookup; capacity
+// doubles on insert when full.
 //
-// Layout matches today's C-emitted `_map_*` runtime helpers:
-// 24-byte header (cap | count | data_ptr) followed by a flat
-// (k0|v0|k1|v1|...) array — 16 bytes per entry.
-//
-// This first cut handles `Map of K to V` where K is comparable
-// via the `==` operator at the IR level (i.e. K is `int` or any
-// pointer-shaped value). For `Map of String to V` the right
-// solution is K.equals dispatch, which the language doesn't have
-// a generic-method-on-K mechanism for yet — that lands in a
-// follow-up. For now the keyword `map of str to int` keeps using
-// the C builtin (`_map_*` with _str_eq for keys).
-//
-// Linear scan for lookup; capacity grows at 2× on insert when
-// full.
+// K must be comparable via the `==` operator at the IR level —
+// works for K = int and any pointer-shaped value. For string
+// keys (where two distinct String headers can carry equal byte
+// content), use std/string_map's StringMap of V which dispatches
+// equality through String.equals.
 
 Map of K to V is {
-  cap   int    // entries allocated at `data` (>= count)
-  count int   // active entry count
-  data  int   // raw pointer to entry 0 (16 bytes per entry)
+  count int
+  keys  array of K
+  vals  array of V
 }
 
-// Number of entries.
 Map.len(self Map of K to V) int {
   give self.count
 }
@@ -30,40 +21,40 @@ Map.len(self Map of K to V) int {
 // Insert or update. If `k` already exists, replace its value;
 // otherwise append a new entry. Doubles capacity if full.
 Map.set(self ref Map of K to V, k K, v V) {
-  // Linear-probe search for existing key.
+  // First-set path: lazily allocate keys + vals arrays.
+  self.keys eq 0 ?{
+    self.keys be array of K with cap 8
+    self.vals be array of V with cap 8
+  }
+  // Linear-probe scan for existing key.
   through (i from 0 to self.count by 1) {
-    existing is mem_load(self.data, i * 16)
-    existing eq k ?{
-      mem_store(self.data, i * 16 + 8, v)
+    self.keys[i] eq k ?{
+      self.vals[i] be v
       give
     }
   }
-  // Not found — grow if needed and append.
-  self.count ge self.cap ?{
-    new_cap is self.cap * 2
-    new_cap eq 0 ?{ new_cap be 8 }
-    new_data is heap_alloc(new_cap * 16)
+  // Not found — grow if needed.
+  self.count ge self.keys.cap ?{
+    new_cap is self.keys.cap * 2
+    fresh_k is array of K with cap new_cap
+    fresh_v is array of V with cap new_cap
     through (i from 0 to self.count by 1) {
-      mem_store(new_data, i * 16, mem_load(self.data, i * 16))
-      mem_store(new_data, i * 16 + 8, mem_load(self.data, i * 16 + 8))
+      fresh_k[i] be self.keys[i]
+      fresh_v[i] be self.vals[i]
     }
-    self.cap gt 0 ?{ heap_free(self.data, self.cap * 16) }
-    self.data be new_data
-    self.cap be new_cap
+    self.keys be fresh_k
+    self.vals be fresh_v
   }
-  mem_store(self.data, self.count * 16, k)
-  mem_store(self.data, self.count * 16 + 8, v)
+  self.keys[self.count] be k
+  self.vals[self.count] be v
   self.count be self.count + 1
 }
 
 // Lookup. Returns the value for `k`, or 0 if absent.
-// (No optional / panic path here yet — the C `_map_get` returns 0
-// on miss, so the surface stays compatible.)
 Map.get(self Map of K to V, k K) V {
   through (i from 0 to self.count by 1) {
-    existing is mem_load(self.data, i * 16)
-    existing eq k ?{
-      give mem_load(self.data, i * 16 + 8)
+    self.keys[i] eq k ?{
+      give self.vals[i]
     }
   }
   give 0

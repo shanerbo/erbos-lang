@@ -109,8 +109,133 @@ int main(int argc, char **argv) {
     p.filename = input;
     Node *program = parser_parse(&p);
 
-    // Resolve imports
+    // Compiler-side stdlib link (P3.5/P6.4). We always-link a small
+    // set of stdlib files so that operator dispatch (`+` / `eq` on
+    // String) and the keyword surface (`list of int` / `map of K to V`)
+    // can route to user-Potato symbols (_String_concat, _List__T_push,
+    // etc.) without requiring the user to write `use std/...`. This
+    // is NOT the user-visible `use` mechanism — no namespace alias is
+    // introduced, the user can't reference `std/string` by name, and
+    // the same file may also be `use`d explicitly without conflict
+    // (the dedup below is by file path).
+    //
+    // The list is fixed at compile-compiler-time. Adding a new
+    // always-linked stdlib file means recompiling the compiler.
+    // The currently-implicit-linked files are:
+    //   - std/string.ptt   (String type + methods that operator
+    //                       dispatch and string literals lower to)
+    //
+    // std/list / std/map / std/string_map remain explicit-`use`-only
+    // until P6.4 routes the keyword surface through them.
+    {
+        const char *self_basename = strrchr(input, '/');
+        self_basename = self_basename ? self_basename + 1 : input;
+        // Skip the always-link when the program being compiled IS
+        // std/string.ptt (would recursively depend on itself).
+        int is_string_self = !strcmp(self_basename, "string.ptt") &&
+                             strstr(input, "/std/") != NULL;
+        if (!is_string_self) {
+            // Locate std/string.ptt: try cwd-relative first, then
+            // input-dir-relative.
+            char std_path[512];
+            FILE *test_f = NULL;
+            const char *candidates[] = {
+                "std/string.ptt",
+                NULL
+            };
+            // Try cwd-relative
+            for (int ci = 0; candidates[ci]; ci++) {
+                test_f = fopen(candidates[ci], "r");
+                if (test_f) {
+                    snprintf(std_path, sizeof(std_path), "%s", candidates[ci]);
+                    break;
+                }
+            }
+            if (!test_f) {
+                // Try relative to input file directory and walking up
+                // a few levels.
+                char dir[256] = {0};
+                strncpy(dir, input, sizeof(dir) - 1);
+                char *last_slash = strrchr(dir, '/');
+                if (last_slash) *(last_slash + 1) = '\0';
+                else dir[0] = '\0';
+                const char *suffixes[] = {
+                    "std/string.ptt", "../std/string.ptt",
+                    "../../std/string.ptt", "../../../std/string.ptt", NULL
+                };
+                for (int si = 0; suffixes[si]; si++) {
+                    snprintf(std_path, sizeof(std_path), "%s%s", dir, suffixes[si]);
+                    test_f = fopen(std_path, "r");
+                    if (test_f) break;
+                }
+            }
+            if (test_f) {
+                fclose(test_f);
+                char *std_src = read_file(std_path);
+                Lexer std_l;
+                lexer_init(&std_l, std_src);
+                lexer_tokenize(&std_l);
+                Parser std_p;
+                parser_init(&std_p, &std_l);
+                std_p.filename = std_path;
+                Node *std_prog = parser_parse(&std_p);
+                // Merge funcs (no aliasing — these are stdlib
+                // implementations, not a user namespace).
+                for (int fi = 0; fi < std_prog->program.funcs.count; fi++) {
+                    Node *f = std_prog->program.funcs.items[fi];
+                    if (program->program.funcs.count >= program->program.funcs.cap) {
+                        program->program.funcs.cap = program->program.funcs.cap ? program->program.funcs.cap * 2 : 4;
+                        program->program.funcs.items = realloc(program->program.funcs.items, program->program.funcs.cap * sizeof(Node *));
+                    }
+                    program->program.funcs.items[program->program.funcs.count++] = f;
+                }
+                // Merge structs.
+                for (int si = 0; si < std_prog->program.structs.count; si++) {
+                    Node *s = std_prog->program.structs.items[si];
+                    if (program->program.structs.count >= program->program.structs.cap) {
+                        program->program.structs.cap = program->program.structs.cap ? program->program.structs.cap * 2 : 4;
+                        program->program.structs.items = realloc(program->program.structs.items, program->program.structs.cap * sizeof(Node *));
+                    }
+                    program->program.structs.items[program->program.structs.count++] = s;
+                }
+                free(std_src);
+            }
+        }
+    }
+
+    // Resolve imports. Track already-loaded paths so we don't
+    // double-merge a stdlib file that was implicit-linked above
+    // and then also `use`d explicitly by the user (which would
+    // produce duplicate function/method entries and a duplicate-
+    // symbol assembly error).
+    int loaded_cap = 8;
+    int loaded_count = 0;
+    char **loaded_paths = malloc(loaded_cap * sizeof(char *));
+    // Pre-populate with the implicit-linked stdlib (std/string is
+    // always linked when the program isn't std/string itself).
+    {
+        const char *self_basename2 = strrchr(input, '/');
+        self_basename2 = self_basename2 ? self_basename2 + 1 : input;
+        int is_string_self2 = !strcmp(self_basename2, "string.ptt") &&
+                              strstr(input, "/std/") != NULL;
+        if (!is_string_self2) {
+            loaded_paths[loaded_count++] = strdup("std/string");
+        }
+    }
     for (int ui = 0; ui < program->program.use_count; ui++) {
+        // Skip if already loaded (implicit-link or earlier explicit `use`).
+        const char *upath = program->program.use_paths[ui];
+        int already_loaded = 0;
+        for (int li = 0; li < loaded_count; li++) {
+            if (!strcmp(loaded_paths[li], upath)) { already_loaded = 1; break; }
+        }
+        if (already_loaded) continue;
+        if (loaded_count >= loaded_cap) {
+            loaded_cap *= 2;
+            loaded_paths = realloc(loaded_paths, loaded_cap * sizeof(char *));
+        }
+        loaded_paths[loaded_count++] = strdup(upath);
+
         char import_path[512];
         // Try relative to input file directory
         char dir[256] = {0};
@@ -276,9 +401,11 @@ int main(int argc, char **argv) {
                 int tn = (int)strlen(t->test_def.name);                         \
                 fprintf(ir_out, "_test_name_%d_bytes: .asciz \"%s\"\n", i,      \
                     t->test_def.name);                                          \
-                fprintf(ir_out, ".p2align 3\n_test_name_%d:\n", i);             \
+                fprintf(ir_out, ".p2align 3\n_test_name_%d_arr:\n", i);         \
+                fprintf(ir_out, "    .quad %d\n    .quad _test_name_%d_bytes\n", tn, i); \
+                fprintf(ir_out, "_test_name_%d:\n", i);                         \
                 fprintf(ir_out, "    .quad %d\n    .quad %d\n", tn, tn);        \
-                fprintf(ir_out, "    .quad _test_name_%d_bytes\n    .quad 0\n", i); \
+                fprintf(ir_out, "    .quad _test_name_%d_arr\n    .quad 0\n", i); \
             }                                                                   \
             fprintf(ir_out, ".section __TEXT,__text\n");                        \
         }                                                                       \
