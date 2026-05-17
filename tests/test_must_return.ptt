@@ -1,0 +1,60 @@
+// Codex audit P1-9 positive coverage: every accepted shape
+// that does return on every path.
+
+use std/string
+
+// 1. Trailing `give` is the simplest case.
+trailing_give(n int) int {
+  give n + 1
+}
+
+// 2. if/nah with give in both branches.
+both_branches(x int) int {
+  x gt 0 ?{
+    give 1
+  } nah {
+    give 0
+  }
+}
+
+// 3. if/nah with the give in the nah, last stmt is the if.
+in_nah(x int) int {
+  x gt 0 ?{
+    give 1
+  } nah {
+    give 0
+  }
+}
+
+// 4. if/give-after-if. Last stmt is `give`; the if doesn't
+//    need to return on every branch since there's a fallthrough
+//    `give`.
+fallthrough_give(x int) int {
+  x gt 0 ?{
+    give 1
+  }
+  give 0
+}
+
+// 5. Match with give in every arm.
+Result is Ok(v int) | Err(e int)
+match_all(r Result) int {
+  match r {
+    Ok(v) => give v
+    Err(e) => give 0 - e
+  }
+}
+
+test "trailing give" { assert(trailing_give(10) eq 11) }
+test "both branches" {
+  assert(both_branches(1) eq 1)
+  assert(both_branches(0 - 1) eq 0)
+}
+test "fallthrough give" {
+  assert(fallthrough_give(5) eq 1)
+  assert(fallthrough_give(0 - 5) eq 0)
+}
+test "match all arms" {
+  assert(match_all(Result.Ok(7)) eq 7)
+  assert(match_all(Result.Err(3)) eq 0 - 3)
+}

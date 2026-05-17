@@ -674,6 +674,37 @@ int main(int argc, char **argv) {
              *   field handling. */                                              \
             fprintf(ir_out, ".globl _clone_%s\n.p2align 2\n_clone_%s:\n",       \
                     s->struct_def.name, s->struct_def.name);                    \
+            /* Borrow short-circuit: a borrowed value (e.g. a String              \
+             * literal) is immutable rodata. Cloning it as a fresh                \
+             * heap copy is wasteful and, more importantly, the                   \
+             * inner `array of byte` header is also rodata — the                  \
+             * generic clone path below would walk into it expecting              \
+             * mutability. Just return the same pointer; the borrow               \
+             * convention (`owned == 0` means "do not free, do not                \
+             * mutate") guarantees this is sound. */                              \
+            {                                                                   \
+                int owned_off = -1;                                             \
+                for (int ofi = 0; ofi < s->struct_def.field_count; ofi++) {     \
+                    const char *fn = s->struct_def.field_names[ofi];            \
+                    const char *ft = s->struct_def.field_types[ofi];            \
+                    if (fn && ft && !strcmp(fn, "owned") && !strcmp(ft, "int")) { \
+                        owned_off = ofi * 8;                                    \
+                        break;                                                  \
+                    }                                                           \
+                }                                                               \
+                if (owned_off >= 0) {                                            \
+                    fprintf(ir_out, "    cbz x0, _clone_%s_borrowed\n",          \
+                            s->struct_def.name);                                \
+                    fprintf(ir_out, "    ldr x9, [x0, #%d]\n", owned_off);       \
+                    fprintf(ir_out, "    cbnz x9, _clone_%s_owned\n",            \
+                            s->struct_def.name);                                \
+                    fprintf(ir_out, "_clone_%s_borrowed:\n",                     \
+                            s->struct_def.name);                                \
+                    fprintf(ir_out, "    ret\n");                                \
+                    fprintf(ir_out, "_clone_%s_owned:\n",                        \
+                            s->struct_def.name);                                \
+                }                                                               \
+            }                                                                   \
             fprintf(ir_out, "    stp x29, x30, [sp, #-48]!\n");                 \
             fprintf(ir_out, "    stp x19, x20, [sp, #16]\n");                   \
             fprintf(ir_out, "    stp x21, x22, [sp, #32]\n");                   \
@@ -798,6 +829,30 @@ int main(int argc, char **argv) {
                     s->struct_def.name, s->struct_def.name);                    \
             fprintf(ir_out, "    cbz x0, _drop_%s_done\n",                       \
                     s->struct_def.name);                                        \
+            /* Borrow gate: if this struct has an `int owned` field (the         \
+             * String/byte-array convention) and it's currently 0, this           \
+             * value points at rodata (a literal, e.g. `"foo"`). Calling         \
+             * `_heap_free` on rodata corrupts the heap free list and             \
+             * later allocations crash. Skip the entire body — return            \
+             * immediately. Detected by literal field name "owned" with           \
+             * a primitive int type. Documented invariant in                     \
+             * docs/string-rewrite.md. */                                        \
+            {                                                                   \
+                int owned_off = -1;                                             \
+                for (int ofi = 0; ofi < s->struct_def.field_count; ofi++) {     \
+                    const char *fn = s->struct_def.field_names[ofi];            \
+                    const char *ft = s->struct_def.field_types[ofi];            \
+                    if (fn && ft && !strcmp(fn, "owned") && !strcmp(ft, "int")) { \
+                        owned_off = ofi * 8;                                    \
+                        break;                                                  \
+                    }                                                           \
+                }                                                               \
+                if (owned_off >= 0) {                                            \
+                    fprintf(ir_out, "    ldr x9, [x0, #%d]\n", owned_off);       \
+                    fprintf(ir_out, "    cbz x9, _drop_%s_done\n",               \
+                            s->struct_def.name);                                \
+                }                                                               \
+            }                                                                   \
             fprintf(ir_out, "    stp x29, x30, [sp, #-32]!\n");                 \
             fprintf(ir_out, "    stp x19, x20, [sp, #16]\n");                   \
             fprintf(ir_out, "    mov x29, sp\n");                               \
@@ -969,7 +1024,14 @@ int main(int argc, char **argv) {
         snprintf(cmd, sizeof(cmd), "rm -f '%s'", out_name);
         system(cmd);
         free(src);
-        return WEXITSTATUS(ret);
+        // Codex P1-10: propagate signals as 128+signum so the
+        // shell convention surfaces them. WEXITSTATUS is undefined
+        // for signal-terminated children — pre-fix, a SIGSEGV in
+        // the user's program reported as exit 0 from `erbos run`,
+        // hiding crashes from CI / shell-script callers.
+        if (WIFEXITED(ret)) return WEXITSTATUS(ret);
+        if (WIFSIGNALED(ret)) return 128 + WTERMSIG(ret);
+        return 1;
     }
 
     printf("built %s\n", out_name);

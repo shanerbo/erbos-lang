@@ -1180,24 +1180,67 @@ static Type check_expr(Checker *c, Node *n) {
     }
 }
 
-static int has_give_in_block(Node *block);
+static int stmt_returns(Node *stmt);
+static int block_returns(Node *block);
 
-static int has_give_in_stmts(Node **stmts, int count) {
-    for (int i = 0; i < count; i++) {
-        if (stmts[i]->type == NODE_GIVE) return 1;
-        if (stmts[i]->type == NODE_IF) {
-            // Check all branches
-            for (int b = 0; b < stmts[i]->if_stmt.branch_count; b++)
-                if (has_give_in_block(stmts[i]->if_stmt.bodies[b])) return 1;
-            if (stmts[i]->if_stmt.nah_body && has_give_in_block(stmts[i]->if_stmt.nah_body)) return 1;
+// Codex P1-9: must-return analysis. A non-void function must
+// return on every control-flow path, not "anywhere a give
+// statement exists." The previous heuristic (has_give_in_block)
+// accepted programs where give appeared in just one branch of
+// an if and the no-return path produced 0.
+//
+// Returns 1 iff `stmt` guarantees control does not fall through.
+static int stmt_returns(Node *stmt) {
+    if (!stmt) return 0;
+    switch (stmt->type) {
+        case NODE_GIVE: return 1;
+        case NODE_BLOCK: return block_returns(stmt);
+        case NODE_IF: {
+            // An if-chain returns iff every branch returns AND
+            // there's a nah branch. Without nah, falling out of
+            // every condition's else means continuing past the
+            // if-chain — so it doesn't return.
+            for (int b = 0; b < stmt->if_stmt.branch_count; b++) {
+                if (!block_returns(stmt->if_stmt.bodies[b])) return 0;
+            }
+            if (!stmt->if_stmt.nah_body) return 0;
+            return block_returns(stmt->if_stmt.nah_body);
         }
-        if (stmts[i]->type == NODE_BLOCK && has_give_in_block(stmts[i])) return 1;
+        case NODE_MATCH: {
+            // A match returns iff every arm body returns. Match
+            // exhaustiveness is a separate audit topic; today we
+            // trust that the user covered the variants they care
+            // about. A non-exhaustive match falls through on
+            // unmatched values, so this is a conservative
+            // approximation — an exhaustive match returns iff
+            // every arm body returns.
+            for (int ai = 0; ai < stmt->match_expr.arm_count; ai++) {
+                Node *body = stmt->match_expr.arm_bodies[ai];
+                if (!body) return 0;
+                if (body->type == NODE_BLOCK) {
+                    if (!block_returns(body)) return 0;
+                } else {
+                    if (!stmt_returns(body)) return 0;
+                }
+            }
+            return stmt->match_expr.arm_count > 0;
+        }
+        // Loops, asserts, calls — control can fall through.
+        // Asserts can panic-exit but the checker treats them as
+        // ordinary statements. infi(true) { ... } without stop
+        // is provably non-returning but we don't bother with that
+        // analysis here; users put `give` after the loop or
+        // structure their code so the loop isn't the last stmt.
+        default:
+            return 0;
     }
-    return 0;
 }
 
-static int has_give_in_block(Node *block) {
-    return has_give_in_stmts(block->block.stmts.items, block->block.stmts.count);
+static int block_returns(Node *block) {
+    if (!block) return 0;
+    int count = block->block.stmts.count;
+    if (count == 0) return 0;
+    return stmt_returns(block->block.stmts.items[count - 1]);
 }
 
 static void check_stmt(Checker *c, Node *n);
@@ -1822,10 +1865,12 @@ void checker_run(Node *program) {
         for (int j = 0; j < body->block.stmts.count; j++)
             check_stmt(&c, body->block.stmts.items[j]);
 
-        // Check for missing return
-        if (c.cur_return_type.kind != TYPE_VOID && !c.found_give) {
-            if (!has_give_in_block(body)) {
-                fprintf(stderr, "error: function '%s' must return '%s' but has no give statement\n",
+        // Check that every control-flow path returns. Codex P1-9.
+        if (c.cur_return_type.kind != TYPE_VOID) {
+            if (!block_returns(body)) {
+                fprintf(stderr,
+                    "error: function '%s' must return '%s' on every "
+                    "path; some path falls through without `give`\n",
                     f->func_def.name, type_name(c.cur_return_type));
                 exit(1);
             }

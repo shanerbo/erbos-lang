@@ -1,0 +1,13 @@
+// Codex audit P1-10: pop on a never-pushed List must panic
+// cleanly via assert(false), not SIGSEGV. Pre-fix, the
+// implementation indexed self.data[0] which dereferenced null.
+// Codex P1-10 also requires `erbos run` to surface the
+// non-zero exit.
+
+use std/string
+use std/list
+
+spark {
+  xs is List of int
+  yell(xs.pop())
+}

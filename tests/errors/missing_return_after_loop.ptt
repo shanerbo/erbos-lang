@@ -1,0 +1,15 @@
+// Codex audit P1-9: a function that gives only inside a loop
+// (or after a loop with no path-specific give) doesn't return
+// on every path. Loops aren't guaranteed-returning.
+
+use std/string
+
+f(n int) int {
+  through (i from 0 to n by 1) {
+    i eq 5 ?{
+      give i
+    }
+  }
+}
+
+spark { yell(0) }

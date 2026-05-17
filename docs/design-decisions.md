@@ -1190,3 +1190,111 @@ shape "if A: reject," ask whether the same logic applies to
 walker generalises from the original NODE_IDENT-only check;
 the alias-through-method-return is the next nested case I
 chose not to address yet.
+
+## 2026-05-17 — Borrow-aware drop/clone for `String` literals
+
+`_drop_<X>` and `_clone_<X>` are synthesised per-struct in
+`compiler/main.c` and walk the struct's heap-shaped fields
+recursively. After P0-8 made `_drop_<X>` recurse into
+struct-typed fields, a latent bug surfaced through `_drop_String`:
+
+    Package(name is "foo", version is 7)
+
+lowers to:
+1. `_alloc_Package` zero-fills then auto-inits the `name` field
+   via `_alloc_String` (a heap-allocated empty String).
+2. The named-arg constructor stores the rodata literal pointer
+   `_str0` over the auto-init'd `name` field.
+3. End of test scope: `_drop_Package` calls
+   `_drop_String(_str0)` which walks the rodata header,
+   `_heap_free`s the rodata `array of byte` header (which
+   isn't on the heap), and corrupts the heap free list.
+4. The next allocation (in a later test) crashes with SIGSEGV.
+
+`tests/test_spudlock_fixes.ptt` exhibited this: tests 0 and 1
+printed pass, test 2 silently aborted (or exited 139,
+depending on what the corrupted free list pointed at).
+
+### Fix
+
+Generalise the borrow convention encoded in `String`:
+**a struct with an `int owned` field whose value is `0`
+points at rodata and must not be freed**. This mirrors the
+contract `iremit.c` already uses when emitting literal
+`String` headers (`.quad 0` for the `owned` slot).
+
+`_drop_<X>` now starts with:
+
+    cbz x0, _drop_X_done
+    ldr x9, [x0, #owned_off]
+    cbz x9, _drop_X_done    // borrowed → no-op
+    ; ... existing field-by-field free path ...
+
+`_clone_<X>` now starts with:
+
+    cbz x0, _clone_X_borrowed
+    ldr x9, [x0, #owned_off]
+    cbnz x9, _clone_X_owned
+    _clone_X_borrowed: ret  // borrowed → return same pointer
+    _clone_X_owned: ; ... existing deep-copy path ...
+
+The check is gated on a static struct-shape match: a field
+literally named `owned` whose declared type is `int`. Any
+struct that doesn't follow the convention emits the original
+unconditional drop/clone.
+
+### Why a struct-shape convention rather than a special case for `"String"`
+
+Naming the struct in the codegen would tie the runtime to a
+single stdlib type. The shape-based detection lets any future
+type that wraps borrow-able rodata (e.g. a `ByteSlice` or a
+`StaticView of T`) opt in by mirroring the layout. The
+convention is documented inline at the emit site and at the
+String literal layout in `iremit.c::iremit_finalize_data`.
+
+### Secondary leak (not fixed in this commit)
+
+The named-arg constructor still leaks the auto-init'd empty
+String when overwritten by the literal pointer. With the
+borrow fix landed, this is a *leak*, not a crash — the
+auto-init'd String becomes orphaned heap memory that lives
+until the program exits.
+
+A clean fix needs the constructor lowering to either
+(a) skip auto-init for fields that the named-arg list
+explicitly initialises, or (b) emit a drop on each
+named-arg-initialised field before the literal pointer
+store. Both are local to the named-arg path in `irgen.c`
+and worth doing, but are out of scope for the immediate
+crash fix.
+
+Tracked as a separate follow-up. ASan confirms the leak is
+deterministic and bounded (one auto-init'd String per
+named-arg `String` field per construction).
+
+### What this teaches
+
+The earlier P0-8 commit message acknowledged that
+`_drop_<X>` would walk struct-shaped fields, but didn't
+think through the case where the field's value at drop
+time was rodata rather than heap. The crash was latent
+behind two preconditions:
+
+1. A struct field of type `String`.
+2. A named-arg constructor that stores a literal into
+   that field (so the field holds rodata, not the
+   auto-init'd heap String).
+
+`tests/test_spudlock_fixes.ptt` happened to exercise
+exactly this combination — a field of type `String`
+initialised via a named-arg literal — which is why the
+regression was scoped to that file. Other test programs
+that use `String` literals in stack-local variables or
+construct String fields via method calls (which return
+heap-owned Strings with `owned == 1`) didn't hit the
+path.
+
+Lesson: when adding a recursive operation over struct
+fields, classify each field by *runtime ownership* not just
+*static type*. Heap and rodata both have type `String`;
+they need different treatment.

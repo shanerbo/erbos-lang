@@ -54,10 +54,15 @@ List.push(self ref List of T, v T) {
 }
 
 // Remove and return the last element. Panics on empty.
+//
+// Codex P1-10: when count=0 the list may not have allocated its
+// data buffer yet (lazy-init in push). Indexing self.data[0]
+// then dereferences null, producing a SIGSEGV instead of a
+// clean panic. Use assert(false) for a deterministic compile-
+// time exit code; once a `panic` builtin lands this can switch.
 List.pop(self ref List of T) T {
   self.count le 0 ?{
-    // Out-of-bounds pop. Force a panic via an OOB index access.
-    give self.data[self.count]
+    assert(false)
   }
   self.count be self.count - 1
   give self.data[self.count]

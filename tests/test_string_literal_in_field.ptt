@@ -1,0 +1,49 @@
+// Regression for: _drop_<X> recursing into a String field that
+// was overwritten by a rodata literal pointer corrupts the heap
+// free list and crashes a later allocation.
+//
+// Pre-fix, this file would print pass for tests 0 and 1, then
+// either silently exit or crash with SIGSEGV at test 2's
+// allocation. Post-fix, _drop_<X> respects the borrow convention
+// (`owned == 0` → no-op) and the chain runs to completion.
+
+use std/string
+use std/list
+
+Holder is {
+  name String
+  count int
+}
+
+Pair is {
+  a Holder
+  b Holder
+}
+
+test "single literal field then drop" {
+  h is Holder(name is "alpha", count is 1)
+  assert(h.count eq 1)
+  assert(h.name.len() eq 5)
+}
+
+test "two literal fields, nested struct, then drop" {
+  p is Pair(
+    a is Holder(name is "left", count is 10),
+    b is Holder(name is "right", count is 20)
+  )
+  assert(p.a.count eq 10)
+  assert(p.b.count eq 20)
+  assert(p.a.name.len() eq 4)
+  assert(p.b.name.len() eq 5)
+}
+
+test "subsequent allocation after literal-field drop" {
+  // Pre-fix the prior test's drop chain would corrupt the
+  // free list and this allocation would crash.
+  xs is List of int
+  xs.push(1)
+  xs.push(2)
+  xs.push(3)
+  assert(xs.len() eq 3)
+  assert(xs.get(2) eq 3)
+}

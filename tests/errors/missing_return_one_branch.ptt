@@ -1,0 +1,13 @@
+// Codex audit P1-9: a non-void function with `give` only in
+// one branch of an if (no nah) must error — the no-give path
+// would fall through and produce an undefined return value.
+
+use std/string
+
+f(x int) int {
+  x gt 0 ?{
+    give 1
+  }
+}
+
+spark { yell(0) }

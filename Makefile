@@ -54,7 +54,7 @@ test-fail: $(OUT)
 	@fail=0; \
 	for f in tests/errors/*.ptt; do \
 		b=$$(basename $$f); \
-		case $$b in negative_index.ptt) continue;; esac; \
+		case $$b in negative_index.ptt|empty_pop_panics.ptt) continue;; esac; \
 		if ./$(OUT) "$$f" > /dev/null 2>&1; then \
 			echo "  FAIL (should error): $$b"; fail=1; \
 		else \
@@ -70,7 +70,7 @@ test-fail: $(OUT)
 		fi; \
 	done; \
 	echo "=== Expected runtime panics ==="; \
-	for f in examples/oob_test.ptt tests/errors/negative_index.ptt; do \
+	for f in examples/oob_test.ptt tests/errors/negative_index.ptt tests/errors/empty_pop_panics.ptt; do \
 		b=$$(basename $$f); \
 		if ./$(OUT) run "$$f" > /dev/null 2>&1; then \
 			echo "  FAIL (should panic): $$b"; fail=1; \
