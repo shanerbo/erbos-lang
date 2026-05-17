@@ -26,14 +26,25 @@ name resolved by `use`.
 | `mod` | modulo | `x mod 3` |
 | `true` / `false` | booleans | `x is true` |
 | `nil` | null pointer | `root eq nil` |
-| `array` | typed-storage primitive (`array of T`, `array of byte`) | `xs is array of int with cap 8` |
-| `with` / `cap` | array constructor parts | `array of int with cap 8` |
+| `array` | typed-storage primitive (`array of T`, `array of byte`) — **contextual**, see note below | `xs is array of int with cap 8` |
+| `with` / `cap` | array constructor parts — **contextual**, see note below | `array of int with cap 8` |
 | `of` / `to` | generic type connectives | `List of int`, `Map of String to int` |
 | `match` | pattern match on enum | `match r { Ok(v) => ... }` |
 | `use` | import module | `use std/math` |
 | `as` | import alias | `use path as name` |
 | `test` | define test block | `test "name" { }` |
 | `task` | concurrency handle (compiled-mode placeholder; see note) | `t is task()` |
+
+### Contextual words (`array`, `with`, `cap`)
+
+These three are not reserved by the lexer — they tokenise as plain
+identifiers — but the parser recognises them in array contexts
+(after `is`, in type positions). That means a user *could* shadow
+them with a local of the same name (`with is 7`), and the
+compiler will not stop them. Editor tooling (the VS Code grammar)
+does highlight them as keywords for clarity. Don't rely on the
+contextual-only behaviour: future revisions may promote them to
+true reserved words.
 
 ### Names that look like keywords but aren't
 
