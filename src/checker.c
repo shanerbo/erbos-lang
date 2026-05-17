@@ -353,7 +353,49 @@ static Type check_expr(Checker *c, Node *n) {
             if (!strcmp(name, "list") || !strcmp(name, "list_new")) return make_type(TYPE_LIST);
             if (!strcmp(name, "map") || !strcmp(name, "map_new") || !strcmp(name, "imap")) return make_type(TYPE_MAP);
             if (!strcmp(name, "task")) return make_type(TYPE_TASK);
-            if (!strcmp(name, "yell")) { if (n->call.arg_count > 0) check_expr(c, n->call.args[0]); return make_type(TYPE_VOID); }
+            if (!strcmp(name, "yell")) {
+                // γ1: resolve `yell(x)` to a concrete symbol at
+                // compile time based on x's static type. The call
+                // node's name slot is rewritten to the resolved
+                // symbol so irgen + iremit just emit `bl <symbol>`.
+                //   yell(int)    → yell_int  (built-in)
+                //   yell(bool)   → yell_int  (built-in; 0/1)
+                //   yell(String) → String_yell (user method via γ2)
+                //   yell(T)      → <T>_yell   (user-defined method)
+                // No match → error here at type-check time.
+                if (n->call.arg_count != 1) {
+                    fprintf(stderr,
+                        "error:%d: yell() takes exactly 1 argument\n",
+                        n->line);
+                    exit(1);
+                }
+                Type arg_t = check_expr(c, n->call.args[0]);
+                if (arg_t.kind == TYPE_INT || arg_t.kind == TYPE_BOOL ||
+                    arg_t.kind == TYPE_BYTE) {
+                    n->call.name = strdup("yell_int");
+                } else if (arg_t.kind == TYPE_STR) {
+                    n->call.name = strdup("String_yell");
+                } else if (arg_t.kind == TYPE_STRUCT) {
+                    char buf[256];
+                    snprintf(buf, sizeof(buf), "%s_yell", arg_t.struct_name);
+                    n->call.name = strdup(buf);
+                } else if (arg_t.kind == TYPE_UNKNOWN) {
+                    // Legacy / transitional: values flowing out of an
+                    // untyped `list` element (no elem type tagged) or
+                    // through chained legacy indexing land here. Keep
+                    // the runtime magic-number dispatch (`_yell`) for
+                    // these — once ε drops the legacy keyword forms
+                    // every value carries a concrete type and this
+                    // arm becomes the hard-error case below.
+                    n->call.name = strdup("yell");
+                } else {
+                    fprintf(stderr,
+                        "error:%d: yell() has no overload for this type\n",
+                        n->line);
+                    exit(1);
+                }
+                return make_type(TYPE_VOID);
+            }
             if (!strcmp(name, "len")) {
                 if (n->call.arg_count != 1) { fprintf(stderr, "error:%d: len() takes 1 argument\n", n->line); exit(1); }
                 Type arg_t = check_expr(c, n->call.args[0]);
@@ -843,12 +885,25 @@ static void check_stmt(Checker *c, Node *n) {
             for (int j = 0; j < n->through_range.body->block.stmts.count; j++)
                 check_stmt(c, n->through_range.body->block.stmts.items[j]);
             break;
-        case NODE_THROUGH_IN:
-            check_expr(c, n->through_in.collection);
-            set_sym(c, n->through_in.var_name, make_type(TYPE_UNKNOWN));
+        case NODE_THROUGH_IN: {
+            // γ1: thread the collection's element type through to
+            // the loop variable when we know it. For TYPE_LIST or
+            // TYPE_ARRAY with elem_type set we propagate the
+            // element type; otherwise the var lands as TYPE_UNKNOWN
+            // and yell-on-element falls through to the runtime
+            // magic-number shim (the historic behaviour). Once ε
+            // drops the legacy keyword forms every collection
+            // carries an elem type and TYPE_UNKNOWN goes away.
+            Type col = check_expr(c, n->through_in.collection);
+            Type elem = make_type(TYPE_UNKNOWN);
+            if ((col.kind == TYPE_LIST || col.kind == TYPE_ARRAY) &&
+                col.elem_type)
+                elem = *col.elem_type;
+            set_sym(c, n->through_in.var_name, elem);
             for (int j = 0; j < n->through_in.body->block.stmts.count; j++)
                 check_stmt(c, n->through_in.body->block.stmts.items[j]);
             break;
+        }
         case NODE_INFI:
             if (n->infi.cond) check_expr(c, n->infi.cond);
             for (int j = 0; j < n->infi.body->block.stmts.count; j++)

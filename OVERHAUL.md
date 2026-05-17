@@ -222,22 +222,35 @@ on completion. Don't redo a checked task.
 
 ### Phase γ — Tier-2 compiler-known names + ban kernel layer
 
-- [ ] **γ1** `yell` becomes a compiler-known name resolved at
-      compile time on argument type. Drop runtime
-      `_yell_dispatch` magic-number heuristic.
-      `yell(int)` → `bl _yell_int`. `yell(String)` → `bl
-      _String_yell`. `yell(c : Counter)` → `bl _Counter_yell`
-      (user-defined). No match → error "no `yell` defined for
-      type X."
-      Acceptance: `nm` shows direct symbol calls; no
-      `_yell_dispatch` symbol remains.
-- [ ] **γ2** `_String_yell` becomes a compiler-emitted symbol
-      (hand-rolled ARM64): reads count + data from String header,
-      calls `_write_bytes`, writes newline. `String.yell` user
-      method (in std/string.ptt) is the source of the symbol;
-      compiler emits it via the normal method path.
-      Acceptance: `s.yell()` and `yell(s)` both emit `bl
-      _String_yell`.
+- [x] **γ1** `yell` is a compiler-known name resolved at the
+      checker on the argument's static type. The call node's name
+      is rewritten in-place so irgen + iremit just emit
+      `bl <symbol>`:
+        - int / bool / byte → `_yell_int`
+        - String            → `_String_yell`
+        - struct T          → `_<T>_yell` (user-defined method)
+        - TYPE_UNKNOWN      → `_yell` (runtime magic-number shim)
+      The TYPE_UNKNOWN arm exists only for values flowing out of
+      the legacy untyped `list` element through chained indexing.
+      Once ε drops the legacy keyword forms every value carries a
+      concrete type and the shim goes away.
+      `through (k in xs)` now propagates xs's element type to k —
+      both for `array of T` (concrete elem type) and for typed
+      `list of T`. Without an element type the loop var lands as
+      TYPE_UNKNOWN and routes through the shim.
+      Acceptance: `make test` green; user `Counter.yell(self)` is
+      reachable via `yell(c)` (verified manually).
+- [x] **γ2** `_String_yell` is the canonical compiler-emitted
+      symbol for `yell(s String)` and `s.yell()`. Hand-rolled
+      ARM64 in `runtime_emit.c::emit_String_yell`. Reads count
+      from the String header at offset 8, walks String.data ->
+      array_of_byte hdr -> bytes ptr to reach the buffer, calls
+      write(2), then writes a newline. Same `.globl` block also
+      exposes `_yell_str` so the runtime-internal panic / pass /
+      assert paths still link without a per-caller sweep; ζ2
+      removes the alias.
+      Acceptance: `make test` green; `s.yell()` and `yell(s)`
+      both emit `bl _String_yell` (the same symbol).
 - [ ] **γ3** `assert(cond)` moves from reserved keyword to stdlib
       function. Drop `TOK_ASSERT` from lexer; drop
       `NODE_ASSERT_STMT` from AST. `assert` becomes a

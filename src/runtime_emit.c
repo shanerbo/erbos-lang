@@ -42,15 +42,24 @@ static void emit_yell_int(FILE *out) {
     fprintf(out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 }
 
-static void emit_yell_str(FILE *out) {
-    // β4: x0 is a String header (4 quads: cap, count, data,
-    // owned) where data is an `array of byte` ptr. We pull
-    // count from offset 8 and the byte buffer via TWO loads:
-    // first the array of byte header from String.data
-    // ([x0,#16]), then the byte ptr from that array's data
-    // field ([arr,#8]). Then write count bytes + newline.
-    fprintf(out, "// built-in: _yell_str (x0 = String header ptr)\n");
-    fprintf(out, ".globl _yell_str\n.p2align 2\n_yell_str:\n");
+static void emit_String_yell(FILE *out) {
+    // γ2: this is the canonical `String.yell(self)` symbol —
+    // every `yell(s String)` call in user code routes here at
+    // compile time (γ1 rewrites `yell` to `String_yell` based
+    // on the static type of the argument).
+    //
+    // x0 is a String header (4 quads: cap, count, data, owned)
+    // where data is an `array of byte` ptr. Pull count from
+    // offset 8; reach the byte buffer via two loads — first
+    // the array-of-byte header from String.data ([x0,#16]),
+    // then the byte ptr from that header's data field ([arr,#8]).
+    // Write count bytes + newline.
+    //
+    // Same .globl symbol exposes _yell_str for now so the
+    // runtime-internal panic / pass / assert paths still link.
+    // ζ2 will sweep those internal callers and drop the alias.
+    fprintf(out, "// built-in: _String_yell (x0 = String header ptr)\n");
+    fprintf(out, ".globl _String_yell\n.globl _yell_str\n.p2align 2\n_String_yell:\n_yell_str:\n");
     fprintf(out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
     fprintf(out, "    ldr x2, [x0, #8]\n");      // count -> x2
     fprintf(out, "    ldr x1, [x0, #16]\n");     // array-of-byte hdr -> x1
@@ -82,8 +91,16 @@ static void emit_write_bytes(FILE *out) {
     fprintf(out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 }
 
+// γ1 transitional: most `yell(x)` calls resolve at compile time
+// on x's static type (see checker.c NODE_CALL "yell" branch) and
+// emit `bl _yell_int` / `bl _String_yell` / `bl _<UserType>_yell`
+// directly. This runtime `_yell` shim handles the residue —
+// values whose static type the checker couldn't pin down (e.g.
+// elements of a legacy untyped `list` reached via chained
+// indexing). Once ε drops the legacy `list` / `map` keyword
+// forms every value carries a concrete type and this shim can go.
 static void emit_yell_dispatch(FILE *out) {
-    fprintf(out, "// built-in: _yell (auto-dispatch int/str)\n");
+    fprintf(out, "// transitional: _yell (magic-number int/str dispatch)\n");
     fprintf(out, ".globl _yell\n.p2align 2\n_yell:\n");
     fprintf(out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
     fprintf(out, "    mov x1, #0x100000\n");
@@ -92,7 +109,7 @@ static void emit_yell_dispatch(FILE *out) {
     fprintf(out, "    bl _yell_int\n");
     fprintf(out, "    b _yell_done\n");
     fprintf(out, "_yell_is_str:\n");
-    fprintf(out, "    bl _yell_str\n");
+    fprintf(out, "    bl _String_yell\n");
     fprintf(out, "_yell_done:\n");
     fprintf(out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 }
@@ -691,7 +708,7 @@ static void emit_list_builtins(FILE *out) {
 
 void runtime_emit_builtins(FILE *out) {
     emit_yell_int(out);
-    emit_yell_str(out);
+    emit_String_yell(out);
     emit_write_bytes(out);
     emit_yell_dispatch(out);
     emit_task_builtins(out);
