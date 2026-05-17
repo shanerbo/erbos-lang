@@ -24,12 +24,19 @@ All variables must be initialized.
 | Type | Description |
 |------|-------------|
 | `int` | 64-bit signed integer |
-| `str` | string |
 | `bool` | `true` or `false` |
-| `list of T` | typed dynamic list |
-| `map of K to V` | typed ordered map (string keys) |
-| `imap of K to V` | typed ordered map (int keys) |
+| `byte` | 8-bit unsigned (only as the element type of `array of byte`) |
+| `String` | text (stdlib struct from `std/string`; `"..."` literals) |
+| `array of T` | typed-storage primitive — fixed-cap, element-typed |
+| `List of T` | dynamic list (stdlib, from `std/list`) |
+| `Map of K to V` | int / pointer-keyed map (stdlib, from `std/map`) |
+| `StringMap of V` | string-keyed map (stdlib, from `std/string_map`) |
 | `nil` | null/empty pointer |
+
+> The legacy `str` keyword and the `list` / `map` / `imap` keyword
+> forms are still accepted but scheduled for removal — see
+> [`OVERHAUL.md`](../OVERHAUL.md). New code should write `String`
+> and the stdlib types.
 
 ## Functions
 
@@ -38,7 +45,7 @@ add(a int, b int) int {
   give a + b
 }
 
-greet(name str) {
+greet(name String) {
   yell("hello {name}")
 }
 ```
@@ -77,13 +84,24 @@ infi { stop }
 
 ## Strings
 
+`String` is a stdlib struct backed by a UTF-8 byte buffer. `use
+std/string` is the explicit import; `use std/basics` brings it in
+along with the other stdlib types.
+
 ```
+use std/string
+
 name is "world"
-yell("hello {name}")          // interpolation (int and str vars)
-c is "hi" + " there"          // concat
-yell(len("hello"))            // 5
-yell(char_at("abc", 1))       // "b"
+yell("hello {name}")          // interpolation (int and String vars)
+c is "hi" + " there"          // concat returns a fresh String
+yell("hello".len())           // 5
+yell("abc".char_at(1))        // "b" (1-byte String)
+yell(42.to_string())          // "42"
 ```
+
+The methods come from `std/string.ptt`: `len`, `empty`, `equals`,
+`byte_at`, `char_at`, `concat` (called via `+`), and `int.to_string`
+on int receivers.
 
 ## Structs
 
@@ -218,18 +236,20 @@ Rules:
 ## Lists
 
 ```
-nums is list of int           // typed, auto-constructed
+use std/list
+
+nums is List of int           // auto-constructed
 nums.push(10)
 nums.push(20)
 yell(nums[0])                 // 10
-yell(len(nums))               // 2
+yell(nums.len())              // 2
 last is nums.pop()            // 20
-list_set(nums, 0, 99)         // set by index
 
-// Literal (type inferred)
+// Literal (type inferred — currently maps to legacy `list`,
+// scheduled to route through List of T in phase ε):
 vals is [1, 2, 3]
 
-// Chained indexing
+// Chained indexing across legacy list-of-list works too:
 grid is list of list
 grid.push([1, 2, 3])
 yell(grid[0][1])              // 2
@@ -238,23 +258,27 @@ yell(grid[0][1])              // 2
 ## Maps
 
 ```
-// String-key map
-scores is map of str to int
+use std/string_map      // String-keyed
+use std/map             // int / pointer-keyed
+
+// String-keyed
+scores is StringMap of int
 scores.set("alice", 95)
 yell(scores.get("alice"))     // 95
-yell(len(scores))             // 1
+yell(scores.len())            // 1
 
-// Map literal
+// Int-keyed
+memo is Map of int to int
+memo.set(42, 100)
+yell(memo.get(42))            // 100
+
+// Map literal (currently routes to the legacy `map` keyword;
+// phase ε will route through StringMap of V):
 m is ["name" to 1, "age" to 2]
 
-// Int-key map
-memo is imap of int to int
-imap_set(memo, 42, 100)
-yell(imap_get(memo, 42))      // 100
-
-// Iteration
-keys is scores.keys()
-through (k in keys) { yell(k) }
+// Iteration via .keys() works on the legacy `map` keyword form;
+// the stdlib Map / StringMap will gain explicit iteration in
+// phase ε once the keyword forms are retired.
 ```
 
 ## Enums + Pattern Matching
@@ -262,7 +286,7 @@ through (k in keys) { yell(k) }
 ```
 Result is
   Ok(value int)
-  | Err(message str)
+  | Err(message String)
 
 r is Result.Ok(42)
 
@@ -303,7 +327,14 @@ spark {
 }
 ```
 
-Standard library: `std/math`, `std/queue`, `std/stack`
+Standard library:
+- `std/basics` — bundle (re-exports String + List + Map + StringMap)
+- `std/string` — `String`, `String.*`, `int.to_string`
+- `std/list` — `List of T`
+- `std/map` — `Map of K to V`
+- `std/string_map` — `StringMap of V`
+- `std/math` — `min`, `max`, `abs`, `pow`
+- `std/queue`, `std/stack` — bounded fixed-cap queues / stacks
 
 ## Testing
 

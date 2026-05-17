@@ -53,29 +53,34 @@ spark {
 
 ## Collections
 ```
+use std/basics
+
 spark {
   // Typed list
-  nums is list of int
+  nums is List of int
   nums.push(10)
   nums.push(20)
   yell(nums[0])
 
-  // Map literal
+  // String-keyed map (literal syntax routes through the legacy
+  // `map` keyword today; phase ε retires it for `StringMap of V`):
   scores is ["alice" to 95, "bob" to 87]
   yell(scores.get("alice"))
 
-  // Int-key map
-  memo is imap of int to int
-  imap_set(memo, 1, 100)
-  yell(imap_get(memo, 1))
+  // Int-keyed map
+  memo is Map of int to int
+  memo.set(1, 100)
+  yell(memo.get(1))
 }
 ```
 
 ## Enums + Error Handling
 ```
+use std/string
+
 Result is
   Ok(value int)
-  | Err(message str)
+  | Err(message String)
 
 divide(a int, b int) Result {
   b eq 0 ?{ give Result.Err("division by zero") }
@@ -112,46 +117,53 @@ spark {
 ```
 
 ## Generics
+
+Word-style only — no `<T>` anywhere. Use `of` for one parameter
+and `of … to …` for two. See [`generics-syntax.md`](generics-syntax.md)
+for full rules.
+
 ```
-Box<T> is {
+use std/string
+
+Box of T is {
   value T
 }
 
-Box<T>.set(self ref Box<T>, v T) {
+Box.set(self ref Box of T, v T) {
   self.value be v
 }
 
-Box<T>.get(self Box<T>) T {
+Box.get(self Box of T) T {
   give self.value
 }
 
-Pair<K, V> is {
+Pair of K to V is {
   key K
   value V
 }
 
-Pair<K, V>.set_key(self ref Pair<K, V>, k K) {
+Pair.set_key(self ref Pair of K to V, k K) {
   self.key be k
 }
 
-Pair<K, V>.set_value(self ref Pair<K, V>, v V) {
+Pair.set_value(self ref Pair of K to V, v V) {
   self.value be v
 }
 
 spark {
   // Each instantiation produces its own emitted code:
-  //   Box<int>      -> _Box__int
-  //   Box<str>      -> _Box__str
-  //   Pair<str,int> -> _Pair__str__int
-  bi is Box<int>()
+  //   Box of int            -> _Box__int
+  //   Box of String         -> _Box__String
+  //   Pair of String to int -> _Pair__String__int
+  bi is Box of int
   bi.set(42)
   yell(bi.get())   // 42
 
-  bs is Box<str>()
+  bs is Box of String
   bs.set("hello")
   yell(bs.get())   // hello
 
-  p is Pair<str, int>()
+  p is Pair of String to int
   p.set_key("alice")
   p.set_value(95)
 }

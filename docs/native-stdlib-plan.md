@@ -1,5 +1,17 @@
 # Plan: native `std/map` (and the language work it requires)
 
+> **Status note (2026-05).** This document is the historical
+> record of the multi-phase effort that landed the IR backend,
+> the optimization passes, generics, and the first pure-Potato
+> stdlib. The active rewrite has moved to a different design
+> spec — see [`../OVERHAUL.md`](../OVERHAUL.md). The "resolved
+> as intentional dual-surface" notes below are superseded:
+> phases ε / ζ of the overhaul *do* delete the C-runtime
+> collection helpers and route every program through the
+> pure-Potato stdlib. Auto-import is still rejected (users
+> write `use std/list` etc.); the legacy `list` / `map` / `imap`
+> keyword forms get retired in phase ε.
+
 ## Status
 
 | Phase | Description | Status |
@@ -8,6 +20,9 @@
 | P1 | Methods on user types (full) | ✅ done |
 | P2 | Per-struct field resolution | ✅ done |
 | P3 | Generics + monomorphization | ✅ done |
+| P3.1 | Switch generics syntax from `<>` to `of`/`to` | ✅ done |
+| P3.3a | Byte-level mem primitives + write_bytes | ✅ done (then banned from user code in OVERHAUL β5) |
+| P3.4 | String literals lower to `String` struct value | ✅ done |
 | P4.1 | Fix IR heap-corruption bug (subsumed by P0) | ✅ done |
 | P4.2 | Cross-block, call-aware register allocation | ✅ done |
 | P4.3 | Switch IR to default backend; retire direct codegen | ✅ done (P4.3a–P4.3g) |
@@ -17,40 +32,15 @@
 | P5.3 | Escape analysis + stack allocation | ✅ done |
 | P5.4 | Bounds-check elimination (lower-bound; upper-bound deferred) | ✅ done |
 | P5.5 | Loop-invariant code motion (LICM) | ✅ done |
-| P6.0 | Raw memory primitives callable from Potato | ✅ done |
-| P3.1 | Switch generics syntax from `<>` to `of`/`to` | ✅ done |
-| P3.3a | Byte-level mem primitives + write_bytes | ✅ done |
-| P3.4 | String literals lower to `String` struct value | ✅ done |
-| P6.0b | Pure-Potato `std/string.ptt` (String + methods) | ✅ done |
-| P6.1 | Pure-Potato `std/list.ptt` (`List of T`) | ✅ done |
-| P6.2 | Pure-Potato `std/map.ptt` (`Map of int to V`) | ✅ done |
+| P6.0 | Raw memory primitives callable from Potato | ✅ done (then banned from user code in OVERHAUL β5) |
+| P6.0b | Pure-Potato `std/string.ptt` | ✅ done; rewritten against `array of byte` in OVERHAUL β4 |
+| P6.1 | Pure-Potato `std/list.ptt` | ✅ done; rewritten against `array of T` in OVERHAUL β1 |
+| P6.2 | Pure-Potato `std/map.ptt` | ✅ done; rewritten against `array of T` in OVERHAUL β2 |
 | P6.3 | Auto-construct for `X of T` no-paren form + recursive imports | ✅ done |
-| P3.5 | Operator dispatch routes to user methods | ✅ resolved (intentional dual-surface) |
-| P6.4 | Delete C list/map/imap builtins | ✅ resolved (intentional dual-surface) |
-| P3.3b | Delete C string runtime | ✅ resolved (intentional dual-surface) |
-| P6.0c | Migrate all .ptt to s.len() / s.eq() | ✅ resolved (intentional dual-surface) |
-
-**On the four "resolved-as-intentional" items.** The original
-goal of these phases was to eliminate the C-emitted runtime
-helpers entirely, leaving only pure-Potato implementations.
-Doing so requires every program to auto-load `std/string` /
-`std/list` / `std/map` so the user-Potato symbols are linkable.
-The user explicitly rejected auto-import.
-
-Without auto-import, the only way to ship those phases would be
-to break every existing program that uses `"a" + "b"` /
-`list of int` / `len(s)` without first writing `use std/...`.
-That regression is not acceptable. The intentional resolution:
-the C runtime stays as the implicit, always-available backing
-impl for the keyword surface and operator dispatch; the
-pure-Potato stdlib types provide the explicit, opt-in method-
-style surface. Both are tested and pass.
-
-This dual-surface design is documented and stable. If the
-language later gains operator overloading (currently out of
-scope, per the original plan doc) or if the auto-import
-constraint relaxes, the four items above can ship as a single
-follow-up commit that consolidates the surfaces.
+| P3.5 | Operator dispatch routes to user methods | scheduled — OVERHAUL phase ε / ζ |
+| P6.4 | Delete C list/map/imap builtins | scheduled — OVERHAUL phase ζ |
+| P3.3b | Delete C string runtime | scheduled — OVERHAUL phase ζ |
+| P6.0c | Migrate all .ptt files | ✅ string sweep done (OVERHAUL γ4); list/map sweep scheduled (ε) |
 
 After P3 the language can *express* `Map<K, V>` as pure Potato. P4 and P5
 are the performance work that earns parity with the C-emitted built-in

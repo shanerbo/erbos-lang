@@ -1,92 +1,143 @@
 # Potato Built-in Functions 🥔
 
+> **Status:** mid-overhaul. The free-function string builtins
+> (`str_len`, `str_eq`, `str_concat`, `int_to_str`, `char_at`) and
+> the kernel-layer names (`heap_alloc`, `mem_load`, etc.) have been
+> removed from user-callable namespace. The legacy `list` / `map` /
+> `imap` keyword forms are still accepted but scheduled for removal
+> in phase ε of [`OVERHAUL.md`](../OVERHAUL.md). User code should
+> prefer the stdlib types (`List of T`, `Map of K to V`,
+> `StringMap of V`).
+
 ## Output
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `yell(value)` | Print int or string with newline | `yell(42)`, `yell("hi")` |
+| `yell(value)` | Print a value with newline. Resolves at compile time on the static type — int / bool / byte → `_yell_int`, String → `_String_yell`, struct T → `_<T>_yell` (user-defined). | `yell(42)`, `yell("hi")`, `yell(c)` (where `Counter.yell(self Counter)` is defined) |
+
+Users overload `yell` on their own types by defining
+`Type.yell(self Type) { ... }`; subsequent `yell(value : Type)`
+calls resolve to it at compile time.
 
 ## Universal
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `len(value)` | Length of list, map, or string | `len(nums)`, `len("hi")` |
+| `len(value)` | Length of a legacy `list`, `map`, or `imap`. | `len(nums)` |
+
+`len()` on strings is gone — use `s.len()` (which dispatches to
+`String.len`). The free-function `len` will be retired in phase ε
+once the legacy collection keyword forms go.
 
 ## Strings
 
-| Function | Description | Example |
-|----------|-------------|---------|
-| `str_len(s)` | String length | `str_len("hello")` → 5 |
-| `char_at(s, i)` | Character at index | `char_at("abc", 1)` → "b" |
-| `str_concat(a, b)` | Concatenate strings | `str_concat("hi", " there")` |
-| `int_to_str(n)` | Convert int to string | `int_to_str(42)` → "42" |
-| `+` operator | String concat (when both str) | `"hi" + " there"` |
+`String` is a stdlib struct (in `std/string.ptt`); programs that
+manipulate strings explicitly write `use std/string` (or the
+bundle `use std/basics`).
 
-String interpolation: `"hello {name}"` works for both int and str variables.
+| Method / Operator | Description | Example |
+|---|---|---|
+| `s.len()` | byte length | `"hello".len()` → 5 |
+| `s.empty()` | true if zero-length | `s.empty()` |
+| `s.equals(t)` | byte-equality compare | `s.equals(t)` |
+| `s.byte_at(i)` | byte at index, as int | `"abc".byte_at(0)` → 97 |
+| `s.char_at(i)` | 1-byte String at index | `"abc".char_at(0)` eq `"a"` |
+| `s + t` | concatenation, returns a fresh String | `"hi" + " there"` |
+| `s eq t`, `s ne t` | structural equality / inequality | `s eq "hello"` |
+| `n.to_string()` | int → decimal String | `42.to_string()` |
+| `s.yell()`, `yell(s)` | print + newline | both emit `bl _String_yell` |
 
-## Lists
+String literals (`"..."`) lower to a 32-byte `String` header
+backed by an `array of byte`; the rodata bytes live behind a
+two-tier indirection (String → array of byte → bytes). The
+compiler knows the layout; user code only sees `String`.
+
+String interpolation `"hi {name}"` desugars to a chain of `+`
+operations — same `String.concat` path as explicit concatenation.
+
+## Lists (legacy keyword form, scheduled for removal in phase ε)
 
 | Function/Method | Description | Example |
 |----------|-------------|---------|
 | `list of T` | Create typed list | `nums is list of int` |
 | `.push(val)` | Append element | `nums.push(10)` |
 | `.pop()` | Remove and return last | `nums.pop()` |
-| `list_set(list, i, val)` | Set element at index | `list_set(nums, 0, 99)` |
 | `[a, b, c]` | List literal | `nums is [1, 2, 3]` |
 
-Lists are growable — no capacity limit.
+The pure-Potato replacement is `List of T` (in `std/list.ptt`).
+Both forms work today; ε will route literals through `List of T`
+and retire the keyword form.
 
-## Maps (string keys)
+## Maps (legacy keyword forms, scheduled for removal in phase ε)
 
-| Function/Method | Description | Example |
-|----------|-------------|---------|
-| `map of K to V` | Create typed map | `m is map of str to int` |
-| `.set(key, val)` | Insert/update entry | `m.set("x", 10)` |
-| `.get(key)` | Get value (0 if missing) | `m.get("x")` |
-| `.keys()` | Get list of keys | `m.keys()` |
-| `["k" to v, ...]` | Map literal | `["a" to 1, "b" to 2]` |
+| Form | Description |
+|---|---|
+| `map of str to V` | string-keyed map (legacy keyword) |
+| `imap of int to V` | int-keyed map (legacy keyword) |
+| `["k" to v, ...]` | string-key map literal |
 
-Maps are growable — no capacity limit. Ordered by insertion.
+The pure-Potato replacements are `StringMap of V` (in
+`std/string_map.ptt`) and `Map of K to V` (in `std/map.ptt`).
 
-## Maps (int keys)
-
-| Function | Description | Example |
-|----------|-------------|---------|
-| `imap of K to V` | Create int-key map | `m is imap of int to int` |
-| `imap_set(m, key, val)` | Set entry | `imap_set(m, 42, 100)` |
-| `imap_get(m, key)` | Get value (0 if missing) | `imap_get(m, 42)` |
-| `imap_len(m)` | Entry count | `imap_len(m)` |
+| Method | Description | Example |
+|---|---|---|
+| `.set(key, val)` | insert/update | `m.set("x", 10)` |
+| `.get(key)` | get value (0 if absent) | `m.get("x")` |
+| `.keys()` | list of keys | `m.keys()` |
 
 ## Structs
 
 | Syntax | Description | Example |
 |--------|-------------|---------|
-| `StructName()` | Heap-allocate struct | `Point()` |
-| `StructName<T1, ...>()` | Heap-allocate a generic instantiation | `Box<int>()`, `Map<str, int>()` |
-| `Type.method(self [ref] Type, ...)` | Define a method on a struct or enum (see [language guide](language-guide.md#methods)) | `Counter.bump(self ref Counter) { ... }` |
-| `Type<T>.method(self [ref] Type<T>, ...)` | Define a method on a generic type | `Box<T>.set(self ref Box<T>, v T) { ... }` |
+| `StructName()` | heap-allocate struct | `Point()` |
+| `Type.method(self [ref] Type, ...)` | define a method on a struct or enum | `Counter.bump(self ref Counter) { ... }` |
+| `StructName of T()` | constructor for a generic instantiation | `Box of int ()`, `Map of str to int ()` |
+| `Type of T.method(self [ref] Type of T, ...)` | method on a generic type | `Box of T.set(self ref Box of T, v T) { ... }` |
 
-## Tasks (concurrency)
+## Tasks (concurrency placeholder)
 
 | Syntax | Description | Example |
 |--------|-------------|---------|
-| `t is task()` | Create a task handle | `t is task()` |
-| `t.fire(fn(...))` | Schedule a call (currently runs synchronously in compiled output) | `t.fire(worker())` |
+| `t is task()` | create a task handle | `t is task()` |
+| `t.fire(fn(...))` | schedule a call (synchronous in compiled output today) | `t.fire(worker())` |
 
-> The green-thread runtime in `src/runtime.c` runs in `make test-runtime` only; it is not yet wired into compiled binaries.
+> The green-thread runtime in `src/runtime.c` runs in
+> `make test-runtime` only; it is not yet wired into compiled
+> binaries.
 
 ## Testing
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `assert(cond)` | Pass if true, fail with line | `assert(x eq 5)` |
+| `assert(cond)` | pass if true; on false print line + " assertion failed", exit 1 | `assert(x eq 5)` |
+
+`assert` is no longer a reserved keyword — it parses as a regular
+call but the checker recognises the name and emits the same
+`_assert_fail`-on-false path. Conceptually a `std/test` function.
 
 ## Standard Library
 
-Import with `use`:
+```
+use std/basics       // bundle: String + List + Map + StringMap
+use std/string       // String, String.* methods, int.to_string
+use std/list         // List of T
+use std/map          // Map of K to V (int / pointer-shaped K)
+use std/string_map   // StringMap of V (String keys with .equals)
+use std/math         // min, max, abs, pow
+use std/queue        // queue.new, push, pop, size, empty
+use std/stack        // stack.new, push, pop, peek, size, empty
+```
 
-```
-use std/math    // min, max, abs, pow
-use std/queue   // new, push, pop, size, empty
-use std/stack   // new, push, pop, peek, size, empty
-```
+## Banned from user code
+
+These names are compiler-internal; user code calling them errors
+with "unknown function":
+
+`heap_alloc`, `heap_free`, `mem_load`, `mem_store`,
+`mem_load_byte`, `mem_store_byte`, `write_bytes`, `panic_oob`,
+`panic_capacity`, `ptr_of`, `as_string`, `str_len`, `str_eq`,
+`str_concat`, `int_to_str`, `char_at`, `yell_str`.
+
+The compiler still emits direct `bl _<name>` to the runtime
+symbols when lowering language constructs — they're reachable
+from compiled output, just not from source.

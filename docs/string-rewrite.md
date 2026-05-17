@@ -1,5 +1,29 @@
 # Rewriting `str` as pure-Potato `String`
 
+> **Status (2026-05):** the design described in this document has
+> shipped through phase γ4 of [`../OVERHAUL.md`](../OVERHAUL.md).
+> `String` is the canonical type, `std/string.ptt` provides the
+> methods, literals lower to a 32-byte String header pointing at
+> a 16-byte `array of byte` header. Differences from the original
+> design:
+>
+> - **Storage layout** uses a two-tier indirection (String → array
+>   of byte → bytes), not a raw byte pointer in the String header
+>   directly. This was forced by the OVERHAUL ban on raw `mem_*`
+>   primitives in `.ptt` files: stdlib code reaches into the byte
+>   buffer through `array of byte` indexing instead.
+> - **No auto-import.** User code that wants `String` writes
+>   `use std/string` (or `use std/basics`). The user explicitly
+>   rejected the implicit-load design.
+> - **`yell(s)` resolution** happens at compile time on the
+>   argument's static type, not via a runtime magic-number check
+>   (γ1 in OVERHAUL). The `_yell_dispatch` shim in the runtime
+>   only handles legacy untyped values.
+> - **`assert` is no longer a reserved keyword** (γ3 in OVERHAUL).
+>
+> The body below is preserved as the original design record. Read
+> OVERHAUL.md for the as-shipped behaviour.
+
 The plan documented here replaces the C-emitted string runtime with
 a `String` type defined in `std/string.ptt`. After this rewrite,
 `int`, `bool`, and `nil` are the only primitive types in the

@@ -132,43 +132,57 @@ spark {
 
 ### Generics
 ```
-Box<T> is { value T }
+Box of T is { value T }
 
-Box<T>.set(self ref Box<T>, v T) {
+Box.set(self ref Box of T, v T) {
   self.value be v
 }
 
-Box<T>.get(self Box<T>) T {
+Box.get(self Box of T) T {
   give self.value
 }
 
 spark {
-  bi is Box<int>()
+  bi is Box of int
   bi.set(42)
-  bs is Box<str>()
+  bs is Box of String
   bs.set("hello")
   yell(bi.get())   // 42
   yell(bs.get())   // hello
 }
 ```
 
-Generic structs and methods (`Map<K, V>`, `Pair<K, V>`, etc.) are
-monomorphized at compile time — each concrete instantiation gets its
-own emitted code with a mangled symbol (`Box<int>` → `_Box__int`,
-`Pair<str, int>` → `_Pair__str__int`). No v-tables, no runtime cost.
+Word-style generics: `of` introduces one parameter, `of … to …`
+introduces a key→value pair. There is no `<T>` syntax anywhere
+in type position. Generic structs and methods are monomorphized
+at compile time — each concrete instantiation gets its own
+emitted code with a mangled symbol (`Box of int` → `_Box__int`,
+`Map of str to int` → `_Map__str__int`). No v-tables, no runtime cost.
+See [`docs/generics-syntax.md`](docs/generics-syntax.md) for the
+full rules.
 
 ### Collections
 ```
-nums is [1, 2, 3]         // list literal
-m is ["name" to "alice", "score" to 100]
-nums is list of int          // typed dynamic list
-nums.push(4)
-yell(nums.pop())
+use std/basics                // bundle: String + List + Map + StringMap
 
-m is map of str to int       // typed ordered map
+xs is List of int             // pure-Potato stdlib type
+xs.push(10)
+yell(xs.pop())
+
+m is StringMap of int         // String-keyed map
 m.set("key", 42)
 yell(m.get("key"))
+
+mi is Map of int to int       // int-keyed map
+mi.set(42, 100)
+yell(mi.get(42))
 ```
+
+The legacy keyword forms (`list of int`, `map of str to int`,
+`imap of int to int`, `[1,2,3]` literals) still work but are
+scheduled for removal in phase ε of the
+[overhaul plan](OVERHAUL.md). New code should use the stdlib
+types.
 
 ### Ownership & Safety
 ```
@@ -213,12 +227,13 @@ c is rep b          // clone — shallow copy (pointer copy)
 | `mod` | modulo |
 | `true` / `false` | booleans |
 | `nil` | null pointer |
-| `list` / `map` / `imap` | collection types (`list of int`, `map of str to int`, `imap of int to int`) |
+| `array` | typed-storage primitive (`array of T`, `array of byte`) |
+| `of` / `to` | word-style generic connectives (`Box of T`, `Map of K to V`) |
+| `list` / `map` / `imap` | legacy collection-type keywords (scheduled for removal in phase ε of [`OVERHAUL.md`](OVERHAUL.md)) |
 | `match` | pattern match on enum |
 | `use` / `as` | import module / alias |
-| `test` / `assert` | built-in test framework |
+| `test` | built-in test block (`assert` is now a stdlib function, not a keyword) |
 | `task` | concurrency handle (runtime not yet integrated) |
-| `<T>` / `<K, V>` | generic type parameters on struct or method |
 
 ---
 
@@ -269,7 +284,7 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 | Method syntax (obj.method()) | ✅ |
 | User-defined methods on structs and enums (`Type.name(self ...)`) | ✅ |
 | Per-struct field resolution (typed receivers; ambiguity is a compile error) | ✅ |
-| Generics + monomorphization (`Box<T>`, `Map<K, V>`, …) | ✅ |
+| Generics + monomorphization (`Box of T`, `Map of K to V`, …) | ✅ |
 | Scoped blocks ({} for lifetimes) | ✅ |
 | RAII (heap freed at scope end) | ✅ |
 | Enums + `match` pattern matching | ✅ |
@@ -285,8 +300,8 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 | `ref` enforcement | Non-ref struct params cannot be mutated (compile error). |
 | Green thread runtime | Separate C library (`src/runtime.c`). Not integrated into compiled `.ptt` output. |
 | Channels | Separate C library (`src/channel.c`). Not integrated into compiled output. |
-| String comparison (eq/ne) | Uses `_str_eq` when checker detects both operands are str. |
-| Experimental SSA IR backend (`erbos ir <file>`) | Stack-frame layout fixed, struct field access works across calls. Lists / maps / enums on this path still need targeted tests; cross-block regalloc is the next piece (see `docs/ir-pipeline.md` and `docs/native-stdlib-plan.md`). |
+| Pure-Potato stdlib (`std/string`, `std/list`, `std/map`, `std/string_map`) | Shipped as the canonical method-style surface. The legacy `list` / `map` / `imap` keyword forms still work behind the same C runtime; phase ε of [`OVERHAUL.md`](OVERHAUL.md) retires them. |
+| `array of T` / `array of byte` | Typed-storage primitives — what the stdlib types are built on. |
 
 ### Planned (v0.2+)
 | Feature | Status |
@@ -295,8 +310,7 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 | Result/Option as built-in types | — |
 | Traits / interfaces | — |
 | Operator overloading | — |
-| Optimization passes (inlining, SRA, escape analysis, BCE, LICM) | P5 |
-| Pure-Potato `std/map` (replacing the C-emitted `_map_*` builtins) | P6 |
+| Phase ε / ζ of overhaul: drop legacy `list`/`map`/`imap` keywords + delete dead C runtime | see [`OVERHAUL.md`](OVERHAUL.md) |
 | Self-hosting | — |
 
 ---
@@ -346,18 +360,25 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 - [x] Cross-block / call-aware register allocation in the IR backend
 - [x] Switch IR to default backend; retire the direct codegen
 - [x] iropt scaffold + `-O0`/`-O1`/`-O2` CLI flags
+- [x] Optimization passes: inlining, SRA, escape analysis, BCE, LICM
+- [x] Pure-Potato `std/list`, `std/map`, `std/string_map`, `std/string` (against `array of T`)
+- [x] `spark` reserved keyword; `assert` demoted to stdlib function
+- [x] Compile-time `yell` overload (resolves on static argument type)
+- [ ] Drop legacy `list` / `map` / `imap` keyword forms (phase ε)
+- [ ] Delete dead C runtime helpers (phase ζ)
 - [ ] Deep clone for `rep`
 - [ ] Result/Option as built-in types
 - [ ] Traits / interfaces
 - [ ] Operator overloading
 - [ ] Compile-time evaluation
 - [ ] Built-in `fmt`
-- [ ] Optimization passes: inlining, SRA, escape analysis, BCE, LICM
-- [ ] Pure-Potato `std/map`, `std/list` (replacing C-emitted builtins)
 - [ ] Green-thread runtime integration in compiled output
 - [ ] Self-hosting (compiler written in Potato)
 
-The full multi-phase plan is in [`docs/native-stdlib-plan.md`](docs/native-stdlib-plan.md).
+The active overhaul plan with locked design decisions and per-phase
+status is in [`OVERHAUL.md`](OVERHAUL.md). The earlier multi-phase
+plan that got us to the current point is in
+[`docs/native-stdlib-plan.md`](docs/native-stdlib-plan.md).
 
 ---
 
@@ -388,7 +409,10 @@ spark {
 }
 ```
 
-Standard library: `std/math`, `std/queue`, `std/stack`
+Standard library:
+- `std/basics` — bundle (`String` + `List` + `Map` + `StringMap`)
+- `std/string`, `std/list`, `std/map`, `std/string_map`
+- `std/math`, `std/queue`, `std/stack`
 
 ---
 
@@ -408,11 +432,11 @@ five planned passes (inlining, SRA, escape analysis, bounds-check
 elimination, loop-invariant code motion) plug in as one entry each as
 they land.
 
-The **Monomorph** pass (`src/monomorph.c`) instantiates every concrete generic form (`Box<int>`, `Map<str, int>`, …) before type checking, so the rest of the pipeline only ever sees fully-specialised types. Names are mangled inside-out: `List<Pair<str, int>>` becomes the symbol `_List__Pair__str__int`.
+The **Monomorph** pass (`src/monomorph.c`) instantiates every concrete generic form (`Box of int`, `Map of str to int`, …) before type checking, so the rest of the pipeline only ever sees fully-specialised types. Names are mangled inside-out: `List of Pair of str to int` becomes the symbol `_List__Pair__str__int`.
 
 The **IR backend** is the only backend. The legacy AST-walking direct codegen was retired after the IR pipeline reached behavioural parity on every program in the test corpus (see `docs/ir-pipeline.md`). The IR uses cross-block, call-aware register allocation: vregs whose live range crosses a `bl` are placed in callee-save registers (x19..x28) with proper prologue saves, while shorter-lived values use the temporary range (x8, x11..x18; x9 and x10 are reserved as scratch for frame addressing).
 
-`erbos ir <file.ptt>` emits the .s only, useful for inspecting generated assembly. Runtime helpers (yell, heap allocator, str/list/map/imap operations, panic and assert handlers) are emitted from `src/runtime_emit.c` as raw ARM64 assembly; they will progressively be replaced by pure-Potato implementations as the optimization passes (`docs/native-stdlib-plan.md`) make user-Potato performance competitive.
+`erbos ir <file.ptt>` emits the .s only, useful for inspecting generated assembly. Runtime helpers (yell, heap allocator, panic and assert handlers, plus the legacy list/map/imap collection helpers and a String shim) are emitted from `src/runtime_emit.c` as raw ARM64 assembly. The pure-Potato stdlib (`std/list`, `std/map`, `std/string_map`, `std/string`) provides the canonical method-style surface; phase ζ of [`OVERHAUL.md`](OVERHAUL.md) deletes the remaining C-runtime collection helpers once phase ε retires the legacy keyword forms that still depend on them.
 
 ---
 
