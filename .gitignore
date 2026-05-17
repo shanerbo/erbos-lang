@@ -4,11 +4,11 @@ erbos
 # Object files
 *.o
 
-# Generated assembly (anywhere except hand-written runtime under src/)
+# Generated assembly (anywhere except the hand-written runtime).
 /*.s
 examples/**/*.s
 tests/**/*.s
-# (src/runtime_asm.s is real source and is intentionally tracked)
+# (compiler/runtime/runtime_asm.s is real source and is intentionally tracked)
 
 # Compiled examples
 examples/hello

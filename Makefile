@@ -1,12 +1,21 @@
 CC = cc
 CFLAGS = -Wall -Wextra -std=c11
-SRC = src/main.c src/lexer.c src/parser.c src/monomorph.c src/checker.c src/optimizer.c src/runtime_emit.c src/irgen.c src/iropt.c src/regalloc.c src/iremit.c
+
+# Compiler frontend (the `erbos` binary).
+COMPILER_SRC = compiler/main.c compiler/lexer.c compiler/parser.c compiler/monomorph.c compiler/checker.c compiler/optimizer.c compiler/runtime_emit.c compiler/irgen.c compiler/iropt.c compiler/regalloc.c compiler/iremit.c
+
+# Green-thread runtime + channels — a separate C library that's
+# only linked into the runtime / channel C tests today (not yet
+# wired into compiled .ptt output).
+RUNTIME_SRC = compiler/runtime/runtime.c compiler/runtime/runtime_asm.s
+CHANNEL_SRC = compiler/runtime/channel.c
+
 OUT = erbos
 
 all: $(OUT)
 
-$(OUT): $(SRC) src/*.h
-	$(CC) $(CFLAGS) -o $(OUT) $(SRC)
+$(OUT): $(COMPILER_SRC) compiler/*.h
+	$(CC) $(CFLAGS) -o $(OUT) $(COMPILER_SRC)
 
 clean:
 	rm -f $(OUT) *.o *.s examples/*.s examples/*.o tests/ir/*.s tests/ir/*.o
@@ -106,9 +115,9 @@ test-ir: $(OUT)
 
 test-runtime:
 	@echo "=== Runtime C tests ==="
-	@$(CC) $(CFLAGS) -Isrc -pthread -o tests/test_runtime tests/test_runtime.c src/runtime.c src/runtime_asm.s
+	@$(CC) $(CFLAGS) -Icompiler/runtime -pthread -o tests/test_runtime tests/test_runtime.c $(RUNTIME_SRC)
 	@./tests/test_runtime > /dev/null && echo "  OK:   test_runtime" || echo "  FAIL: test_runtime"
-	@$(CC) $(CFLAGS) -Isrc -o tests/test_channel tests/test_channel.c src/runtime.c src/channel.c src/runtime_asm.s
+	@$(CC) $(CFLAGS) -Icompiler/runtime -o tests/test_channel tests/test_channel.c $(RUNTIME_SRC) $(CHANNEL_SRC)
 	@./tests/test_channel > /dev/null && echo "  OK:   test_channel" || echo "  FAIL: test_channel"
 	@rm -f tests/test_runtime tests/test_channel
 
