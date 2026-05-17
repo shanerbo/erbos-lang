@@ -906,3 +906,89 @@ that tries the alias form will hit the new error.
 - `tests/test_alias_rules.ptt` — 6 framework tests verifying
   primitive plain `is` still copies, `is now` transfers, and
   `is rep` deep-clones (for both struct and List sources).
+
+---
+
+## Spudlock-driven fixes (real-project test pass)
+**Date:** 2026-05-17
+**Status:** decided (shipped — commits `0acd587`, `c0cfb1e`,
+`deabcc9`, `1782054`)
+**Decision:** Drove the compiler against a substantial real
+project (Spudlock — a dependency resolver with versions,
+constraints, conflicts, cycles, build planning) and shipped
+fixes for every reproducible bug it surfaced.
+
+### Why this matters
+
+Synthetic tests verified individual features. Spudlock
+exercises *combinations*: `through (x in struct.list_of_T)`
+flowing into a `match` arm whose binding's method is called.
+Bugs in that combined path were invisible to feature-isolated
+tests. Real-project testing is the only way to find them.
+
+### What was wrong
+
+Six classes of bug, all real, all fixed:
+
+1. **Parser oversights** — `--help` not recognized; multiline
+   named-arg constructors rejected; `field be now src`
+   rejected; `module.func(ref x, ...)` rejected at call site;
+   `field is List of T` (no parens) rejected as a value.
+
+2. **`erbos ir` artifacts** — output `.s` written next to source.
+   Now writes to cwd (build mode unchanged).
+
+3. **Type inference for stdlib generics as struct fields** —
+   `parse_type_str("List__Item")` was lossy (val_type=NULL),
+   so `through (x in h.items)` left x as TYPE_UNKNOWN and
+   field accesses on x were miscategorized as int. Symptom:
+   `x.name + "..."` failed with "String + int."
+
+4. **Field access on UNKNOWN-typed receivers** always returned
+   TYPE_INT instead of looking up the actual declared field
+   type. Compounded with #3 to turn String fields into ints.
+
+5. **NODE_MATCH was never visited by the checker.** Match-arm
+   binding parameters had no symbol-table entries, so method
+   dispatch on them (e.g. `count.to_string()` for `Success(count
+   int)`) hit the unknown-receiver fallback and emitted
+   `bl _to_string` (undefined). This was the root cause of
+   spudlock's "program stops after first failure result" and
+   "second test in file skipped" symptoms.
+
+6. **`field be now obj.field2`** was overzealously rejected
+   (required IDENT RHS). Spudlock's
+   `out.order be now ctx.order` is the canonical drain pattern
+   at end of a function. Relaxed: pointer transfer works; we
+   just can't mark a struct field as moved (move tracking is
+   at symbol level only).
+
+### What's interesting about the bug clustering
+
+Issues 4, 6, 7, 10, 11, 12 in the user's original report all
+turned out to be downstream of (3), (4), and (5). The match-
+binding bug in particular was masquerading as multiple
+unrelated symptoms (tests skipping, programs exiting early,
+linker errors for `_to_string`) because a missing type leads
+to wrong symbol resolution leads to undefined references, in
+varying patterns depending on which method was called.
+
+### Tests
+
+- `tests/test_spudlock_fixes.ptt` — 3 framework tests for
+  multiline named-args, `field be now`, `field be rep`.
+- `tests/test_spudlock_module_ref.ptt` — 2 tests for
+  module-qualified call-site `ref`.
+- `tests/test_through_field_typing.ptt` — 2 tests for type
+  inference through generic-stdlib struct fields.
+- `tests/test_match_binding_types.ptt` — 3 tests for
+  match-arm binding parameters typing correctly so methods
+  dispatch right.
+
+### What this teaches us
+
+Real-project testing surfaces bugs that minimal repros
+can't. The cost-benefit of building one substantial example
+program early in a language's life is large. We should keep
+spudlock-style testing in the loop — when a major feature
+ships, run it through spudlock before declaring it done.

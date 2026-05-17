@@ -432,11 +432,21 @@ match r {
 // RAII: auto-free at scope end
 { p is Point(); p.x be 42 }  // p freed here
 
-// Move
-b is now a                    // a is dead
+// Move — `a` is inaccessible after this; reads error
+b is now a
 
-// Deep clone — fresh independent copy
+// Deep clone — fresh independent block; both `b` and `c` alive
 c is rep b
+
+// Plain alias for heap values is rejected — be explicit:
+//   d is c          // COMPILE ERROR for struct/list/map/string/array
+//   d is now c      // OK — moves
+//   d is rep c      // OK — clones
+
+// `field be now src` / `field be rep src` for the same on
+// struct fields:
+out.items be now ctx.items   // transfer ctx's list into out
+out.config be rep cfg        // independent copy of cfg
 
 // Ref params (mutable borrow)
 reset(p ref Point) { p.x be 0 }
@@ -444,6 +454,10 @@ reset(ref pt)                 // caller acknowledges
 ```
 
 > `ref` is enforced: mutating a non-ref struct parameter is a compile error.
+
+Primitives (`int`, `bool`, `byte`) copy by value, so plain
+`b is a` is fine for them. The explicit-aliasing rule applies
+only to heap-shaped values (struct, List, Map, array, String).
 
 ## Larger programs — the `App` pattern
 

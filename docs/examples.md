@@ -2,6 +2,8 @@
 
 ## Hello World
 ```
+use std/string
+
 spark {
   yell("hello world")
 }
@@ -9,6 +11,8 @@ spark {
 
 ## FizzBuzz
 ```
+use std/string
+
 spark {
   through (i from 1 to 100 by 1) {
     i mod 15 eq 0 ?{

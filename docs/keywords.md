@@ -12,7 +12,7 @@ name resolved by `use`.
 | `nomut` | immutable binding (no reassignment, no direct field mutation) | `nomut p is Point(x is 0, y is 0)` |
 | `give` | return value | `give x + y` |
 | `now` | move ownership | `b is now a` |
-| `rep` | clone (shallow) | `b is rep a` |
+| `rep` | deep clone | `b is rep a` |
 | `ref` | mutable borrow param | `func(p ref Point)` |
 | `through` | range/collection loop | `through (i from 0 to 10 by 1) { }` |
 | `from` / `to` / `by` | loop range | see `through` |

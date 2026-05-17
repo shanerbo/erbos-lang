@@ -207,13 +207,19 @@ Keyword + operator tables: [`docs/keywords.md`](docs/keywords.md).
 
 **Implemented.** Integer/bool/byte arithmetic. Strings + interpolation.
 Functions, recursion, type inference. Structs (zero-default +
-named-arg construction). Lists, maps (String- or int-keyed),
-arrays. Conditionals, range/collection/while loops. Move semantics
-with use-after-move detection. `nomut` (rebind + field-mut).
-Methods (with `ref self` for mutation). Generics + monomorphization.
-Enums + `match`. Multi-file imports. Built-in test framework.
-Five-pass IR optimizer (inlining, SRA, escape analysis, BCE, LICM).
-Bounds-checked array/list/map access.
+named-arg construction; struct-typed fields auto-init).
+Lists, maps (String- or int-keyed), arrays. Conditionals,
+range/collection/while loops. Move semantics with use-after-move
+detection. **Deep clone via `is rep`.** Plain `q is p` for heap-shaped
+values rejected (must use `now` or `rep` explicitly). `nomut`
+(rebind + field-mut). Methods (with `ref self` for mutation).
+Generics + monomorphization. Enums + `match` with typed bindings.
+Multi-file imports with `potato.toml` project root. Stdlib
+(`std/string`, `std/list`, `std/map`, `std/math`, `std/queue`,
+`std/stack`, `std/basics`) bundled with the compiler binary.
+Built-in test framework. Five-pass IR optimizer (inlining, SRA,
+escape analysis, BCE, LICM). Bounds-checked array/list/map access.
+Helpful import-error messages (suggests `potato.toml`, etc.).
 
 **In flight.**
 - Green-thread runtime exists in `compiler/runtime/` but isn't

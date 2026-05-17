@@ -9,10 +9,10 @@ A systems language that reads like English (`is`, `be`, `give`,
 `through`), compiles to native ARM64 macOS, has no garbage
 collector, no runtime, no libc dependency. Written in C11. Source
 files use the `.ptt` extension. Mature enough for real programs
-(stdlib + leetcode tests + IR optimizer) but pre-1.0 — language
-shape is still moving. Major 2025–2026 overhaul (typed arrays,
-pure-Potato stdlib, keyword retirement, framework-only testing)
-all shipped.
+(stdlib + leetcode + spudlock dependency-resolver demo + IR
+optimizer) but pre-1.0 — language shape is still moving. Major
+2025–2026 overhaul (typed arrays, pure-Potato stdlib, keyword
+retirement, framework-only testing) all shipped.
 
 ## Hard rules — non-negotiable
 

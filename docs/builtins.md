@@ -16,10 +16,13 @@ calls resolve to it at compile time.
 
 ## Strings
 
-`String` is a stdlib struct (`std/string.ptt`). String literals
-(`"..."`) are typed as `String` directly — no import needed for
-the literal type itself, though explicit method calls require
-`use std/string` (or the bundle `use std/basics`).
+`String` is a stdlib struct (`std/string.ptt`). Every program
+that uses `String` must include `use std/string` (or the bundle
+`use std/basics`). String literals (`"..."`) compile to a String
+header even without the import — the compiler-runtime built-in
+`_String_yell` makes bare `yell("hi")` work — but any *method*
+call (`s.len()`, `s.equals(t)`, `n.to_string()`) needs the
+import to resolve to the user-defined `String.*` methods.
 
 | Method / Operator | Description | Example |
 |---|---|---|
