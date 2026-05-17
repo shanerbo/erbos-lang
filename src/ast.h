@@ -136,10 +136,16 @@ struct Node {
         } through_range;
 
         // NODE_THROUGH_IN
+        // method_struct (ε6): if set, the iteration uses
+        // <method_struct>_len + <method_struct>_get instead of the
+        // legacy header-layout decode (count@8, data@16). Set by
+        // the checker for stdlib container types (List, Map,
+        // StringMap) whose backing storage is an `array of T` field.
         struct {
             char *var_name;
             Node *collection;
             Node *body;
+            char *method_struct;
         } through_in;
 
         // NODE_INFI
@@ -202,7 +208,12 @@ struct Node {
         // and the legacy list layout (cap/count/data at offsets
         // 0/8/16); is_byte selects the element-size 1 path with
         // ldrb/strb instead of the default 8-byte ldr/str.
-        struct { Node *object; Node *index; int is_array; int is_byte; } index_access;
+        // method_struct (ε5): if set, the index access dispatches
+        // to `<method_struct>_get(obj, idx)` instead of using the
+        // header layout — used for stdlib `List of T` / `Map of K
+        // to V` / `StringMap of V` whose backing storage is itself
+        // an `array of T` field, not a flat header.
+        struct { Node *object; Node *index; int is_array; int is_byte; char *method_struct; } index_access;
 
         // NODE_LIST_LIT
         struct { Node **items; int count; } list_lit;
@@ -218,12 +229,15 @@ struct Node {
 
         // NODE_INDEX_ASSIGN (α6/α8): `arr[i] be v` / `xs[i] = v`.
         // Same shape as NODE_INDEX but with a value to write.
+        // method_struct (ε5): if set, `obj[i] be v` dispatches to
+        // `<method_struct>_set(obj, i, v)`.
         struct {
             Node *object;
             Node *index;
             Node *value;
             int is_array;
             int is_byte;
+            char *method_struct;
         } index_assign;
 
         // NODE_ENUM_DEF

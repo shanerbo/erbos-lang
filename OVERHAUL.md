@@ -378,15 +378,28 @@ on completion. Don't redo a checked task.
 - [ ] **ε4** Map literal `["a" to 1, "b" to 2]` lowers to
       `StringMap of int` constructor + sets.
       Acceptance: requires `use std/string_map`; tests pass.
-- [ ] **ε5** `xs[i]` and `xs[i] be v` dispatch to `List.get` /
-      `List.set` (or `Map.get` / `Map.set` / `StringMap.get` /
-      `StringMap.set`). Drop hardcoded `_list_get` /
-      `_list_set` lowering.
-      Acceptance: existing indexing callsites work.
-- [ ] **ε6** `through (x in xs)` dispatches to `List.len` +
-      `List.get`. Drop hardcoded `_list_len` call in iteration
-      lowering.
-      Acceptance: existing iteration tests pass.
+- [x] **ε5** `xs[i]` and `xs[i] be v` dispatch to `<Type>_get` /
+      `<Type>_set` when the receiver's static type is one of the
+      stdlib container structs (`List`, `Map`, `StringMap`, with
+      or without monomorph mangling). The checker tags the
+      `NODE_INDEX` / `NODE_INDEX_ASSIGN` node with
+      `method_struct = <mangled_struct_name>`; irgen sees the tag
+      and emits `bl _<mangled>_get` (or `_set`) instead of decoding
+      the legacy header layout. The legacy `list` / `map` keyword
+      receivers continue to use the inline-bounds-check path.
+      User structs that happen to define `.get` don't auto-route
+      through `[]` — only the three known stdlib container names
+      (matched by prefix `List__` / `Map__` / `StringMap__` plus
+      bare `List` / `Map` / `StringMap`) do.
+      Acceptance: `xs[0]` on `List of int` reads the right element;
+      `xs[0] be v` writes through `List.set`; `make test` green.
+- [x] **ε6** `through (x in xs)` for stdlib containers dispatches
+      to `<Type>_len` (loop-bound) + `<Type>_get` (element load).
+      Same checker-tag mechanism as ε5 (`NODE_THROUGH_IN.method_struct`).
+      Element type comes from the struct's val_type when set.
+      Acceptance: `through (x in nums)` on `List of int` produces
+      the right values; legacy `list` / `map` iteration unchanged;
+      `make test` green.
 
 ### Phase ζ — Delete dead C runtime
 

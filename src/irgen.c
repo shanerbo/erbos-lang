@@ -620,19 +620,32 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
         }
 
         case NODE_INDEX: {
-            // xs[i]. Two layouts:
+            // xs[i]. Three layouts:
             //   list  (legacy keyword-form): cap@0, count@8, data@16.
-            //         Bounds check uses count; data offset 16.
             //   array (α5):                  cap@0, data@8.
-            //         Bounds check uses cap; data offset 8.
-            // Selected by checker via index_access.is_array.
+            //   stdlib container (ε5):        dispatch to <Type>_get(xs, i).
+            // Selected by the checker via index_access.is_array
+            // (legacy/array decision) and index_access.method_struct
+            // (stdlib container — when set, supersedes the layout
+            // decoding entirely).
             //
-            // Bounds-check: panic if i < 0 or i >= bound. Two CFG
-            // blocks per check (panic and ok); the panic block calls
-            // _panic_oob and falls back to a branch to the ok block
-            // for CFG-completeness even though _panic_oob exits the
-            // process. The bounds-check-elimination pass (P5.4) can
-            // remove these when the index range is provably safe.
+            // The two layout paths bounds-check inline (panic if
+            // i < 0 or i >= bound). The stdlib method path delegates
+            // bounds checking to the user-method body.
+            if (n->index_access.method_struct) {
+                VReg obj = gen_expr(c, n->index_access.object);
+                VReg idx = gen_expr(c, n->index_access.index);
+                VReg *args = malloc(2 * sizeof(VReg));
+                args[0] = obj;
+                args[1] = idx;
+                char sym[256];
+                snprintf(sym, sizeof(sym), "%s_get",
+                    n->index_access.method_struct);
+                VReg dst = new_vreg(c);
+                emit(c, (IRInst){.op = IR_CALL, .dst = dst,
+                    .str = strdup(sym), .args = args, .arg_count = 2});
+                return dst;
+            }
             VReg obj = gen_expr(c, n->index_access.object);
             VReg idx = gen_expr(c, n->index_access.index);
 
@@ -993,6 +1006,26 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
             // α6: arr[i] be v / xs[i] be v.
             // Same shape as NODE_INDEX read: bounds-checked typed
             // store. Layout differs by is_array tag (set by checker).
+            // ε5: when index_assign.method_struct is set the access
+            // dispatches to <Type>_set(obj, idx, val) instead.
+            // This sits in gen_stmt (statement context) so we just
+            // emit the call and break; no value is returned.
+            if (n->index_assign.method_struct) {
+                VReg obj = gen_expr(c, n->index_assign.object);
+                VReg idx = gen_expr(c, n->index_assign.index);
+                VReg val = gen_expr(c, n->index_assign.value);
+                VReg *args = malloc(3 * sizeof(VReg));
+                args[0] = obj;
+                args[1] = idx;
+                args[2] = val;
+                char sym[256];
+                snprintf(sym, sizeof(sym), "%s_set",
+                    n->index_assign.method_struct);
+                VReg dummy = new_vreg(c);
+                emit(c, (IRInst){.op = IR_CALL, .dst = dummy,
+                    .str = strdup(sym), .args = args, .arg_count = 3});
+                break;
+            }
             VReg val = gen_expr(c, n->index_assign.value);
             VReg obj = gen_expr(c, n->index_assign.object);
             VReg idx = gen_expr(c, n->index_assign.index);
@@ -1190,39 +1223,62 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
 
             emit(c, (IRInst){.op = IR_BR, .label = cond_lbl});
 
-            // Condition: idx < count(coll). Header layout:
-            //   [cap | count | data_ptr], so count is at offset 8.
+            // Condition: idx < count(coll). Two paths:
+            //   ε6 stdlib container: count = <Type>_len(coll).
+            //   legacy:              count = coll[8] (header layout).
+            const char *ms = n->through_in.method_struct;
             IRBlock *cond_b = new_block(c);
             cond_b->label = cond_lbl;
             switch_block(c, cond_b);
             VReg coll_v = new_vreg(c);
             emit(c, (IRInst){.op = IR_LOAD_LOCAL, .dst = coll_v, .imm = coll_slot});
             VReg count = new_vreg(c);
-            emit(c, (IRInst){.op = IR_LOAD, .dst = count, .a = coll_v, .imm = 8});
+            if (ms) {
+                VReg *args = malloc(sizeof(VReg));
+                args[0] = coll_v;
+                char sym[256];
+                snprintf(sym, sizeof(sym), "%s_len", ms);
+                emit(c, (IRInst){.op = IR_CALL, .dst = count,
+                    .str = strdup(sym), .args = args, .arg_count = 1});
+            } else {
+                emit(c, (IRInst){.op = IR_LOAD, .dst = count, .a = coll_v, .imm = 8});
+            }
             VReg idx_v = new_vreg(c);
             emit(c, (IRInst){.op = IR_LOAD_LOCAL, .dst = idx_v, .imm = idx_slot});
             VReg cmp = new_vreg(c);
             emit(c, (IRInst){.op = IR_CMP_LT, .dst = cmp, .a = idx_v, .b = count});
             emit(c, (IRInst){.op = IR_BR_COND, .a = cmp, .label = body_lbl, .label2 = end_lbl});
 
-            // Body: load data_ptr[idx*8] into the user's loop var.
+            // Body: load element. Two paths:
+            //   ε6 stdlib container: elem = <Type>_get(coll, idx).
+            //   legacy:              elem = data_ptr[idx*8] from header.
             IRBlock *body_b = new_block(c);
             body_b->label = body_lbl;
             switch_block(c, body_b);
             VReg coll_v2 = new_vreg(c);
             emit(c, (IRInst){.op = IR_LOAD_LOCAL, .dst = coll_v2, .imm = coll_slot});
-            VReg data_ptr = new_vreg(c);
-            emit(c, (IRInst){.op = IR_LOAD, .dst = data_ptr, .a = coll_v2, .imm = 16});
             VReg idx_v2 = new_vreg(c);
             emit(c, (IRInst){.op = IR_LOAD_LOCAL, .dst = idx_v2, .imm = idx_slot});
-            VReg eight = new_vreg(c);
-            emit(c, (IRInst){.op = IR_CONST, .dst = eight, .imm = 8});
-            VReg byte_off = new_vreg(c);
-            emit(c, (IRInst){.op = IR_MUL, .dst = byte_off, .a = idx_v2, .b = eight});
-            VReg elem_addr = new_vreg(c);
-            emit(c, (IRInst){.op = IR_ADD, .dst = elem_addr, .a = data_ptr, .b = byte_off});
             VReg elem = new_vreg(c);
-            emit(c, (IRInst){.op = IR_LOAD, .dst = elem, .a = elem_addr, .imm = 0});
+            if (ms) {
+                VReg *args = malloc(2 * sizeof(VReg));
+                args[0] = coll_v2;
+                args[1] = idx_v2;
+                char sym[256];
+                snprintf(sym, sizeof(sym), "%s_get", ms);
+                emit(c, (IRInst){.op = IR_CALL, .dst = elem,
+                    .str = strdup(sym), .args = args, .arg_count = 2});
+            } else {
+                VReg data_ptr = new_vreg(c);
+                emit(c, (IRInst){.op = IR_LOAD, .dst = data_ptr, .a = coll_v2, .imm = 16});
+                VReg eight = new_vreg(c);
+                emit(c, (IRInst){.op = IR_CONST, .dst = eight, .imm = 8});
+                VReg byte_off = new_vreg(c);
+                emit(c, (IRInst){.op = IR_MUL, .dst = byte_off, .a = idx_v2, .b = eight});
+                VReg elem_addr = new_vreg(c);
+                emit(c, (IRInst){.op = IR_ADD, .dst = elem_addr, .a = data_ptr, .b = byte_off});
+                emit(c, (IRInst){.op = IR_LOAD, .dst = elem, .a = elem_addr, .imm = 0});
+            }
             set_local(c, n->through_in.var_name, elem);
             gen_block(c, n->through_in.body);
             emit(c, (IRInst){.op = IR_BR, .label = inc_lbl});

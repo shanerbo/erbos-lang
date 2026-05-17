@@ -734,8 +734,28 @@ static Type check_expr(Checker *c, Node *n) {
             // and element-size 1 instead of 8.
             n->index_access.is_byte = (obj_t.kind == TYPE_ARRAY &&
                 obj_t.elem_type && obj_t.elem_type->kind == TYPE_BYTE);
+            // ε5: stdlib container types (List of T, Map of K to V,
+            // StringMap of V) are TYPE_STRUCT in the checker. Post-
+            // monomorph their struct name is mangled, e.g.
+            // "List__int" or "StringMap__int". Tag the index access
+            // so irgen routes `xs[i]` to `<Type>_get(xs, i)` instead
+            // of decoding the legacy list header layout. We match
+            // by prefix on the mangled name — only the three known
+            // stdlib container names get this treatment.
+            if (obj_t.kind == TYPE_STRUCT && obj_t.struct_name) {
+                const char *sn = obj_t.struct_name;
+                if (!strncmp(sn, "List__", 6) || !strcmp(sn, "List") ||
+                    !strncmp(sn, "Map__", 5) || !strcmp(sn, "Map") ||
+                    !strncmp(sn, "StringMap__", 11) || !strcmp(sn, "StringMap")) {
+                    n->index_access.method_struct = strdup(sn);
+                }
+            }
             // Return element type if known
             if (obj_t.elem_type) return *obj_t.elem_type;
+            // ε5: for List of T, the element type is the type
+            // parameter — read it off val_type when available.
+            if (obj_t.kind == TYPE_STRUCT && obj_t.val_type)
+                return *obj_t.val_type;
             return make_type(TYPE_UNKNOWN);
         }
         case NODE_INDEX_ASSIGN: {
@@ -745,6 +765,15 @@ static Type check_expr(Checker *c, Node *n) {
             n->index_assign.is_array = (obj_t.kind == TYPE_ARRAY);
             n->index_assign.is_byte = (obj_t.kind == TYPE_ARRAY &&
                 obj_t.elem_type && obj_t.elem_type->kind == TYPE_BYTE);
+            // ε5: same struct-method routing as NODE_INDEX.
+            if (obj_t.kind == TYPE_STRUCT && obj_t.struct_name) {
+                const char *sn = obj_t.struct_name;
+                if (!strncmp(sn, "List__", 6) || !strcmp(sn, "List") ||
+                    !strncmp(sn, "Map__", 5) || !strcmp(sn, "Map") ||
+                    !strncmp(sn, "StringMap__", 11) || !strcmp(sn, "StringMap")) {
+                    n->index_assign.method_struct = strdup(sn);
+                }
+            }
             if (getenv("ERBOS_DBG_IDX")) {
                 fprintf(stderr, "[IDX_ASSIGN line %d] obj=%s elem=%s val=%s\n",
                     n->line, type_name(obj_t),
@@ -948,18 +977,28 @@ static void check_stmt(Checker *c, Node *n) {
             break;
         case NODE_THROUGH_IN: {
             // γ1: thread the collection's element type through to
-            // the loop variable when we know it. For TYPE_LIST or
-            // TYPE_ARRAY with elem_type set we propagate the
-            // element type; otherwise the var lands as TYPE_UNKNOWN
-            // and yell-on-element falls through to the runtime
-            // magic-number shim (the historic behaviour). Once ε
-            // drops the legacy keyword forms every collection
-            // carries an elem type and TYPE_UNKNOWN goes away.
+            // the loop variable when we know it.
+            // ε6: stdlib container receivers (TYPE_STRUCT named
+            // List / Map / StringMap, possibly mangled) tag the
+            // node so irgen routes the iteration through
+            // <Type>_len + <Type>_get instead of the legacy header
+            // layout. Element type comes from the struct's val_type
+            // (set by parse_type_str when the type was generic).
             Type col = check_expr(c, n->through_in.collection);
             Type elem = make_type(TYPE_UNKNOWN);
             if ((col.kind == TYPE_LIST || col.kind == TYPE_ARRAY) &&
                 col.elem_type)
                 elem = *col.elem_type;
+            else if (col.kind == TYPE_STRUCT && col.val_type)
+                elem = *col.val_type;
+            if (col.kind == TYPE_STRUCT && col.struct_name) {
+                const char *sn = col.struct_name;
+                if (!strncmp(sn, "List__", 6) || !strcmp(sn, "List") ||
+                    !strncmp(sn, "Map__", 5) || !strcmp(sn, "Map") ||
+                    !strncmp(sn, "StringMap__", 11) || !strcmp(sn, "StringMap")) {
+                    n->through_in.method_struct = strdup(sn);
+                }
+            }
             set_sym(c, n->through_in.var_name, elem);
             for (int j = 0; j < n->through_in.body->block.stmts.count; j++)
                 check_stmt(c, n->through_in.body->block.stmts.items[j]);
