@@ -73,12 +73,10 @@ static Type make_array_of(Type elem) {
 }
 
 static int types_equal(Type a, Type b) {
-    // P3.4: TYPE_STR and TYPE_STRUCT("String") describe the same
-    // in-memory representation (a String header). The language-
-    // primitive type spelling and the user-declared struct
-    // spelling are interchangeable so existing code that
-    // declares `s str` keeps working alongside new code that
-    // uses `s String`.
+    // γ7: TYPE_STR is no longer produced — `parse_type_str("str")`
+    // returns TYPE_STRUCT("String") and `NODE_STR_LIT` resolves to
+    // the same. The TYPE_STR arm survives in this comparison as a
+    // dead branch (cosmetic; nothing creates a TYPE_STR value).
     int a_is_string = (a.kind == TYPE_STR) ||
         (a.kind == TYPE_STRUCT && a.struct_name && !strcmp(a.struct_name, "String"));
     int b_is_string = (b.kind == TYPE_STR) ||
@@ -212,7 +210,13 @@ static int struct_has_field(Checker *c, const char *struct_name, const char *fie
 static Type parse_type_str(Checker *c, const char *t) {
     if (!t) return make_type(TYPE_VOID);
     if (!strcmp(t, "int")) return make_type(TYPE_INT);
-    if (!strcmp(t, "str")) return make_type(TYPE_STR);
+    // γ7: `str` is now an alias for the canonical `String` stdlib
+    // struct. The legacy TYPE_STR kind is no longer produced by
+    // anything in the checker. Programs that say `s str` and
+    // programs that say `s String` produce identical types, both
+    // backed by the std/string struct definition.
+    if (!strcmp(t, "str")) return make_struct("String");
+    if (!strcmp(t, "String")) return make_struct("String");
     if (!strcmp(t, "bool")) return make_type(TYPE_BOOL);
     if (!strcmp(t, "byte")) return make_type(TYPE_BYTE);
     if (!strcmp(t, "void")) return make_type(TYPE_VOID);
@@ -263,7 +267,10 @@ static Type check_expr(Checker *c, Node *n);
 static Type check_expr(Checker *c, Node *n) {
     switch (n->type) {
         case NODE_INT_LIT: return make_type(TYPE_INT);
-        case NODE_STR_LIT: return make_type(TYPE_STR);
+        // γ7: literals are now typed as TYPE_STRUCT("String")
+        // — the canonical stdlib struct. iremit lays them out
+        // accordingly (see iremit_finalize_data).
+        case NODE_STR_LIT: return make_struct("String");
         case NODE_BOOL_LIT: return make_type(TYPE_BOOL);
         case NODE_IDENT: {
             // Unknown identifiers used to be caught only by the direct
@@ -977,9 +984,18 @@ static void check_stmt(Checker *c, Node *n) {
                 }
                 if (give_t.kind != TYPE_UNKNOWN && c->cur_return_type.kind != TYPE_UNKNOWN &&
                     !types_equal(give_t, c->cur_return_type)) {
-                    // Allow int<->struct compatibility (null pointers, pointer returns)
+                    // Allow int<->struct compatibility for the
+                    // legacy null-pointer-as-struct pattern: a
+                    // function declared to return a struct can
+                    // `give nil` (an int 0), and a function
+                    // declared `int` can return a struct (its
+                    // pointer value). γ7 narrows the latter to
+                    // exclude `String` — returning a String from
+                    // an int-typed function is a real type error.
+                    int give_is_string = (give_t.kind == TYPE_STRUCT &&
+                        give_t.struct_name && !strcmp(give_t.struct_name, "String"));
                     int compat = (give_t.kind == TYPE_INT && c->cur_return_type.kind == TYPE_STRUCT) ||
-                                 (give_t.kind == TYPE_STRUCT && c->cur_return_type.kind == TYPE_INT) ||
+                                 (give_t.kind == TYPE_STRUCT && c->cur_return_type.kind == TYPE_INT && !give_is_string) ||
                                  (give_t.kind == TYPE_STRUCT && c->cur_return_type.kind == TYPE_STRUCT);
                     if (!compat) {
                         fprintf(stderr, "error:%d: return type mismatch: expected '%s', got '%s'\n",

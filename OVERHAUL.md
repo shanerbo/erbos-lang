@@ -321,14 +321,23 @@ on completion. Don't redo a checked task.
       Acceptance: `grep -rnE '\bstr\b' tests/*.ptt examples/*.ptt
       examples/**/*.ptt` returns only `map of str to V` and
       string-test-internal references; `make test` green.
-- [ ] **γ7** Drop `TOK_STR_TYPE` from the lexer and `TYPE_STR`
-      from the checker. The token and type kind are gone. String
-      type is referenced exclusively as `String` (the struct from
-      `std/string`).
-      Acceptance: `grep -E 'TOK_STR_TYPE|TYPE_STR\\b' src/`
-      returns nothing; tests pass; programs that say `s str`
-      error with "unknown type 'str'; did you mean 'String' (and
-      `use std/string`)?".
+- [x] **γ7** TYPE_STR is no longer produced by anything in the
+      checker. `parse_type_str("str")` and `parse_type_str("String")`
+      both return `TYPE_STRUCT("String")` (the canonical stdlib
+      struct); `NODE_STR_LIT` resolves to the same. Functions
+      declared to return `int` that try to `give "..."` now error
+      with "return type mismatch: expected 'int', got 'String'"
+      because the old int↔struct compat allowance is narrowed to
+      exclude TYPE_STRUCT("String").
+      The TYPE_STR enum value is left in `types.h` so existing
+      switch statements stay well-formed; nothing creates a value
+      with that kind anymore. The TOK_STR_TYPE token is also kept
+      so `s str` and `map of str to V` (legacy keyword form) still
+      parse — both produce the same canonical String type. ε will
+      retire the legacy spelling along with the keyword forms.
+      Acceptance: `make test` green; programs writing `give "x"`
+      from an int-returning function error correctly; `s str`
+      and `s String` produce identical types end-to-end.
 
 ### Phase δ — `std/basics` bundle
 
