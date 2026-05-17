@@ -124,7 +124,7 @@ test-runtime:
 test-framework: $(OUT)
 	@echo "=== Framework tests (erbos test) ==="
 	@fail=0; \
-	for f in tests/test_*.ptt examples/leetcode/tests/test_*.ptt; do \
+	for f in tests/test_*.ptt tests/leetcode/test_*.ptt; do \
 		b=$$(basename $$f); \
 		if ! ./$(OUT) test "$$f" > /dev/null 2>&1; then \
 			echo "  FAIL: $$b"; fail=1; \
