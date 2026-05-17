@@ -816,23 +816,34 @@ static Node *parse_stmt(Parser *p) {
             n->assign.value = parse_expr(p);
             return n;
         }
-        // field assign: IDENT.field = ... 
-        if (peek_at(p, 1)->type == TOK_DOT) {
-            // Could be field assign or method call or just expr
-            // Parse as expression first
+        // field assign: IDENT.field = ...
+        // index assign: IDENT[i] be ...   (α6)
+        if (peek_at(p, 1)->type == TOK_DOT || peek_at(p, 1)->type == TOK_LBRACKET) {
+            // Could be field/index assign, method call, or just expr.
+            // Parse as expression first.
             Node *expr = parse_expr(p);
             if (at(p, TOK_ASSIGN) || at(p, TOK_BE)) {
-                // field assignment — verify expr is actually a field access
-                if (expr->type != NODE_FIELD_ACCESS) {
-                    fprintf(stderr, "%s:%d: error: invalid assignment target\n", p->filename, line);
-                    exit(1);
+                // Assignment — figure out the LHS shape.
+                if (expr->type == NODE_FIELD_ACCESS) {
+                    p->pos++; // skip = or be
+                    Node *n = alloc_node(NODE_FIELD_ASSIGN, line);
+                    n->field_assign.object = expr->field_access.object;
+                    n->field_assign.field = expr->field_access.field;
+                    n->field_assign.value = parse_expr(p);
+                    return n;
                 }
-                p->pos++; // skip = or be
-                Node *n = alloc_node(NODE_FIELD_ASSIGN, line);
-                n->field_assign.object = expr->field_access.object;
-                n->field_assign.field = expr->field_access.field;
-                n->field_assign.value = parse_expr(p);
-                return n;
+                if (expr->type == NODE_INDEX) {
+                    // α6: arr[i] be v
+                    p->pos++; // skip = or be
+                    Node *n = alloc_node(NODE_INDEX_ASSIGN, line);
+                    n->index_assign.object = expr->index_access.object;
+                    n->index_assign.index = expr->index_access.index;
+                    n->index_assign.value = parse_expr(p);
+                    n->index_assign.is_array = 0; // checker fills in
+                    return n;
+                }
+                fprintf(stderr, "%s:%d: error: invalid assignment target\n", p->filename, line);
+                exit(1);
             }
             // Check if it's a condition
             if (at(p, TOK_QUESTION)) {

@@ -117,15 +117,20 @@ on completion. Don't redo a checked task.
       forms. types_equal compares element types.
       Acceptance: passing `array of int` where `array of str`
       expected errors.
-- [ ] **α4** Irgen: `array of T` constructor lowers to `bl
-      _heap_alloc(N * sizeof(T))` plus a small header (cap field,
-      maybe count). User Potato never names `_heap_alloc`.
+- [x] **α4** Irgen: `array of T` constructor lowers to two heap
+      allocations: 16-byte header (cap @ 0, data ptr @ 8) and
+      cap*8 bytes of data. User Potato never names `_heap_alloc`.
       Acceptance: AST `NODE_ARRAY_NEW` produces correct IR.
-- [ ] **α5** Irgen: typed indexing `arr[i]` reads. Bounds-checked.
-      Element-size offset compiler-synthesised.
-      Acceptance: `arr[3]` reads element; `arr[-1]` panics.
-- [ ] **α6** Irgen: typed indexing `arr[i] be v` writes.
-      Acceptance: write-then-read round-trips.
+- [x] **α5** Irgen: typed indexing `arr[i]` reads. Bounds-checked
+      against `cap`. Layout selected via `is_array` flag set by
+      checker (array: cap@0, data@8; legacy list: cap@0, count@8,
+      data@16). Element-size offset compiler-synthesised.
+      Acceptance: `arr[3]` reads element; `arr[-1]` and `arr[cap]`
+      both panic.
+- [x] **α6** Irgen: typed indexing `arr[i] be v` writes via new
+      NODE_INDEX_ASSIGN AST node. Same bounds-check + layout
+      selection as α5.
+      Acceptance: write-then-read round-trips; OOB writes panic.
 - [ ] **α7** RAII: array's backing storage freed at scope end via
       compiler-emitted `_heap_free`.
       Acceptance: ASan shows zero leaks across stdlib tests.

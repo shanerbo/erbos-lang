@@ -1,0 +1,43 @@
+// Regression test: α — `array of T` typed-storage primitive.
+//
+// Layout (synthesised by the compiler, never visible in source):
+//   [0] cap      (int)
+//   [8] data_ptr (heap-allocated slot region)
+//
+// User code never names heap_alloc / mem_load / mem_store —
+// the compiler synthesises those calls when lowering `array of T
+// with cap N` and `arr[i]` / `arr[i] be v`.
+//
+// Output must match across -O0/-O1/-O2.
+//
+// Expected output:
+//   10
+//   20
+//   30
+//   40
+//   35
+//   100
+
+spark {
+  xs is array of int with cap 4
+  xs[0] be 10
+  xs[1] be 20
+  xs[2] be 30
+  xs[3] be 40
+  yell(xs[0])
+  yell(xs[1])
+  yell(xs[2])
+  yell(xs[3])
+
+  // Round-trip via a loop variable.
+  through (i from 0 to 4 by 1) {
+    xs[i] be xs[i] + 5
+  }
+  // xs[2] was 30; after one +5 it's 35.
+  yell(xs[2])
+
+  // A larger array constructed dynamically.
+  big is array of int with cap 100
+  big[42] be 100
+  yell(big[42])
+}

@@ -654,9 +654,28 @@ static Type check_expr(Checker *c, Node *n) {
         case NODE_INDEX: {
             Type obj_t = check_expr(c, n->index_access.object);
             check_expr(c, n->index_access.index);
+            // α5: tag this access for irgen so it picks between the
+            // array layout (cap@0, data@8) and the list layout
+            // (cap@0, count@8, data@16).
+            n->index_access.is_array = (obj_t.kind == TYPE_ARRAY);
             // Return element type if known
             if (obj_t.elem_type) return *obj_t.elem_type;
             return make_type(TYPE_UNKNOWN);
+        }
+        case NODE_INDEX_ASSIGN: {
+            Type obj_t = check_expr(c, n->index_assign.object);
+            check_expr(c, n->index_assign.index);
+            Type val_t = check_expr(c, n->index_assign.value);
+            n->index_assign.is_array = (obj_t.kind == TYPE_ARRAY);
+            // Element type compat (best-effort)
+            if (obj_t.elem_type && val_t.kind != TYPE_UNKNOWN &&
+                obj_t.elem_type->kind != TYPE_UNKNOWN &&
+                !types_equal(*obj_t.elem_type, val_t)) {
+                fprintf(stderr, "error:%d: cannot assign '%s' to element of '%s'\n",
+                    n->line, type_name(val_t), type_name(obj_t));
+                exit(1);
+            }
+            return make_type(TYPE_VOID);
         }
         case NODE_ARRAY_NEW: {
             // α3: `array of T with cap N`. Type-check the cap
@@ -814,6 +833,12 @@ static void check_stmt(Checker *c, Node *n) {
                     exit(1);
                 }
             }
+            break;
+        }
+        case NODE_INDEX_ASSIGN: {
+            // α6: forward to the expression-level case which sets
+            // is_array on the node.
+            check_expr(c, n);
             break;
         }
         case NODE_IF:

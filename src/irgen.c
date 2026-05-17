@@ -603,8 +603,14 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
         }
 
         case NODE_INDEX: {
-            // xs[i] for a list (cap, count, data_ptr) at offsets 0/8/16.
-            // Bounds-check: panic if i < 0 or i >= count. Two CFG
+            // xs[i]. Two layouts:
+            //   list  (legacy keyword-form): cap@0, count@8, data@16.
+            //         Bounds check uses count; data offset 16.
+            //   array (α5):                  cap@0, data@8.
+            //         Bounds check uses cap; data offset 8.
+            // Selected by checker via index_access.is_array.
+            //
+            // Bounds-check: panic if i < 0 or i >= bound. Two CFG
             // blocks per check (panic and ok); the panic block calls
             // _panic_oob and falls back to a branch to the ok block
             // for CFG-completeness even though _panic_oob exits the
@@ -613,9 +619,12 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
             VReg obj = gen_expr(c, n->index_access.object);
             VReg idx = gen_expr(c, n->index_access.index);
 
-            // count = obj[8]
+            int is_arr = n->index_access.is_array;
+            int bound_off = is_arr ? 0 : 8;     // array: cap@0; list: count@8
+            int data_off  = is_arr ? 8 : 16;    // array: data@8; list: data@16
+            // bound = obj[bound_off]
             VReg count = new_vreg(c);
-            emit(c, (IRInst){.op = IR_LOAD, .dst = count, .a = obj, .imm = 8});
+            emit(c, (IRInst){.op = IR_LOAD, .dst = count, .a = obj, .imm = bound_off});
             // negative-index check: idx < 0 ?
             VReg zero = new_vreg(c);
             emit(c, (IRInst){.op = IR_CONST, .dst = zero, .imm = 0});
@@ -658,9 +667,10 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
             oob_ok_b->label = oob_ok_lbl;
             switch_block(c, oob_ok_b);
 
-            // data_ptr = obj[16]; addr = data_ptr + idx*8; load.
+            // data_ptr = obj[data_off]; addr = data_ptr + idx*8;
+            // load.  data_off was set above based on layout.
             VReg data_ptr = new_vreg(c);
-            emit(c, (IRInst){.op = IR_LOAD, .dst = data_ptr, .a = obj, .imm = 16});
+            emit(c, (IRInst){.op = IR_LOAD, .dst = data_ptr, .a = obj, .imm = data_off});
             VReg eight = new_vreg(c);
             emit(c, (IRInst){.op = IR_CONST, .dst = eight, .imm = 8});
             VReg byte_off = new_vreg(c);
@@ -672,6 +682,43 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
             return dst;
         }
 
+        case NODE_ARRAY_NEW: {
+            // α4: `array of T with cap N` — typed-storage primitive.
+            //
+            // Runtime layout (16 bytes):
+            //   [0]  cap         (int)
+            //   [8]  data_ptr    (pointer to N * sizeof(T) bytes)
+            //
+            // Two heap allocations: the header (16 bytes) and the
+            // data buffer (cap * sizeof(T) bytes). The user-Potato
+            // code never sees these calls — the compiler synthesises
+            // them. Element-size for now is fixed at 8 (one machine
+            // word per slot); `array of byte` (α8) will distinguish.
+            VReg cap_v = gen_expr(c, n->array_new.cap);
+            // data_size = cap * 8
+            VReg eight = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CONST, .dst = eight, .imm = 8});
+            VReg data_size = new_vreg(c);
+            emit(c, (IRInst){.op = IR_MUL, .dst = data_size, .a = cap_v, .b = eight});
+            // data = _heap_alloc(data_size)
+            VReg *da = malloc(sizeof(VReg));
+            da[0] = data_size;
+            VReg data = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CALL, .dst = data, .str = "heap_alloc",
+                             .args = da, .arg_count = 1});
+            // header = _heap_alloc(16)
+            VReg sz16 = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CONST, .dst = sz16, .imm = 16});
+            VReg *ha = malloc(sizeof(VReg));
+            ha[0] = sz16;
+            VReg header = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CALL, .dst = header, .str = "heap_alloc",
+                             .args = ha, .arg_count = 1});
+            // header[0] = cap; header[8] = data
+            emit(c, (IRInst){.op = IR_STORE, .a = header, .b = cap_v, .imm = 0});
+            emit(c, (IRInst){.op = IR_STORE, .a = header, .b = data, .imm = 8});
+            return header;
+        }
         case NODE_LIST_LIT: {
             // Allocate a list header (24 bytes: cap, count, data_ptr)
             // then a data buffer (max(count, 8) * 8 bytes), then fill
@@ -884,6 +931,69 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
                 }
             }
             emit(c, (IRInst){.op = IR_STORE, .a = obj, .b = val, .imm = offset});
+            break;
+        }
+        case NODE_INDEX_ASSIGN: {
+            // α6: arr[i] be v / xs[i] be v.
+            // Same shape as NODE_INDEX read: bounds-checked typed
+            // store. Layout differs by is_array tag (set by checker).
+            VReg val = gen_expr(c, n->index_assign.value);
+            VReg obj = gen_expr(c, n->index_assign.object);
+            VReg idx = gen_expr(c, n->index_assign.index);
+
+            int is_arr = n->index_assign.is_array;
+            int bound_off = is_arr ? 0 : 8;
+            int data_off  = is_arr ? 8 : 16;
+
+            // bound = obj[bound_off]
+            VReg bound = new_vreg(c);
+            emit(c, (IRInst){.op = IR_LOAD, .dst = bound, .a = obj, .imm = bound_off});
+            // negative-index check
+            VReg zero = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CONST, .dst = zero, .imm = 0});
+            VReg is_neg = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CMP_LT, .dst = is_neg, .a = idx, .b = zero});
+            int neg_panic_lbl = new_label(c);
+            int neg_ok_lbl = new_label(c);
+            emit(c, (IRInst){.op = IR_BR_COND, .a = is_neg,
+                             .label = neg_panic_lbl, .label2 = neg_ok_lbl});
+            IRBlock *neg_panic_b = new_block(c);
+            neg_panic_b->label = neg_panic_lbl;
+            switch_block(c, neg_panic_b);
+            VReg ignored1 = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CALL, .dst = ignored1, .str = "panic_oob",
+                             .args = NULL, .arg_count = 0});
+            emit(c, (IRInst){.op = IR_BR, .label = neg_ok_lbl});
+            IRBlock *neg_ok_b = new_block(c);
+            neg_ok_b->label = neg_ok_lbl;
+            switch_block(c, neg_ok_b);
+            // upper-bound check
+            VReg is_oob = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CMP_GE, .dst = is_oob, .a = idx, .b = bound});
+            int oob_panic_lbl = new_label(c);
+            int oob_ok_lbl = new_label(c);
+            emit(c, (IRInst){.op = IR_BR_COND, .a = is_oob,
+                             .label = oob_panic_lbl, .label2 = oob_ok_lbl});
+            IRBlock *oob_panic_b = new_block(c);
+            oob_panic_b->label = oob_panic_lbl;
+            switch_block(c, oob_panic_b);
+            VReg ignored2 = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CALL, .dst = ignored2, .str = "panic_oob",
+                             .args = NULL, .arg_count = 0});
+            emit(c, (IRInst){.op = IR_BR, .label = oob_ok_lbl});
+            IRBlock *oob_ok_b = new_block(c);
+            oob_ok_b->label = oob_ok_lbl;
+            switch_block(c, oob_ok_b);
+            // data_ptr = obj[data_off]; addr = data_ptr + idx*8; store.
+            VReg data_ptr = new_vreg(c);
+            emit(c, (IRInst){.op = IR_LOAD, .dst = data_ptr, .a = obj, .imm = data_off});
+            VReg eight = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CONST, .dst = eight, .imm = 8});
+            VReg byte_off = new_vreg(c);
+            emit(c, (IRInst){.op = IR_MUL, .dst = byte_off, .a = idx, .b = eight});
+            VReg addr = new_vreg(c);
+            emit(c, (IRInst){.op = IR_ADD, .dst = addr, .a = data_ptr, .b = byte_off});
+            emit(c, (IRInst){.op = IR_STORE, .a = addr, .b = val, .imm = 0});
             break;
         }
 

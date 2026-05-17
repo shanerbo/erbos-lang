@@ -35,6 +35,7 @@ typedef enum {
     NODE_TEST_DEF,
     NODE_ASSERT,
     NODE_ARRAY_NEW,        // α2: `array of T with cap N`
+    NODE_INDEX_ASSIGN,     // α6: `arr[i] be v`
 } NodeType;
 
 typedef struct Node Node;
@@ -194,8 +195,12 @@ struct Node {
         // NODE_FIELD_ACCESS (obj.field)
         struct { Node *object; char *field; char *struct_name; } field_access;
 
-        // NODE_INDEX (arr[idx])
-        struct { Node *object; Node *index; } index_access;
+        // NODE_INDEX (arr[idx]). is_array set by checker when the
+        // indexed object's static type is `array of T`. Used by
+        // irgen to pick between the array layout (cap at offset
+        // 0, data at offset 8) and the legacy list layout
+        // (cap/count/data at offsets 0/8/16).
+        struct { Node *object; Node *index; int is_array; } index_access;
 
         // NODE_LIST_LIT
         struct { Node **items; int count; } list_lit;
@@ -208,6 +213,17 @@ struct Node {
         // monomorphizer/checker pipeline uses; for `array of int`
         // this is "int". `cap` is any int expression.
         struct { char *elem_type; Node *cap; } array_new;
+
+        // NODE_INDEX_ASSIGN (α6): `arr[i] be v` / `xs[i] = v`.
+        // Same shape as NODE_INDEX but with a value to write. The
+        // checker tags is_array on this node identically to how it
+        // tags NODE_INDEX, picking between array and list layouts.
+        struct {
+            Node *object;
+            Node *index;
+            Node *value;
+            int is_array;
+        } index_assign;
 
         // NODE_ENUM_DEF
         struct {
