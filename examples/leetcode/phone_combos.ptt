@@ -3,6 +3,7 @@
 // Time: O(4^n)  Space: O(n)
 
 use std/string
+use std/list
 
 get_letters(digit String) String {
   digit eq "2" ?{ give "abc" }
@@ -16,9 +17,9 @@ get_letters(digit String) String {
   give ""
 }
 
-backtrack(digits String, index int, current String, n int) {
+backtrack(digits String, index int, current String, n int, out ref List of String) {
   index eq n ?{
-    yell(current)
+    out.push(current)
     give
   }
   digit is digits.char_at(index)
@@ -27,31 +28,14 @@ backtrack(digits String, index int, current String, n int) {
   through (i from 0 to num_letters by 1) {
     ch is letters.char_at(i)
     next is current + ch
-    backtrack(digits, index + 1, next, n)
+    backtrack(digits, index + 1, next, n, ref out)
   }
 }
 
-solve(digits String) {
+solve(digits String) List of String {
+  out is List of String
   n is digits.len()
-  n eq 0 ?{ give }
-  backtrack(digits, 0, "", n)
-}
-
-spark {
-  // Easy: single digit
-  solve("2")
-  yell("---")
-  solve("9")
-  yell("---")
-
-  // Medium: two digits
-  solve("23")
-  yell("---")
-  solve("79")
-  yell("---")
-  solve("45")
-  yell("---")
-
-  // Hard: three digits
-  solve("234")
+  n eq 0 ?{ give out }
+  backtrack(digits, 0, "", n, ref out)
+  give out
 }

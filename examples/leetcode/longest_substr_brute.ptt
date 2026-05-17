@@ -30,31 +30,3 @@ longest(s String, n int) int {
   }
   give max_len
 }
-
-spark {
-  // Easy (5 cases)
-  yell(longest("a", 1))
-  yell(longest("ab", 2))
-  yell(longest("aa", 2))
-  yell(longest("", 0))
-  yell(longest("abc", 3))
-
-  // Medium (10 cases)
-  yell(longest("abcabcbb", 8))
-  yell(longest("bbbbb", 5))
-  yell(longest("pwwkew", 6))
-  yell(longest("abcdef", 6))
-  yell(longest("aab", 3))
-  yell(longest("dvdf", 4))
-  yell(longest("anviaj", 6))
-  yell(longest("tmmzuxt", 7))
-  yell(longest("abba", 4))
-  yell(longest("abcb", 4))
-
-  // Hard (5 cases)
-  yell(longest("abcdefghij", 10))
-  yell(longest("abcdeafghij", 11))
-  yell(longest("aaaaaaaaa", 9))
-  yell(longest("abcdabcde", 9))
-  yell(longest("wobgrovw", 8))
-}

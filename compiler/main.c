@@ -26,6 +26,116 @@ static char *read_file(const char *path) {
     return buf;
 }
 
+// Rewrite NODE_CALL sites within an imported function's body so a
+// bare `swap(...)` call against another free function in the same
+// imported file resolves to the alias-prefixed `<alias>_swap` after
+// import-time renaming.
+//
+// Walks the AST recursively. Match is by function name only; we
+// don't change method-call dispatch (methods aren't prefixed).
+static void rewrite_calls_with_prefix(Node *n,
+                                      char **local_names, int local_count,
+                                      const char *alias) {
+    if (!n) return;
+    switch (n->type) {
+        case NODE_CALL: {
+            for (int i = 0; i < local_count; i++) {
+                if (n->call.name && !strcmp(n->call.name, local_names[i])) {
+                    char buf[256];
+                    snprintf(buf, sizeof(buf), "%s_%s", alias, local_names[i]);
+                    n->call.name = strdup(buf);
+                    break;
+                }
+            }
+            for (int i = 0; i < n->call.arg_count; i++)
+                rewrite_calls_with_prefix(n->call.args[i], local_names, local_count, alias);
+            break;
+        }
+        case NODE_METHOD_CALL:
+            rewrite_calls_with_prefix(n->method_call.object, local_names, local_count, alias);
+            for (int i = 0; i < n->method_call.arg_count; i++)
+                rewrite_calls_with_prefix(n->method_call.args[i], local_names, local_count, alias);
+            break;
+        case NODE_BLOCK:
+            for (int i = 0; i < n->block.stmts.count; i++)
+                rewrite_calls_with_prefix(n->block.stmts.items[i], local_names, local_count, alias);
+            break;
+        case NODE_VAR_DECL:
+            rewrite_calls_with_prefix(n->var_decl.value, local_names, local_count, alias);
+            break;
+        case NODE_ASSIGN:
+            rewrite_calls_with_prefix(n->assign.value, local_names, local_count, alias);
+            break;
+        case NODE_FIELD_ASSIGN:
+            rewrite_calls_with_prefix(n->field_assign.object, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->field_assign.value, local_names, local_count, alias);
+            break;
+        case NODE_FIELD_ACCESS:
+            rewrite_calls_with_prefix(n->field_access.object, local_names, local_count, alias);
+            break;
+        case NODE_BINARY:
+            rewrite_calls_with_prefix(n->binary.left, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->binary.right, local_names, local_count, alias);
+            break;
+        case NODE_UNARY:
+            rewrite_calls_with_prefix(n->unary.operand, local_names, local_count, alias);
+            break;
+        case NODE_INDEX:
+            rewrite_calls_with_prefix(n->index_access.object, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->index_access.index, local_names, local_count, alias);
+            break;
+        case NODE_INDEX_ASSIGN:
+            rewrite_calls_with_prefix(n->index_assign.object, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->index_assign.index, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->index_assign.value, local_names, local_count, alias);
+            break;
+        case NODE_IF:
+            for (int i = 0; i < n->if_stmt.branch_count; i++) {
+                rewrite_calls_with_prefix(n->if_stmt.conds[i], local_names, local_count, alias);
+                rewrite_calls_with_prefix(n->if_stmt.bodies[i], local_names, local_count, alias);
+            }
+            rewrite_calls_with_prefix(n->if_stmt.nah_body, local_names, local_count, alias);
+            break;
+        case NODE_THROUGH_RANGE:
+            rewrite_calls_with_prefix(n->through_range.from, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->through_range.to, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->through_range.by, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->through_range.body, local_names, local_count, alias);
+            break;
+        case NODE_THROUGH_IN:
+            rewrite_calls_with_prefix(n->through_in.collection, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->through_in.body, local_names, local_count, alias);
+            break;
+        case NODE_INFI:
+            rewrite_calls_with_prefix(n->infi.cond, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->infi.body, local_names, local_count, alias);
+            break;
+        case NODE_GIVE:
+            rewrite_calls_with_prefix(n->give.value, local_names, local_count, alias);
+            break;
+        case NODE_MATCH:
+            rewrite_calls_with_prefix(n->match_expr.expr, local_names, local_count, alias);
+            for (int i = 0; i < n->match_expr.arm_count; i++)
+                rewrite_calls_with_prefix(n->match_expr.arm_bodies[i], local_names, local_count, alias);
+            break;
+        case NODE_LIST_LIT:
+            for (int i = 0; i < n->list_lit.count; i++)
+                rewrite_calls_with_prefix(n->list_lit.items[i], local_names, local_count, alias);
+            break;
+        case NODE_MAP_LIT:
+            for (int i = 0; i < n->map_lit.count; i++) {
+                rewrite_calls_with_prefix(n->map_lit.keys[i], local_names, local_count, alias);
+                rewrite_calls_with_prefix(n->map_lit.values[i], local_names, local_count, alias);
+            }
+            break;
+        case NODE_ASSERT:
+            rewrite_calls_with_prefix(n->assert_stmt.condition, local_names, local_count, alias);
+            break;
+        default:
+            break;
+    }
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr,
@@ -244,12 +354,21 @@ int main(int argc, char **argv) {
         if (last_slash) *(last_slash + 1) = '\0';
         else dir[0] = '\0';
 
-        // Try: dir/path.ptt, then std/path.ptt
+        // Resolve `use <path>` against three roots in order:
+        //   1. <dir-of-input>/<path>.ptt  — sibling to importer
+        //   2. std/<path>.ptt              — stdlib
+        //   3. examples/<path>.ptt         — example fixtures
+        //      (lets `tests/leetcode/test_two_sum.ptt` write
+        //      `use leetcode/two_sum` to import the shared
+        //      reference implementation from examples/).
         snprintf(import_path, sizeof(import_path), "%s%s.ptt", dir, program->program.use_paths[ui]);
         FILE *test_f = fopen(import_path, "r");
         if (!test_f) {
-            // Try std/ relative to compiler location
             snprintf(import_path, sizeof(import_path), "std/%s.ptt", program->program.use_paths[ui] + (strncmp(program->program.use_paths[ui], "std/", 4) == 0 ? 4 : 0));
+            test_f = fopen(import_path, "r");
+        }
+        if (!test_f) {
+            snprintf(import_path, sizeof(import_path), "examples/%s.ptt", program->program.use_paths[ui]);
             test_f = fopen(import_path, "r");
         }
         if (!test_f) {
@@ -277,8 +396,38 @@ int main(int argc, char **argv) {
         //     by alias. `use std/string as foo` still gives `String.len`
         //     globally — `foo.len` would be nonsensical because there's
         //     no `foo` *value* to call a method on.
+        //   - Within an imported file, one free function may call
+        //     another free function defined in the same file by its
+        //     bare name (e.g. `next_perm` calls `swap`). We collect
+        //     every free-function name in the imported file first,
+        //     then rewrite call sites in their bodies to point at the
+        //     prefixed names. Without this, intra-file calls break
+        //     after import-time renaming.
         const char *alias = program->program.use_aliases[ui];
         char prefixed[256];
+
+        // Pass 1: collect every free-function name declared in the
+        // imported file (skip methods — they keep their declared
+        // name). This is the set we'll rewrite call sites to use.
+        char **local_names = NULL;
+        int local_count = 0;
+        for (int fi = 0; fi < imp_prog->program.funcs.count; fi++) {
+            Node *f = imp_prog->program.funcs.items[fi];
+            if (f->func_def.receiver_type) continue;
+            if (!f->func_def.name) continue;
+            local_names = realloc(local_names, (local_count + 1) * sizeof(char *));
+            local_names[local_count++] = strdup(f->func_def.name);
+        }
+
+        // Pass 2: rewrite intra-file call sites.
+        for (int fi = 0; fi < imp_prog->program.funcs.count; fi++) {
+            Node *f = imp_prog->program.funcs.items[fi];
+            if (f->func_def.body) {
+                rewrite_calls_with_prefix(f->func_def.body, local_names, local_count, alias);
+            }
+        }
+
+        // Pass 3: rename the function decls themselves and merge.
         for (int fi = 0; fi < imp_prog->program.funcs.count; fi++) {
             Node *f = imp_prog->program.funcs.items[fi];
             if (!f->func_def.receiver_type) {
@@ -291,6 +440,8 @@ int main(int argc, char **argv) {
             }
             program->program.funcs.items[program->program.funcs.count++] = f;
         }
+        for (int li = 0; li < local_count; li++) free(local_names[li]);
+        free(local_names);
         // Merge structs
         for (int si = 0; si < imp_prog->program.structs.count; si++) {
             Node *s = imp_prog->program.structs.items[si];

@@ -1,0 +1,34 @@
+// Phone Combinations tests — solve() comes from
+// examples/leetcode/phone_combos.ptt and returns a List of String.
+
+use std/string
+use std/list
+use leetcode/phone_combos
+
+test "phone combos: single digit '2'" {
+  result is phone_combos.solve("2")
+  assert(result.len() eq 3)
+  assert(result[0] eq "a")
+  assert(result[1] eq "b")
+  assert(result[2] eq "c")
+}
+
+test "phone combos: single digit '9'" {
+  result is phone_combos.solve("9")
+  assert(result.len() eq 4)
+  assert(result[0] eq "w")
+  assert(result[3] eq "z")
+}
+
+test "phone combos: two digits '23'" {
+  // 3 * 3 = 9 combinations: ad, ae, af, bd, be, bf, cd, ce, cf
+  result is phone_combos.solve("23")
+  assert(result.len() eq 9)
+  assert(result[0] eq "ad")
+  assert(result[8] eq "cf")
+}
+
+test "phone combos: empty input gives empty list" {
+  result is phone_combos.solve("")
+  assert(result.len() eq 0)
+}

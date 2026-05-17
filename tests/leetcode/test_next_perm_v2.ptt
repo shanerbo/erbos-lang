@@ -1,0 +1,34 @@
+// Next Permutation v2 tests — same algorithm, different helper
+// implementation. Result must match the v1 implementation on
+// every input.
+
+use leetcode/next_perm
+use leetcode/next_perm_v2 as v2
+
+test "next perm v2 ascending" {
+  a is [1, 2, 3]
+  v2.next_perm(a, 3)
+  assert(a[0] eq 1)
+  assert(a[1] eq 3)
+  assert(a[2] eq 2)
+}
+
+test "next perm v2 descending wraps" {
+  a is [3, 2, 1]
+  v2.next_perm(a, 3)
+  assert(a[0] eq 1)
+  assert(a[1] eq 2)
+  assert(a[2] eq 3)
+}
+
+test "next perm v2 agrees with v1" {
+  // Run both on the same starting permutation; final state
+  // must be identical element-by-element.
+  a is [1, 3, 2]
+  b is [1, 3, 2]
+  next_perm.next_perm(a, 3)
+  v2.next_perm(b, 3)
+  assert(a[0] eq b[0])
+  assert(a[1] eq b[1])
+  assert(a[2] eq b[2])
+}

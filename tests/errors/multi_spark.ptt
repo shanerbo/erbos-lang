@@ -1,0 +1,11 @@
+// A program may have at most one `spark { }` entry-point block.
+// The checker rejects a second spark with a clear error citing
+// both the new line and the line of the first spark.
+
+spark {
+  yell(1)
+}
+
+spark {
+  yell(2)
+}

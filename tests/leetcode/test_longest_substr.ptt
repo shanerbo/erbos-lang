@@ -1,43 +1,36 @@
-// Longest Substring Without Repeating Characters tests
+// Longest Substring Without Repeating Characters tests —
+// `longest()` comes from examples/leetcode/longest_substr.ptt
+// (the sliding-window version) and
+// examples/leetcode/longest_substr_brute.ptt (the O(n^2)
+// brute-force, exposed under the alias `brute`).
 
-use std/string
-use std/map
-
-longest(s String, n int) int {
-  seen is Map of String to int
-  start is 0
-  max_len is 0
-  through (i from 0 to n by 1) {
-    ch is s.char_at(i)
-    prev is seen.get(ch)
-    prev ne 0 ?{
-      prev - 1 ge start ?{
-        start be prev
-      }
-    }
-    cur is i - start + 1
-    cur gt max_len ?{ max_len be cur }
-    seen.set(ch, i + 1)
-  }
-  give max_len
-}
+use leetcode/longest_substr
+use leetcode/longest_substr_brute as brute
 
 test "longest substr easy" {
-  assert(longest("a", 1) eq 1)
-  assert(longest("ab", 2) eq 2)
-  assert(longest("aa", 2) eq 1)
-  assert(longest("abc", 3) eq 3)
+  assert(longest_substr.longest("a", 1) eq 1)
+  assert(longest_substr.longest("ab", 2) eq 2)
+  assert(longest_substr.longest("aa", 2) eq 1)
+  assert(longest_substr.longest("abc", 3) eq 3)
 }
 
 test "longest substr medium" {
-  assert(longest("abcabcbb", 8) eq 3)
-  assert(longest("bbbbb", 5) eq 1)
-  assert(longest("pwwkew", 6) eq 3)
-  assert(longest("abcdef", 6) eq 6)
-  assert(longest("dvdf", 4) eq 3)
+  assert(longest_substr.longest("abcabcbb", 8) eq 3)
+  assert(longest_substr.longest("bbbbb", 5) eq 1)
+  assert(longest_substr.longest("pwwkew", 6) eq 3)
+  assert(longest_substr.longest("abcdef", 6) eq 6)
+  assert(longest_substr.longest("dvdf", 4) eq 3)
 }
 
 test "longest substr hard" {
-  assert(longest("abcdefghij", 10) eq 10)
-  assert(longest("aaaaaaaaa", 9) eq 1)
+  assert(longest_substr.longest("abcdefghij", 10) eq 10)
+  assert(longest_substr.longest("aaaaaaaaa", 9) eq 1)
+}
+
+test "brute-force agrees with sliding-window" {
+  // Both implementations should produce identical results on
+  // every input.
+  assert(brute.longest("abcabcbb", 8) eq longest_substr.longest("abcabcbb", 8))
+  assert(brute.longest("dvdf", 4) eq longest_substr.longest("dvdf", 4))
+  assert(brute.longest("pwwkew", 6) eq longest_substr.longest("pwwkew", 6))
 }

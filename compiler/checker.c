@@ -639,6 +639,31 @@ static Type check_expr(Checker *c, Node *n) {
                     check_expr(c, n->method_call.args[j]);
                 return make_type(TYPE_VOID);
             }
+            // Import-alias call: `lib.make_list()` where `lib` is
+            // an import alias. The imported function got renamed
+            // to `<alias>_make_list` during merge; look it up by
+            // that prefixed name. Also returns its return_type so
+            // var-decls get the correct static type for downstream
+            // method dispatch (`r is lib.make_list(); r.len()`).
+            if (n->method_call.object->type == NODE_IDENT) {
+                const char *obj_name = n->method_call.object->ident.name;
+                for (int ai = 0; ai < c->import_count; ai++) {
+                    if (c->import_aliases[ai] &&
+                        !strcmp(c->import_aliases[ai], obj_name)) {
+                        char prefixed[256];
+                        snprintf(prefixed, sizeof(prefixed),
+                            "%s_%s", obj_name, m);
+                        FuncInfo *afi = find_func(c, prefixed);
+                        if (afi) {
+                            for (int j = 0; j < n->method_call.arg_count; j++)
+                                check_expr(c, n->method_call.args[j]);
+                            return afi->return_type;
+                        }
+                        break;
+                    }
+                }
+            }
+
             // User method via free-function fallback
             FuncInfo *fi = find_func(c, m);
             if (fi) return fi->return_type;
@@ -1171,6 +1196,30 @@ void checker_run(Node *program) {
         exit(1);
     }
     c.func_count = program->program.funcs.count;
+
+    // Multi-spark check: only one `spark { }` block per
+    // compilation unit. Examples/library files should not
+    // declare a spark — they're imported, not run directly.
+    // Catches both in-source duplicates and accidental
+    // double-import of a runnable program.
+    {
+        Node *first_spark = NULL;
+        for (int i = 0; i < c.func_count; i++) {
+            Node *f = program->program.funcs.items[i];
+            if (!f->func_def.receiver_type &&
+                f->func_def.name &&
+                !strcmp(f->func_def.name, "spark")) {
+                if (first_spark) {
+                    fprintf(stderr,
+                        "error:%d: multiple 'spark' blocks (only one entry point allowed); first defined at line %d\n",
+                        f->line, first_spark->line);
+                    exit(1);
+                }
+                first_spark = f;
+            }
+        }
+    }
+
     for (int i = 0; i < c.func_count; i++) {
         Node *f = program->program.funcs.items[i];
         c.funcs[i].name = f->func_def.name;
