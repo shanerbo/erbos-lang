@@ -1,0 +1,5 @@
+// Same filename as tests/lib/transitive_dup2/helper.ptt but a
+// different module — exercises Codex's round-2 P1-11 finding
+// where two transitive `use helper`s from sibling dirs were
+// collapsed into one load by the raw-text dedupe.
+val_one() int { give 1 }

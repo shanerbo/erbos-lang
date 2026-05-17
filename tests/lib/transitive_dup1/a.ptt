@@ -1,0 +1,6 @@
+// Importer-relative `use helper` resolves to the helper.ptt
+// next to *this* file (transitive_dup1/), not the one next to
+// transitive_dup2/. Pre-fix the dedupe collapsed both.
+use helper as h
+
+call_one() int { give h.val_one() }

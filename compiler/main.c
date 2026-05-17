@@ -223,6 +223,60 @@ static void rewrite_calls_with_prefix(Node *n,
     }
 }
 
+// Resolve a `use <use_path>` against the three-tier search order
+// (importer-sibling, project-root, compiler-binary-dir). Writes the
+// resolved absolute-or-relative file path into `out`. Returns 1 on
+// success, 0 on failure.
+//
+// `importer_dir` is the directory of the source file that contains
+// the `use` declaration — for top-level `use`s in the input this
+// is the input file's dir; for transitive `use`s it's the dir of
+// the imported file.
+//
+// `top_input` is the original input passed to `erbos`; only used
+// to anchor `find_project_root` (the project root walk needs an
+// absolute starting point that's stable across the import tree).
+static int resolve_use_path(const char *use_path,
+                            const char *importer_dir,
+                            const char *top_input,
+                            char *out, size_t out_size) {
+    char candidate[512];
+    // 1. importer-sibling
+    snprintf(candidate, sizeof(candidate), "%s%s.ptt", importer_dir, use_path);
+    FILE *f = fopen(candidate, "r");
+    if (f) {
+        fclose(f);
+        if (strlen(candidate) + 1 > out_size) return 0;
+        strcpy(out, candidate);
+        return 1;
+    }
+    // 2. project-root
+    char proj_root[1024];
+    if (find_project_root(top_input, proj_root, sizeof(proj_root))) {
+        snprintf(candidate, sizeof(candidate), "%s%s.ptt", proj_root, use_path);
+        f = fopen(candidate, "r");
+        if (f) {
+            fclose(f);
+            if (strlen(candidate) + 1 > out_size) return 0;
+            strcpy(out, candidate);
+            return 1;
+        }
+    }
+    // 3. compiler-binary-dir (stdlib)
+    char comp_dir[1024];
+    if (compiler_dir(comp_dir, sizeof(comp_dir))) {
+        snprintf(candidate, sizeof(candidate), "%s%s.ptt", comp_dir, use_path);
+        f = fopen(candidate, "r");
+        if (f) {
+            fclose(f);
+            if (strlen(candidate) + 1 > out_size) return 0;
+            strcpy(out, candidate);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
     // Recognize a --help-style ask before anything else. Without
     // this, `erbos --help` falls into the .ptt-input path and dies
@@ -403,61 +457,25 @@ int main(int argc, char **argv) {
     }
 
     for (int ui = 0; ui < program->program.use_count; ui++) {
-        // Skip if already loaded (implicit-link or earlier explicit `use`).
-        const char *upath = program->program.use_paths[ui];
-        int already_loaded = 0;
-        for (int li = 0; li < loaded_count; li++) {
-            if (!strcmp(loaded_paths[li], upath)) { already_loaded = 1; break; }
-        }
-        if (already_loaded) continue;
-        if (loaded_count >= loaded_cap) {
-            loaded_cap *= 2;
-            loaded_paths = realloc(loaded_paths, loaded_cap * sizeof(char *));
-        }
-        loaded_paths[loaded_count++] = strdup(upath);
-
-        char import_path[512];
         // Sibling base is the originating file's directory, recorded
         // when the `use` was queued. For top-level `use`s in the
         // input file this equals strrchr(input)/; for transitive
         // imports it's the directory of the file that contained the
         // nested `use`.
         const char *dir = use_origin_dirs[ui];
-
-        // Resolve `use <path>` against three roots in order:
-        //   1. <importer's dir>/<path>.ptt        — sibling to the
-        //                                            *importing* file,
-        //                                            not the top-level
-        //                                            input. Codex P1-11.
-        //   2. <project-root>/<path>.ptt          — anywhere under
-        //                                            the user's project
-        //                                            tree, found by
-        //                                            walking up from the
-        //                                            source file looking
-        //                                            for `potato.toml`
-        //   3. <compiler-binary-dir>/<path>.ptt   — bundled stdlib
-        //                                            (e.g. `std/list`,
-        //                                            `std/string`)
         const char *upath_resolved = program->program.use_paths[ui];
-        snprintf(import_path, sizeof(import_path), "%s%s.ptt", dir, upath_resolved);
-        FILE *test_f = fopen(import_path, "r");
-        if (!test_f) {
-            char proj_root[1024];
-            if (find_project_root(input, proj_root, sizeof(proj_root))) {
-                snprintf(import_path, sizeof(import_path),
-                         "%s%s.ptt", proj_root, upath_resolved);
-                test_f = fopen(import_path, "r");
-            }
-        }
-        if (!test_f) {
-            char comp_dir[1024];
-            if (compiler_dir(comp_dir, sizeof(comp_dir))) {
-                snprintf(import_path, sizeof(import_path),
-                         "%s%s.ptt", comp_dir, upath_resolved);
-                test_f = fopen(import_path, "r");
-            }
-        }
-        if (!test_f) {
+
+        // Codex P1-11 (round 2): dedupe is keyed on the *resolved*
+        // file path, not the raw `use` text. Two transitive
+        // `use helper` declarations from sibling dirs lib1/ and
+        // lib2/ resolve to different files (lib1/helper.ptt and
+        // lib2/helper.ptt) and must both load. The previous raw-
+        // text dedupe collapsed them into a single load and
+        // dropped the symbols from whichever helper.ptt was
+        // visited second.
+        char import_path[512];
+        if (!resolve_use_path(upath_resolved, dir, input,
+                              import_path, sizeof(import_path))) {
             // Surface a structured error that adapts to which
             // resolver tier failed, so the user knows the next
             // step instead of just "cannot find module."
@@ -498,7 +516,23 @@ int main(int argc, char **argv) {
             }
             return 1;
         }
-        fclose(test_f);
+
+        // Resolved-path dedupe: skip if this concrete file was
+        // already loaded (whether through this `use` text or an
+        // earlier transitive `use` that resolved to the same file).
+        int already_loaded = 0;
+        for (int li = 0; li < loaded_count; li++) {
+            if (!strcmp(loaded_paths[li], import_path)) {
+                already_loaded = 1;
+                break;
+            }
+        }
+        if (already_loaded) continue;
+        if (loaded_count >= loaded_cap) {
+            loaded_cap *= 2;
+            loaded_paths = realloc(loaded_paths, loaded_cap * sizeof(char *));
+        }
+        loaded_paths[loaded_count++] = strdup(import_path);
 
         // Lex + parse the imported file
         char *imp_src = read_file(import_path);
@@ -588,12 +622,16 @@ int main(int argc, char **argv) {
         // `use std/string_map` (which itself does `use std/string`)
         // pull `String` into the parent program's struct table — no
         // explicit re-import needed at the top of the user's file.
-        // Deduplicate: skip a path that's already present.
         //
-        // Codex P1-11: each absorbed use records the imported file's
-        // directory as its sibling base, so the next loop iteration
-        // resolves nested `use`s relative to where they were
-        // declared rather than the top-level input dir.
+        // Codex P1-11 (round 2): dedupe at absorption time keys on
+        // the full (use_path, origin_dir, alias) tuple. The raw
+        // `use_path` alone is wrong — two transitive `use helper`
+        // declarations from different importer dirs are distinct
+        // entries (they resolve to different files) and both must
+        // be queued. The load loop deduplicates by resolved file
+        // path, so cycles and "same file via two `use` paths" are
+        // still no-ops there. The tuple-dedupe here just prevents
+        // the use_paths array from growing on identical re-imports.
         char imp_dir[512] = {0};
         strncpy(imp_dir, import_path, sizeof(imp_dir) - 1);
         {
@@ -603,9 +641,15 @@ int main(int argc, char **argv) {
         }
         for (int rui = 0; rui < imp_prog->program.use_count; rui++) {
             const char *rpath = imp_prog->program.use_paths[rui];
+            const char *ralias = imp_prog->program.use_aliases[rui];
             int already = 0;
             for (int k = 0; k < program->program.use_count; k++) {
-                if (!strcmp(program->program.use_paths[k], rpath)) { already = 1; break; }
+                if (!strcmp(program->program.use_paths[k], rpath) &&
+                    !strcmp(program->program.use_aliases[k], ralias) &&
+                    !strcmp(use_origin_dirs[k], imp_dir)) {
+                    already = 1;
+                    break;
+                }
             }
             if (already) continue;
             int idx2 = program->program.use_count++;
@@ -616,7 +660,7 @@ int main(int argc, char **argv) {
             use_origin_dirs = realloc(use_origin_dirs,
                 program->program.use_count * sizeof(char *));
             program->program.use_paths[idx2] = strdup(rpath);
-            program->program.use_aliases[idx2] = strdup(imp_prog->program.use_aliases[rui]);
+            program->program.use_aliases[idx2] = strdup(ralias);
             use_origin_dirs[idx2] = strdup(imp_dir);
         }
         free(imp_src);

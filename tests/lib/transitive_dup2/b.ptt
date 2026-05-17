@@ -1,0 +1,3 @@
+use helper as h
+
+call_two() int { give h.val_two() }

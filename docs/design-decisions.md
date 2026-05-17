@@ -1385,3 +1385,52 @@ catches it).
 - `tests/errors/dup_alias.ptt` — `use std/math as a` and
   `use std/math as b`; expected to fail compilation with
   the new diagnostic.
+
+### P1-11 round 2: dedupe by *resolved* path, not raw `use` text
+
+Codex's review of the first P1-11 fix surfaced a closely
+related but distinct bug: the load-loop dedupe and the
+absorption-time dedupe both keyed on the raw `use_paths[ui]`
+string. That's wrong as soon as two transitive `use`s share
+the same use-path text but resolve to different files:
+
+    main.ptt
+      use lib1/a
+      use lib2/b
+    lib1/a.ptt -> use helper -> lib1/helper.ptt: val_one() => 1
+    lib2/b.ptt -> use helper -> lib2/helper.ptt: val_two() => 2
+
+After absorption, parent.use_paths contains two `helper`
+entries (one with origin `lib1/`, one with `lib2/`). The
+old load-loop saw the second `use helper` as "already loaded
+because the string matches" and skipped it; the second
+helper's symbols never made it into the program.
+
+Fix: the load loop now (a) resolves each `use` to a concrete
+file path *first*, then (b) dedupes by that resolved path.
+Resolution is factored into `resolve_use_path()` which walks
+the same three tiers (importer-sibling, project-root,
+compiler-binary-dir). Cycles still terminate because
+re-loading the same concrete file is still a no-op.
+
+Absorption-time dedupe is loosened in the corresponding way:
+it only skips entries that already exist under the *same*
+(use_path, alias, origin_dir) triple. Distinct origin dirs
+mean distinct queue entries even when the use-path text
+matches; the load-loop's resolved-path dedupe handles
+genuine duplicates downstream.
+
+Test: `tests/test_transitive_imports_dup_filenames.ptt`
+plus its fixture pair under `tests/lib/transitive_dup1/`
+and `tests/lib/transitive_dup2/`.
+
+What this teaches: the round-1 fix scoped "transitive
+imports work for one chain" but didn't think through "two
+chains with overlapping helper names." The dedupe key choice
+(raw text vs resolved file) is the root invariant, not the
+origin-dir tracking — origin-dir is a downstream consequence.
+Same lesson as the round-1 ref-self enforcement: when a fix
+has the shape "store extra metadata about each entry," ask
+whether *every* place that compares entries needs to use that
+metadata too. The load-loop and absorption-time dedupe were
+two such places.

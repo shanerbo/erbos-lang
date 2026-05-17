@@ -1,0 +1,21 @@
+// Codex P1-11 round 2: two transitive `use helper` declarations
+// from sibling directories must each resolve to *their own*
+// helper.ptt, not be collapsed into a single load.
+//
+// Fixture layout:
+//   tests/lib/transitive_dup1/helper.ptt   val_one() => 1
+//   tests/lib/transitive_dup1/a.ptt        use helper as h  → calls h.val_one
+//   tests/lib/transitive_dup2/helper.ptt   val_two() => 2
+//   tests/lib/transitive_dup2/b.ptt        use helper as h  → calls h.val_two
+//
+// Pre-fix the dedupe was keyed on the raw text "helper" and
+// loaded only the first one; the second module's symbol was
+// missing at link/check time.
+
+use lib/transitive_dup1/a as a
+use lib/transitive_dup2/b as b
+
+test "two transitive `use helper`s from sibling dirs resolve independently" {
+  assert(a.call_one() eq 1)
+  assert(b.call_two() eq 2)
+}
