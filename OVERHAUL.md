@@ -323,15 +323,20 @@ on completion. Don't redo a checked task.
 
 ### Phase δ — `std/basics` bundle
 
-- [ ] **δ1** Create `std/basics.ptt`. Re-exports: `use std/io`,
-      `use std/string`, `use std/list`, `use std/map`, `use std/
-      string_map`, `use std/test`.
+- [x] **δ1** Create `std/basics.ptt`. Re-exports `use std/string`,
+      `use std/list`, `use std/map`, `use std/string_map`. (`yell`
+      and `assert` are compiler-known names — they don't need a
+      `use` line; `std/io` and `std/test` are conceptual today,
+      not separate files.)
       Acceptance: `use std/basics` makes String / List / Map /
-      StringMap / yell / assert all available without other
-      `use` lines.
-- [ ] **δ2** Verify recursive imports propagate correctly through
-      `std/basics`. (Already implemented in main.c since commit
-      1e987e0.)
+      StringMap all reachable in a single import. Verified via
+      manual smoke test (allocates a List, a StringMap, calls
+      `s.len()` on a literal — all link and run).
+- [x] **δ2** Verify recursive imports propagate correctly through
+      `std/basics`. The transitive-resolution path in main.c
+      (commit 1e987e0) already handles arbitrarily nested `use`
+      directives; the smoke test in δ1 exercised the four-level
+      chain (basics → string_map → string → byte primitives).
 
 ### Phase ε — Drop `list` / `map` / `imap` keyword forms
 
