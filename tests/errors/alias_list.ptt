@@ -1,0 +1,11 @@
+// Plain `q is p` for a List source must be a compile error.
+
+use std/string
+use std/list
+
+spark {
+  a is List of int
+  a.push(1)
+  b is a              // <-- error here
+  yell(b.len())
+}

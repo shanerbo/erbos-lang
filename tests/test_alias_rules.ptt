@@ -1,0 +1,61 @@
+// Tests the asymmetry: plain `q is p` is allowed for primitives
+// (which copy by value) but rejected for heap-shaped values (where
+// it would silently alias). The negative tests live in
+// tests/errors/alias_*.ptt.
+
+use std/string
+use std/list
+
+Point is { x int, y int }
+
+test "plain `is` copies primitives by value" {
+  a is 42
+  b is a
+  // Both hold 42 independently; mutating b doesn't touch a.
+  b be 99
+  assert(a eq 42)
+  assert(b eq 99)
+}
+
+test "plain `is` copies bool by value" {
+  a is true
+  b is a
+  b be false
+  assert(a eq true)
+  assert(b eq false)
+}
+
+test "is now transfers ownership for struct" {
+  a is Point(x is 10, y is 20)
+  b is now a
+  // a is dead; b owns the original block.
+  assert(b.x eq 10)
+  assert(b.y eq 20)
+}
+
+test "is rep produces independent copy for struct" {
+  a is Point(x is 10, y is 20)
+  b is rep a
+  b.x be 99
+  assert(a.x eq 10)   // a unchanged
+  assert(b.x eq 99)
+}
+
+test "is now transfers a List" {
+  a is List of int
+  a.push(1)
+  a.push(2)
+  b is now a
+  assert(b.len() eq 2)
+}
+
+test "is rep deep-clones a List" {
+  a is List of int
+  a.push(1)
+  a.push(2)
+  b is rep a
+  b.push(99)
+  // b grew; a didn't.
+  assert(a.len() eq 2)
+  assert(b.len() eq 3)
+}

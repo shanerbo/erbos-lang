@@ -1,0 +1,9 @@
+// Plain `q is p` for an `array of T` source must be a compile error.
+
+use std/string
+
+spark {
+  a is array of int with cap 8
+  b is a              // <-- error here
+  yell(b.cap)
+}

@@ -1048,6 +1048,32 @@ static void check_stmt(Checker *c, Node *n) {
             if (n->var_decl.is_rep && t.kind == TYPE_STRUCT && t.struct_name) {
                 n->var_decl.type_name = (char *)t.struct_name;
             }
+            // Reject plain `q is p` for heap-shaped values. Without an
+            // explicit `now` (move) or `rep` (deep clone), this would
+            // produce a silent untracked alias: `q` and `p` would
+            // share the same heap pointer, neither marked moved, and
+            // when one goes out of scope the other dangles. The
+            // language's only safe options for heap-shaped sources
+            // are `is now` (transfer ownership) or `is rep` (allocate
+            // an independent copy). Primitives (int/bool/byte) copy
+            // by value, so plain `is` stays fine for them.
+            if (!n->var_decl.is_move && !n->var_decl.is_rep &&
+                n->var_decl.value->type == NODE_IDENT &&
+                (t.kind == TYPE_STRUCT || t.kind == TYPE_LIST ||
+                 t.kind == TYPE_MAP || t.kind == TYPE_ARRAY ||
+                 t.kind == TYPE_STR)) {
+                const char *src = n->var_decl.value->ident.name;
+                fprintf(stderr,
+                    "error:%d: ambiguous alias: `%s is %s` for a heap-shaped value\n",
+                    n->line, n->var_decl.name, src);
+                fprintf(stderr,
+                    "  help: use `%s is now %s` to move ownership (source becomes inaccessible)\n",
+                    n->var_decl.name, src);
+                fprintf(stderr,
+                    "  help: use `%s is rep %s` to deep-clone (independent copy)\n",
+                    n->var_decl.name, src);
+                exit(1);
+            }
             // Bind the new variable; carry its `nomut` flag so future
             // assigns can be rejected.
             set_sym_with_flags(c, n->var_decl.name, t, n->var_decl.is_nomut);

@@ -1,0 +1,12 @@
+// Plain `q is p` for a heap-shaped (struct) source must be a
+// compile error. The user has to say which they meant: `is now`
+// (move) or `is rep` (deep clone).
+
+use std/string
+Point is { x int, y int }
+
+spark {
+  a is Point(x is 1, y is 2)
+  b is a              // <-- error here
+  yell(b.x)
+}

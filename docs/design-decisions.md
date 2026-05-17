@@ -839,3 +839,70 @@ We considered three options earlier:
 - `tests/ir/rep_deep_clone.ptt` — 3 IR regression tests at
   -O0/-O1/-O2.
 - ASan + UBSan clean on every test.
+
+---
+
+## Plain `q is p` for heap-shaped values is now a compile error
+**Date:** 2026-05-17
+**Status:** decided (shipped)
+**Decision:** When the right-hand side is a bare identifier (a
+local variable reference) AND its type is heap-shaped (struct,
+list, map, array, String), plain `q is p` produces a compile
+error. The user must say `is now` (move) or `is rep` (deep clone).
+
+### What was wrong before
+
+Plain `q is p` for a heap-shaped source produced **silent
+untracked aliasing**: irgen rebound `q` to `p`'s pointer, the
+checker didn't mark `p` as moved, and neither was registered as
+"this is an alias" anywhere. When `p` and `q` were in different
+scopes — one going out before the other — the surviving binding
+held a dangling pointer. Demoed earlier in this same log
+(see "is rep shallow-copy + double-free" entry — same
+underlying bug, different surface).
+
+The READMEs and language guide already *claimed* this was
+disallowed (since the World A entry shipped), but it wasn't
+actually enforced. Today's commit closes the gap.
+
+### Implementation
+
+One block in compiler/checker.c NODE_VAR_DECL: if not `is_move`,
+not `is_rep`, source is `NODE_IDENT`, and the resolved type is
+`STRUCT | LIST | MAP | ARRAY | STR`, error out with a teaching
+message that suggests both `is now` and `is rep`.
+
+```
+error:10: ambiguous alias: `b is a` for a heap-shaped value
+  help: use `b is now a` to move ownership (source becomes inaccessible)
+  help: use `b is rep a` to deep-clone (independent copy)
+```
+
+Primitives (`int`, `bool`, `byte`) still allow plain `is`
+because copying an 8-byte primitive value is unambiguous and
+makes two independent values automatically.
+
+### What still works
+
+| Form | Heap-shaped | Primitive |
+|---|---|---|
+| `b is a` | **error** | OK (copies value) |
+| `b is now a` | OK (move) | OK (functionally same as copy) |
+| `b is rep a` | OK (deep clone) | OK (no clone needed; copies value) |
+
+### Codebase audit before shipping
+
+Grepped every `IDENT is IDENT` in the source tree (9 matches).
+All sources were primitive (`int` or `bool`); none were
+heap-shaped. The change broke zero existing files. Future code
+that tries the alias form will hit the new error.
+
+### Tests
+
+- `tests/errors/alias_struct.ptt` — struct alias rejected.
+- `tests/errors/alias_list.ptt` — List alias rejected.
+- `tests/errors/alias_string.ptt` — String alias rejected.
+- `tests/errors/alias_array.ptt` — `array of T` alias rejected.
+- `tests/test_alias_rules.ptt` — 6 framework tests verifying
+  primitive plain `is` still copies, `is now` transfers, and
+  `is rep` deep-clones (for both struct and List sources).

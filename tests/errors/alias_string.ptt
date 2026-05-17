@@ -1,0 +1,9 @@
+// Plain `q is p` for a String source must be a compile error.
+
+use std/string
+
+spark {
+  a is "hello"
+  b is a              // <-- error here
+  yell(b.len())
+}
