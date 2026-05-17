@@ -319,12 +319,30 @@ static Node *clone_node(Node *n) {
             } else {
                 c->call.arg_names = NULL;
             }
+            // Call-site `ref` markers (Codex P0-2). Always allocated
+            // by the parser when arg_count > 0; copy element-wise.
+            if (n->call.arg_is_ref && n->call.arg_count > 0) {
+                c->call.arg_is_ref = malloc(n->call.arg_count * sizeof(int));
+                for (int i = 0; i < n->call.arg_count; i++) {
+                    c->call.arg_is_ref[i] = n->call.arg_is_ref[i];
+                }
+            } else {
+                c->call.arg_is_ref = NULL;
+            }
             break;
         case NODE_METHOD_CALL:
             c->method_call.object = clone_node(n->method_call.object);
             c->method_call.method = xstrdup(n->method_call.method);
             c->method_call.args = clone_node_array(n->method_call.args, n->method_call.arg_count);
             c->method_call.resolved_struct_name = xstrdup(n->method_call.resolved_struct_name);
+            if (n->method_call.arg_is_ref && n->method_call.arg_count > 0) {
+                c->method_call.arg_is_ref = malloc(n->method_call.arg_count * sizeof(int));
+                for (int i = 0; i < n->method_call.arg_count; i++) {
+                    c->method_call.arg_is_ref[i] = n->method_call.arg_is_ref[i];
+                }
+            } else {
+                c->method_call.arg_is_ref = NULL;
+            }
             break;
         case NODE_FIELD_ACCESS:
             c->field_access.object = clone_node(n->field_access.object);

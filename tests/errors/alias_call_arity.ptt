@@ -1,0 +1,10 @@
+// Codex audit P0-1: module-qualified calls must check arity.
+// `math.max(int, int)` takes 2 args; calling with 1 must fail
+// at compile time, not produce garbage at runtime.
+
+use std/string
+use std/math
+
+spark {
+  yell(math.max(1))
+}

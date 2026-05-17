@@ -596,13 +596,33 @@ static Type check_expr(Checker *c, Node *n) {
                     n->line, name, fi->param_count, n->call.arg_count);
                 exit(1);
             }
-            // Check arg types
+            // Check arg types and call-site `ref` markers (Codex P0-2).
+            // Param has `ref` ⇒ call site MUST spell `ref`.
+            // Param does NOT have `ref` ⇒ call site MUST NOT spell `ref`.
+            // The rule keeps mutation visible at the call site.
             for (int j = 0; j < n->call.arg_count; j++) {
                 Type arg_t = check_expr(c, n->call.args[j]);
                 Type expected = parse_type_str(c, fi->param_types_str[j]);
                 if (arg_t.kind != TYPE_UNKNOWN && expected.kind != TYPE_UNKNOWN && !types_equal(arg_t, expected)) {
                     fprintf(stderr, "error:%d: argument %d of '%s' expects '%s', got '%s'\n",
                         n->line, j + 1, name, type_name(expected), type_name(arg_t));
+                    exit(1);
+                }
+                int param_ref = fi->param_is_ref ? fi->param_is_ref[j] : 0;
+                int call_ref  = n->call.arg_is_ref ? n->call.arg_is_ref[j] : 0;
+                if (param_ref && !call_ref) {
+                    fprintf(stderr,
+                        "error:%d: argument %d of '%s' is `ref` — "
+                        "spell `ref` at the call site so the mutation "
+                        "is visible\n",
+                        n->line, j + 1, name);
+                    exit(1);
+                }
+                if (!param_ref && call_ref) {
+                    fprintf(stderr,
+                        "error:%d: argument %d of '%s' is not `ref` — "
+                        "remove the `ref` from the call site\n",
+                        n->line, j + 1, name);
                     exit(1);
                 }
             }
@@ -737,27 +757,77 @@ static Type check_expr(Checker *c, Node *n) {
                 return make_type(TYPE_VOID);
             }
             // Import-alias call: `lib.make_list()` where `lib` is
-            // an import alias. The imported function got renamed
+            // an import alias. The imported function was renamed
             // to `<alias>_make_list` during merge; look it up by
-            // that prefixed name. Also returns its return_type so
-            // var-decls get the correct static type for downstream
-            // method dispatch (`r is lib.make_list(); r.len()`).
+            // that prefixed name. Validate arity and argument types
+            // the same way direct function calls do — without this,
+            // `math.max(1)` (1 arg, expects 2) compiles and reads
+            // garbage. Codex audit P0-1.
             if (n->method_call.object->type == NODE_IDENT) {
                 const char *obj_name = n->method_call.object->ident.name;
+                int is_alias = 0;
                 for (int ai = 0; ai < c->import_count; ai++) {
                     if (c->import_aliases[ai] &&
                         !strcmp(c->import_aliases[ai], obj_name)) {
-                        char prefixed[256];
-                        snprintf(prefixed, sizeof(prefixed),
-                            "%s_%s", obj_name, m);
-                        FuncInfo *afi = find_func(c, prefixed);
-                        if (afi) {
-                            for (int j = 0; j < n->method_call.arg_count; j++)
-                                check_expr(c, n->method_call.args[j]);
-                            return afi->return_type;
-                        }
+                        is_alias = 1;
                         break;
                     }
+                }
+                if (is_alias) {
+                    char prefixed[256];
+                    snprintf(prefixed, sizeof(prefixed),
+                        "%s_%s", obj_name, m);
+                    FuncInfo *afi = find_func(c, prefixed);
+                    if (!afi) {
+                        fprintf(stderr,
+                            "error:%d: module '%s' has no function '%s' "
+                            "(looked for symbol '%s')\n",
+                            n->line, obj_name, m, prefixed);
+                        exit(1);
+                    }
+                    if (n->method_call.arg_count != afi->param_count) {
+                        fprintf(stderr,
+                            "error:%d: function '%s.%s' expects %d "
+                            "arguments, got %d\n",
+                            n->line, obj_name, m,
+                            afi->param_count, n->method_call.arg_count);
+                        exit(1);
+                    }
+                    for (int j = 0; j < n->method_call.arg_count; j++) {
+                        Type arg_t = check_expr(c, n->method_call.args[j]);
+                        Type expected_t = parse_type_str(c,
+                            afi->param_types_str[j]);
+                        if (arg_t.kind != TYPE_UNKNOWN &&
+                            expected_t.kind != TYPE_UNKNOWN &&
+                            !types_equal(arg_t, expected_t)) {
+                            fprintf(stderr,
+                                "error:%d: argument %d of '%s.%s' "
+                                "expects '%s', got '%s'\n",
+                                n->line, j + 1, obj_name, m,
+                                type_name(expected_t), type_name(arg_t));
+                            exit(1);
+                        }
+                        // Call-site `ref` enforcement for module-aliased
+                        // calls (Codex P0-2). Same rule as direct calls.
+                        int param_ref = afi->param_is_ref ? afi->param_is_ref[j] : 0;
+                        int call_ref  = n->method_call.arg_is_ref ? n->method_call.arg_is_ref[j] : 0;
+                        if (param_ref && !call_ref) {
+                            fprintf(stderr,
+                                "error:%d: argument %d of '%s.%s' is "
+                                "`ref` — spell `ref` at the call site\n",
+                                n->line, j + 1, obj_name, m);
+                            exit(1);
+                        }
+                        if (!param_ref && call_ref) {
+                            fprintf(stderr,
+                                "error:%d: argument %d of '%s.%s' is "
+                                "not `ref` — remove the `ref` from the "
+                                "call site\n",
+                                n->line, j + 1, obj_name, m);
+                            exit(1);
+                        }
+                    }
+                    return afi->return_type;
                 }
             }
 

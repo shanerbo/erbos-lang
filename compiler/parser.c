@@ -137,10 +137,15 @@ static Node *parse_primary(Parser *p) {
                 mc->method_call.method = field;
                 int cap = 4;
                 mc->method_call.args = malloc(cap * sizeof(Node *));
+                mc->method_call.arg_is_ref = malloc(cap * sizeof(int));
                 mc->method_call.arg_count = 0;
                 skip_newlines(p);
                 if (!at(p, TOK_RPAREN)) {
-                    mc->method_call.args[mc->method_call.arg_count++] = parse_expr(p);
+                    int is_ref = 0;
+                    if (at(p, TOK_REF)) { p->pos++; is_ref = 1; }
+                    mc->method_call.args[mc->method_call.arg_count] = parse_expr(p);
+                    mc->method_call.arg_is_ref[mc->method_call.arg_count] = is_ref;
+                    mc->method_call.arg_count++;
                     skip_newlines(p);
                     while (at(p, TOK_COMMA)) {
                         p->pos++;
@@ -148,8 +153,13 @@ static Node *parse_primary(Parser *p) {
                         if (mc->method_call.arg_count >= cap) {
                             cap *= 2;
                             mc->method_call.args = realloc(mc->method_call.args, cap * sizeof(Node *));
+                            mc->method_call.arg_is_ref = realloc(mc->method_call.arg_is_ref, cap * sizeof(int));
                         }
-                        mc->method_call.args[mc->method_call.arg_count++] = parse_expr(p);
+                        is_ref = 0;
+                        if (at(p, TOK_REF)) { p->pos++; is_ref = 1; }
+                        mc->method_call.args[mc->method_call.arg_count] = parse_expr(p);
+                        mc->method_call.arg_is_ref[mc->method_call.arg_count] = is_ref;
+                        mc->method_call.arg_count++;
                         skip_newlines(p);
                     }
                 }
@@ -325,6 +335,7 @@ static Node *parse_primary(Parser *p) {
                 int cap = 4;
                 n->call.args = malloc(cap * sizeof(Node *));
                 n->call.arg_names = malloc(cap * sizeof(char *));
+                n->call.arg_is_ref = malloc(cap * sizeof(int));
                 n->call.arg_count = 0;
                 int saw_named = 0;
                 int saw_positional = 0;
@@ -334,10 +345,12 @@ static Node *parse_primary(Parser *p) {
                 // "unexpected token in expression."
                 skip_newlines(p);
                 if (!at(p, TOK_RPAREN)) {
-                    if (at(p, TOK_REF)) p->pos++;
+                    int is_ref = 0;
+                    if (at(p, TOK_REF)) { p->pos++; is_ref = 1; }
                     char *nm = NULL;
                     n->call.args[n->call.arg_count] = parse_call_arg(p, &nm);
                     n->call.arg_names[n->call.arg_count] = nm;
+                    n->call.arg_is_ref[n->call.arg_count] = is_ref;
                     if (nm) saw_named = 1; else saw_positional = 1;
                     n->call.arg_count++;
                     skip_newlines(p);
@@ -348,11 +361,14 @@ static Node *parse_primary(Parser *p) {
                             cap *= 2;
                             n->call.args = realloc(n->call.args, cap * sizeof(Node *));
                             n->call.arg_names = realloc(n->call.arg_names, cap * sizeof(char *));
+                            n->call.arg_is_ref = realloc(n->call.arg_is_ref, cap * sizeof(int));
                         }
-                        if (at(p, TOK_REF)) p->pos++;
+                        is_ref = 0;
+                        if (at(p, TOK_REF)) { p->pos++; is_ref = 1; }
                         nm = NULL;
                         n->call.args[n->call.arg_count] = parse_call_arg(p, &nm);
                         n->call.arg_names[n->call.arg_count] = nm;
+                        n->call.arg_is_ref[n->call.arg_count] = is_ref;
                         if (nm) saw_named = 1; else saw_positional = 1;
                         n->call.arg_count++;
                         skip_newlines(p);
@@ -382,10 +398,15 @@ static Node *parse_primary(Parser *p) {
                             mc->method_call.method = field;
                             int mcap = 4;
                             mc->method_call.args = malloc(mcap * sizeof(Node *));
+                            mc->method_call.arg_is_ref = malloc(mcap * sizeof(int));
                             mc->method_call.arg_count = 0;
                             skip_newlines(p);
                             if (!at(p, TOK_RPAREN)) {
-                                mc->method_call.args[mc->method_call.arg_count++] = parse_expr(p);
+                                int mis_ref = 0;
+                                if (at(p, TOK_REF)) { p->pos++; mis_ref = 1; }
+                                mc->method_call.args[mc->method_call.arg_count] = parse_expr(p);
+                                mc->method_call.arg_is_ref[mc->method_call.arg_count] = mis_ref;
+                                mc->method_call.arg_count++;
                                 skip_newlines(p);
                                 while (at(p, TOK_COMMA)) {
                                     p->pos++;
@@ -393,8 +414,13 @@ static Node *parse_primary(Parser *p) {
                                     if (mc->method_call.arg_count >= mcap) {
                                         mcap *= 2;
                                         mc->method_call.args = realloc(mc->method_call.args, mcap * sizeof(Node *));
+                                        mc->method_call.arg_is_ref = realloc(mc->method_call.arg_is_ref, mcap * sizeof(int));
                                     }
-                                    mc->method_call.args[mc->method_call.arg_count++] = parse_expr(p);
+                                    mis_ref = 0;
+                                    if (at(p, TOK_REF)) { p->pos++; mis_ref = 1; }
+                                    mc->method_call.args[mc->method_call.arg_count] = parse_expr(p);
+                                    mc->method_call.arg_is_ref[mc->method_call.arg_count] = mis_ref;
+                                    mc->method_call.arg_count++;
                                     skip_newlines(p);
                                 }
                             }
@@ -431,16 +457,19 @@ static Node *parse_primary(Parser *p) {
             int cap = 4;
             n->call.args = malloc(cap * sizeof(Node *));
             n->call.arg_names = malloc(cap * sizeof(char *));
+            n->call.arg_is_ref = malloc(cap * sizeof(int));
             n->call.arg_count = 0;
             int saw_named = 0;
             int saw_positional = 0;
             // Multiline argument lists: newlines inside (...) are ignored.
             skip_newlines(p);
             if (!at(p, TOK_RPAREN)) {
-                if (at(p, TOK_REF)) p->pos++; // skip ref at call site
+                int is_ref = 0;
+                if (at(p, TOK_REF)) { p->pos++; is_ref = 1; }
                 char *nm = NULL;
                 n->call.args[n->call.arg_count] = parse_call_arg(p, &nm);
                 n->call.arg_names[n->call.arg_count] = nm;
+                n->call.arg_is_ref[n->call.arg_count] = is_ref;
                 if (nm) saw_named = 1; else saw_positional = 1;
                 n->call.arg_count++;
                 skip_newlines(p);
@@ -451,11 +480,14 @@ static Node *parse_primary(Parser *p) {
                         cap *= 2;
                         n->call.args = realloc(n->call.args, cap * sizeof(Node *));
                         n->call.arg_names = realloc(n->call.arg_names, cap * sizeof(char *));
+                        n->call.arg_is_ref = realloc(n->call.arg_is_ref, cap * sizeof(int));
                     }
-                    if (at(p, TOK_REF)) p->pos++; // skip ref at call site
+                    is_ref = 0;
+                    if (at(p, TOK_REF)) { p->pos++; is_ref = 1; }
                     nm = NULL;
                     n->call.args[n->call.arg_count] = parse_call_arg(p, &nm);
                     n->call.arg_names[n->call.arg_count] = nm;
+                    n->call.arg_is_ref[n->call.arg_count] = is_ref;
                     if (nm) saw_named = 1; else saw_positional = 1;
                     n->call.arg_count++;
                     skip_newlines(p);
@@ -490,17 +522,18 @@ static Node *parse_primary(Parser *p) {
                     mc->method_call.method = field;
                     int cap = 4;
                     mc->method_call.args = malloc(cap * sizeof(Node *));
+                    mc->method_call.arg_is_ref = malloc(cap * sizeof(int));
                     mc->method_call.arg_count = 0;
                     skip_newlines(p);
                     if (!at(p, TOK_RPAREN)) {
-                        // Accept call-site `ref` here too. The
-                        // method-call AST node is also used for
-                        // module-aliased free-function calls
-                        // (`mod.func(...)` — `mod` is an import alias,
-                        // not a value), and those need `ref` arg
-                        // markers to match their declared parameters.
-                        if (at(p, TOK_REF)) p->pos++;
-                        mc->method_call.args[mc->method_call.arg_count++] = parse_expr(p);
+                        // Preserve call-site `ref` markers. Same shape
+                        // as NODE_CALL — used for module-aliased free
+                        // function calls and for non-self method args.
+                        int is_ref = 0;
+                        if (at(p, TOK_REF)) { p->pos++; is_ref = 1; }
+                        mc->method_call.args[mc->method_call.arg_count] = parse_expr(p);
+                        mc->method_call.arg_is_ref[mc->method_call.arg_count] = is_ref;
+                        mc->method_call.arg_count++;
                         skip_newlines(p);
                         while (at(p, TOK_COMMA)) {
                             p->pos++;
@@ -508,9 +541,13 @@ static Node *parse_primary(Parser *p) {
                             if (mc->method_call.arg_count >= cap) {
                                 cap *= 2;
                                 mc->method_call.args = realloc(mc->method_call.args, cap * sizeof(Node *));
+                                mc->method_call.arg_is_ref = realloc(mc->method_call.arg_is_ref, cap * sizeof(int));
                             }
-                            if (at(p, TOK_REF)) p->pos++;
-                            mc->method_call.args[mc->method_call.arg_count++] = parse_expr(p);
+                            is_ref = 0;
+                            if (at(p, TOK_REF)) { p->pos++; is_ref = 1; }
+                            mc->method_call.args[mc->method_call.arg_count] = parse_expr(p);
+                            mc->method_call.arg_is_ref[mc->method_call.arg_count] = is_ref;
+                            mc->method_call.arg_count++;
                             skip_newlines(p);
                         }
                     }

@@ -1,0 +1,17 @@
+// Codex audit P0-2: a function declared with a `ref` parameter
+// must have `ref` at every call site. Without it, mutation of
+// the argument is hidden from the caller.
+
+use std/string
+
+Counter is { value int }
+
+bumps(c ref Counter) {
+  c.value be c.value + 1
+}
+
+spark {
+  c is Counter()
+  bumps(c)               // <-- error: missing call-site ref
+  yell(c.value)
+}

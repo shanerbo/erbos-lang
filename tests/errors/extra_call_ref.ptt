@@ -1,0 +1,17 @@
+// Codex audit P0-2: a non-`ref` parameter must NOT have `ref`
+// at the call site. The marker would falsely signal mutation
+// where none happens.
+
+use std/string
+
+Counter is { value int }
+
+reads(c Counter) {
+  yell(c.value)
+}
+
+spark {
+  c is Counter()
+  c.value be 5
+  reads(ref c)           // <-- error: parameter is not ref
+}

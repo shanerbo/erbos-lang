@@ -1,0 +1,11 @@
+// Codex audit P0-2: same call-site `ref` rule applies to
+// module-qualified calls.
+
+use std/string
+use tests/lib/spudlock_helper
+
+spark {
+  t is Holder(x is 0)
+  spudlock_helper.set_value(t, 99)   // <-- error: missing call-site ref
+  yell(t.x)
+}

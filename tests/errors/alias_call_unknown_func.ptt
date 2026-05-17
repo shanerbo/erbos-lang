@@ -1,0 +1,10 @@
+// Codex audit P0-1: module-qualified calls must reject unknown
+// function names at compile time. Pre-fix this would miscompile
+// to a linker error.
+
+use std/string
+use std/math
+
+spark {
+  yell(math.maxx(1, 2))
+}

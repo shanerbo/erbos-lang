@@ -179,22 +179,34 @@ struct Node {
         // arg_names (named-arg constructor form): parallel to args.
         // When non-NULL, arg_names[i] is the declared field name for
         // args[i]; the call is interpreted as `Foo(field is value, ...)`.
-        // When NULL, the call is positional (today the parser forbids
-        // positional struct constructors with args, so positional ==
-        // free-function call). All-or-nothing: we never mix named and
-        // positional in the same call.
+        // When NULL, the call is positional.
+        //
+        // arg_is_ref: parallel to args. arg_is_ref[i] == 1 iff the
+        // call-site spelled `ref` for that argument. The checker
+        // validates this matches the callee's param_is_ref. Codex
+        // audit P0-2 — without preserving the marker, `f(ref x)`
+        // and `f(x)` were indistinguishable downstream.
         struct {
             char *name;
             Node **args;
             char **arg_names;
+            int *arg_is_ref;
             int arg_count;
         } call;
 
         // NODE_METHOD_CALL (obj.method(args))
+        // arg_is_ref: same as NODE_CALL — call-site `ref` markers,
+        // preserved for checker validation against callee params.
+        // Note: applies to non-receiver args only. For real method
+        // calls (`c.bump()`), the receiver's ref-ness is inferred
+        // from the method's `self` declaration via dot-syntax. For
+        // alias-qualified calls (`mod.func(ref x)`), the entire
+        // arg list is non-receiver and validated like NODE_CALL.
         struct {
             Node *object;
             char *method;
             Node **args;
+            int *arg_is_ref;
             int arg_count;
             char *resolved_struct_name; // set by checker when this is a user method on a struct
         } method_call;
