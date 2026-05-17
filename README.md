@@ -1,8 +1,8 @@
 # Potato 🥔
 
-A systems programming language that reads like English, compiles to native code, and doesn't need a runtime.
-
-**No garbage collector. No libc. No exceptions. Just raw performance with words you can actually read.**
+A small, opinionated systems language that reads like English,
+compiles to native code, and has no garbage collector, no
+runtime, no libc dependency.
 
 Files use the `.ptt` extension — short for potato. 🥔
 
@@ -23,14 +23,188 @@ spark {
 
 ---
 
-## Why Potato?
+## Why Potato
 
-- **Reads like English** — `is`, `be`, `give`, `nah`, `through`, `infi`, `stop`, `skip`
-- **Compiles to native ARM64** — no VM, no interpreter, no runtime
-- **Zero dependencies** — no libc, just syscalls
-- **Memory safe** — use-after-move detection, bounds checking
-- **Type checked** — catches mismatches at compile time
-- **Fast compilation** — instant builds, single-pass compiler
+Most systems languages force you to pick: cheap, fast,
+correct — pick two. C and C++ are cheap and fast and the
+correctness is on you. Rust is fast and correct and the cheap
+went into your debugging time. Go gives you cheap and (mostly)
+correct and pays for it with a runtime. Potato is an
+experiment in being all three by **picking a much smaller
+problem.**
+
+It's a language for writing programs that are tree-shaped,
+single-threaded, and freed when they go out of scope.
+Concurrency, garbage collection, dynamic dispatch, lifetime
+annotations, async — none of that. The features that aren't
+here aren't missing; they're **deliberately** not here, and
+each one's absence is what makes the rest cohere.
+
+The values, in priority order:
+
+1. **Reads like a notebook.** `is`, `be`, `give`, `through`,
+   `infi`, `nah`. The vocabulary is small enough to hold in your
+   head. There's no symbol soup.
+2. **Every decision is explicit.** No magic conversions, no
+   hidden allocations, no implicit copies. If two
+   spellings would have different meanings, the language picks
+   one and rejects the other.
+3. **The compiler is honest.** Single backend, single optimizer
+   pipeline, no preprocessor. What you write is what runs.
+4. **Every feature pays rent.** A feature ships if it makes the
+   first hour better or prevents a class of bugs. Otherwise it
+   doesn't ship — even if every other language has it. See
+   [`docs/design-decisions.md`](docs/design-decisions.md).
+
+The result isn't a Rust competitor or a C++ competitor. It's a
+language that someone tries for an evening, ships something
+working, and walks away with their mental model intact. That's
+the bar.
+
+---
+
+## Memory & ownership at a glance
+
+This is the part of the language that's most worth understanding
+first, because every other design decision flows from it.
+
+### The three rules
+
+1. **Every heap allocation has exactly one owner.** When that
+   owner goes out of scope, the allocation is freed. There is
+   no garbage collector, no refcount, no manual `free`.
+2. **Aliasing is explicit.** To create a second binding for the
+   same data, you say what you mean: `is now` to move ownership
+   (source becomes inaccessible), or `is rep` to deep-clone
+   (independent copy). Plain `q is p` for heap-shaped values is
+   a compile error — the language refuses to guess.
+3. **Borrows are lexical to a function call.** Pass a struct to
+   a function and the function sees a pointer to your data. When
+   the function returns, the borrow is over. There are no
+   long-lived references, no `&T` bindings, no lifetime
+   annotations.
+
+### Construction
+
+```
+Point is {
+  x int
+  y int
+}
+
+p is Point()                    // zero-default — every field starts at 0
+p.x be 10
+p.y be 20
+
+q is Point(x is 10, y is 20)    // named-arg — atomic init, every field required
+nomut origin is Point(x is 0, y is 0)
+```
+
+Two forms because they serve different needs. Zero-default is
+cheap; named-arg is what you reach for when you want
+`nomut`-protected immutability or refactor-safe construction.
+Positional `Point(1, 2)` is intentionally rejected — field
+reorder would silently swap call-site semantics.
+
+### Move and clone
+
+```
+a is Point(x is 1, y is 2)
+
+b is now a                      // ownership moves to b; `a` is dead
+// yell(a.x)                    // COMPILE ERROR: use of moved variable
+
+c is rep b                      // c gets an independent copy (deep clone)
+                                // both b and c are alive, each owns its block
+                                // (currently shallow — see "Status" below)
+```
+
+After the scope ends, each remaining heap binding is freed
+exactly once. RAII is real — no leaks, no double-free.
+
+### Calling convention
+
+| Param | What's passed | Mutation |
+|-------|---------------|----------|
+| `n int`, `b bool` | the value (8 bytes, copied) | n/a |
+| `p Point` (no `ref`) | a pointer to the caller's heap struct | **read-only** (compile error to mutate fields) |
+| `p ref Point` | a pointer to the same struct | callee may mutate |
+
+A non-`ref` heap-shaped param is C++'s `const T&`: same data
+the caller sees, no copy, no mutation. There's no `nomut ref T`
+— absence of `ref` already means read-only.
+
+```
+read_only(p Point) {
+  yell(p.x)            // ok, reads through the pointer
+  // p.x be 99         // COMPILE ERROR: parameter is not ref
+}
+
+bump(p ref Point) {
+  p.x be p.x + 1       // ok, ref opted into mutation
+}
+```
+
+This is the "borrow ends when the function returns" subset of
+Rust's borrow checker, enforced for free by the grammar — there
+is no syntax to express anything else.
+
+### Sharing data — the arena pattern
+
+If you're coming from C++ where you'd reach for `shared_ptr`,
+the Potato idiom is **arena + index**. The arena owns the data
+once; consumers hold integer handles into it.
+
+```
+use std/list
+
+Image is {
+  pixels int
+}
+
+spark {
+  // The arena: a List that owns every Image.
+  images is List of Image
+  images.push(Image(pixels is 32000))
+  icon_id is images.len() - 1
+
+  // Many "consumers" all reference the same image — by integer.
+  window_icon is icon_id
+  toolbar_icon is icon_id
+  about_icon is icon_id
+
+  // Look up via the arena when you need the actual data.
+  icon is images.get(window_icon)
+  yell(icon.pixels)        // 32000
+
+  // The image exists ONCE in memory; window_icon, toolbar_icon,
+  // and about_icon are just int handles into the arena.
+}
+```
+
+**The image exists once in memory.** Just like `shared_ptr`. But
+there's no refcount overhead, no atomic ops, no cycle-leak risk,
+and lifetime is *structural* — the arena outlives its handles by
+construction. This is the pattern modern compilers (LLVM,
+rust-analyzer), ECS game engines, and databases all converged
+on. It works without language changes.
+
+### What Potato deliberately doesn't have
+
+- **No garbage collector.** Single ownership + RAII is enough.
+- **No refcount (`Rc`/`Arc`).** Arena+index covers the use case.
+- **No `&T` long-lived borrows.** They'd require a borrow
+  checker, which is a separate multi-year language design.
+- **No async/await.** A green-thread runtime exists in the
+  source tree but isn't wired into compiled output yet.
+
+These aren't TODOs. They're decisions. If a real Potato program
+ever genuinely can't be expressed with the existing tools, we
+revisit. Until then, every feature on this list is **a tax we
+chose not to pay**.
+
+The full reasoning for each is in
+[`docs/design-decisions.md`](docs/design-decisions.md).
 
 ---
 
@@ -47,8 +221,7 @@ make
 ./erbos hello.ptt
 ./hello
 
-# Optimization levels — the IR pipeline accepts -O0 / -O1 / -O2 in any
-# position relative to the subcommand. Default is -O1.
+# Optimization levels — accepted in any position relative to the subcommand.
 ./erbos -O0 run hello.ptt   # skip iropt entirely
 ./erbos -O1 run hello.ptt   # default, every iropt pass runs
 ./erbos -O2 run hello.ptt   # reserved for tuning (currently same as -O1)
@@ -65,7 +238,7 @@ make
 ```
 x is 10              // declare (type inferred)
 x is int 10          // explicit type
-nomut pi is 3        // immutable
+nomut pi is 3        // immutable (no rebind, no field-mut)
 x be 42              // reassign
 ```
 
@@ -79,6 +252,8 @@ greet(name String) {
   yell("hello {name}")
 }
 ```
+
+`give` returns a value. Bare `give` returns void.
 
 ### Conditionals
 ```
@@ -98,31 +273,6 @@ through (item in nums) { }           // collection
 infi (x gt 0) { x be x - 1 }        // while
 infi { stop }                        // infinite + break
 ```
-
-### Structs
-```
-Point is {
-  x int
-  y int
-}
-
-p is Point()                       // zero-default: fields start at 0
-p.x be 10
-p.y be 20
-
-q is Point(x is 10, y is 20)       // named-arg: atomic init, every field required
-nomut origin is Point(x is 0, y is 0)
-```
-
-Two construction forms:
-
-- `Point()` — zero-default. Cheap; mutate fields afterwards.
-- `Point(field is value, ...)` — named-arg. Atomic. Every declared
-  field must appear exactly once, order is free, types are checked.
-
-Positional constructors (`Point(1, 2)`) are intentionally rejected —
-field reorder would silently swap call-site semantics. Use named-arg
-or define a factory method.
 
 ### Methods
 ```
@@ -172,8 +322,7 @@ in type position. Generic structs and methods are monomorphized
 at compile time — each concrete instantiation gets its own
 emitted code with a mangled symbol (`Box of int` → `_Box__int`,
 `Map of String to int` → `_Map__String__int`). No v-tables, no
-runtime cost. See [`docs/generics-syntax.md`](docs/generics-syntax.md)
-for the full rules.
+runtime cost. See [`docs/generics-syntax.md`](docs/generics-syntax.md).
 
 ### Collections
 ```
@@ -196,23 +345,6 @@ The `[1,2,3]` literal lowers to `List of int` when `use std/list`
 is in scope. The `["k" to v]` literal lowers to
 `Map of String to int` when `use std/map` is in scope.
 
-### Ownership & Safety
-```
-a is Point()
-b is now a          // move — a is dead
-// yell(a.x)       // COMPILE ERROR: use of moved variable
-
-c is rep b          // clone — shallow copy (pointer copy)
-
-{
-  temp is Point()
-}                   // temp freed here (RAII)
-```
-
-> **Note:** RAII is real — heap allocations are freed when their scope ends.
-> `rep` performs a shallow copy (pointer copy), not a deep clone.
-> `ref` is enforced: non-ref struct params cannot be mutated. Caller must pass `ref` explicitly.
-
 ---
 
 ## Keywords
@@ -222,7 +354,7 @@ c is rep b          // clone — shallow copy (pointer copy)
 | `spark` | program entry point |
 | `is` | variable declaration |
 | `be` | reassignment |
-| `nomut` | immutable variable |
+| `nomut` | immutable binding (no rebind, no field-mut) |
 | `give` | return value |
 | `through` | range/collection loop |
 | `from` / `to` / `by` | loop range |
@@ -232,8 +364,8 @@ c is rep b          // clone — shallow copy (pointer copy)
 | `skip` | continue |
 | `nah` | else |
 | `now` | move ownership |
-| `rep` | clone |
-| `ref` | mutable borrow |
+| `rep` | deep clone |
+| `ref` | mutable parameter |
 | `and` / `or` / `not` | logical operators |
 | `eq` / `ne` / `gt` / `lt` / `ge` / `le` | comparisons |
 | `mod` | modulo |
@@ -268,122 +400,37 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 
 ---
 
-## Current Features
+## Status
 
 ### Implemented
-| Feature | Status |
-|---------|--------|
-| Integer arithmetic (+, -, *, /, mod) | ✅ |
-| Strings + interpolation (`"hello {name}"`) | ✅ |
-| String concat with `+` operator | ✅ |
-| Functions + recursion | ✅ |
-| Function arg count validation | ✅ |
-| Unknown function/type detection | ✅ |
-| Structs (heap-allocated) | ✅ |
-| Dynamic lists (push/pop/len, growable) | ✅ |
-| Ordered maps — string keys (set/get/keys/len) | ✅ |
-| Ordered maps — int keys (`imap`) | ✅ |
-| Conditionals (?{ / nah) | ✅ |
-| Loops (through range, through in, infi) | ✅ |
-| Move semantics (`is now`) | ✅ |
-| Use-after-move detection (heap vars) | ✅ |
-| Type inference + type mismatch errors | ✅ |
-| Bounds checking (panic on OOB index) | ✅ |
-| nomut enforcement | ✅ |
-| Negative numbers | ✅ |
-| `nil` for null pointers | ✅ |
-| Method syntax (obj.method()) | ✅ |
-| User-defined methods on structs and enums (`Type.name(self ...)`) | ✅ |
-| Per-struct field resolution (typed receivers; ambiguity is a compile error) | ✅ |
-| Generics + monomorphization (`Box of T`, `Map of K to V`, …) | ✅ |
-| Scoped blocks ({} for lifetimes) | ✅ |
-| RAII (heap freed at scope end) | ✅ |
-| Enums + `match` pattern matching | ✅ |
-| Multi-file imports (`use std/math`) | ✅ |
-| Built-in test framework (`test`/`assert`) | ✅ |
-| Optimizer pass (constant folding, DCE, inlining) | ✅ |
-| `erbos run` (compile + execute + cleanup) | ✅ |
+Integer + bool + byte arithmetic. Strings + interpolation. String
+concat with `+`. Functions, recursion, type inference. Structs
+(zero-default + named-arg construction). Lists, maps (String- or
+int-keyed), arrays. Conditionals, range/collection/while loops.
+Move semantics with use-after-move detection. `nomut`
+enforcement (rebind + field-mut). Methods (with `ref self` for
+mutation). Generics + monomorphization. Enums + `match`.
+Multi-file imports. Built-in test framework. Five-pass IR
+optimizer (inlining, SRA, escape analysis, BCE, LICM).
+Bounds-checked array/list/map access.
 
-### Partial / Experimental
-| Feature | Status |
-|---------|--------|
-| Clone (`is rep`) | Shallow copy (pointer copy). Deep clone not implemented. |
-| `ref` enforcement | Non-ref struct params cannot be mutated (compile error). |
-| Green thread runtime | Separate C library in `compiler/runtime/`. Not integrated into compiled `.ptt` output. |
-| Channels | Separate C library in `compiler/runtime/`. Not integrated into compiled output. |
-| Pure-Potato stdlib (`std/string`, `std/list`, `std/map`) | The only collection / String surface. Backed by `array of T`. List / map literals lower through these types automatically. |
-| `array of T` / `array of byte` | Typed-storage primitives — what the stdlib types are built on. |
+### Partial
+- `is rep` is currently shallow copy; deep clone is in flight.
+  See `docs/design-decisions.md` for the latent UAF and the fix.
+- Green-thread runtime exists in `compiler/runtime/` but isn't
+  wired into compiled `.ptt` output.
 
-### Planned (v0.2+)
-| Feature | Status |
-|---------|--------|
-| Deep clone for `rep` | Requires type-aware copy |
-| Result/Option as built-in types | — |
-| Traits / interfaces | — |
-| Operator overloading | — |
-| Self-hosting | — |
+### Roadmap
+- Deep clone for `rep` (correctness fix)
+- `Result of T to E` for fallible operations
+- Better error messages with caret + source context
+- File I/O
+- Default `_<Type>_yell` for debugging structs without
+  per-type boilerplate
 
----
-
-## Comparison
-
-| | Potato | Rust | C++ | Go | Python |
-|--|-------|------|-----|-----|--------|
-| **Syntax** | English words | Symbol-heavy | Verbose | Clean | Clean |
-| **Compilation** | Instant | Slow | Slow | Fast | Interpreted |
-| **Memory** | Scope tracking + move | Borrow checker | Manual/RAII | GC | GC |
-| **Safety** | Move detection, bounds/capacity panics | Full borrow checker | Opt-in | Nil panics | Runtime errors |
-| **Dependencies** | Zero (no libc) | Minimal | Heavy (STL) | Runtime | Interpreter |
-| **Learning curve** | Low | High | High | Low | Low |
-| **Performance** | Native ARM64 | Native | Native | Native + GC | Slow |
-| **Concurrency** | Green threads | async/await | threads | Goroutines | GIL |
-| **Error handling** | Planned (Result types) | Result<T,E> | Exceptions | error return | Exceptions |
-| **Generics** | Monomorphized | Monomorphized | Templates | Type params | Duck typing |
-
-### Potato vs Rust
-**Wins:** Simpler syntax, no lifetime annotations, faster to learn, instant compilation.
-**Loses:** No borrow checker, no ecosystem.
-
-### Potato vs C++
-**Wins:** No headers, no UB, no preprocessor, readable syntax, compile-time move checking, monomorphized generics without template metaprogramming.
-**Loses:** No operator overloading, less control.
-
-### Potato vs Go
-**Wins:** No GC, move semantics prevent some leaks, word-based syntax.
-**Loses:** No goroutine integration in compiled output yet (the green-thread runtime in `compiler/runtime/` is not wired into compiled binaries).
-
-### Potato vs Python
-**Wins:** 100x+ faster, compiled, type safe at compile time, no runtime needed.
-**Loses:** No libraries, no REPL, less forgiving, early stage.
-
----
-
-## Roadmap
-
-- [x] Enums with data (algebraic types)
-- [x] Pattern matching (`match`)
-- [x] Multi-file imports (`use`)
-- [x] Built-in test runner (`erbos test`)
-- [x] User-defined methods on structs and enums
-- [x] Per-struct type-aware field resolution
-- [x] Generics + monomorphization
-- [x] Cross-block / call-aware register allocation in the IR backend
-- [x] Switch IR to default backend; retire the direct codegen
-- [x] iropt scaffold + `-O0`/`-O1`/`-O2` CLI flags
-- [x] Optimization passes: inlining, SRA, escape analysis, BCE, LICM
-- [x] Pure-Potato `std/list`, `std/map`, `std/string_map`, `std/string` (against `array of T`)
-- [x] `spark` reserved keyword; `assert` demoted to stdlib function
-- [x] Compile-time `yell` overload (resolves on static argument type)
-- [x] Drop legacy `list` / `map` / `imap` keyword forms (phase ε)
-- [x] Delete dead C runtime collection helpers (phase ζ1)
-- [ ] Deep clone for `rep`
-- [ ] Result/Option as built-in types
-- [ ] Traits / interfaces
-- [ ] Operator overloading
-- [ ] Compile-time evaluation
-- [ ] Built-in `fmt`
-- [ ] Green-thread runtime integration in compiled output
-- [ ] Self-hosting (compiler written in Potato)
+Explicitly **not** on the roadmap (see design-decisions log):
+operator overloading, traits/interfaces, async, macros,
+self-hosting (deferred until language is stable).
 
 ---
 
@@ -400,7 +447,11 @@ test "my feature" {
 Run: `erbos test file.ptt`
 
 ### Compiler test suite
-`make test` runs: passing examples, leetcode library compile checks, expected compile-error tests, expected runtime panics, C-runtime tests, framework tests across the whole `tests/` tree, and the IR backend regression matrix at `-O0` / `-O1` / `-O2`.
+`make test` runs: passing examples, leetcode library compile
+checks, expected compile-error tests, expected runtime panics,
+C-runtime tests, framework tests across the whole `tests/`
+tree, and the IR backend regression matrix at `-O0` / `-O1` /
+`-O2`. Must end with `All tests passed.`
 
 ---
 
@@ -432,50 +483,40 @@ Written in C11. The compiler frontend lives in `compiler/`; the
 green-thread runtime + channels live in `compiler/runtime/`. No
 external dependencies.
 
-The **IROpt** stage (`compiler/iropt.c`) runs the five optimization
-passes — inlining, scalar replacement of aggregates, escape
-analysis (stackify), bounds-check elimination, and loop-invariant
-code motion — when called at `-O1` or `-O2`. `-O0` skips them all.
+The **IROpt** stage runs five passes — inlining, scalar
+replacement of aggregates, escape analysis (stackify), bounds-
+check elimination, and loop-invariant code motion — at `-O1`
+and `-O2`. `-O0` skips them all.
 
-The **Monomorph** pass (`compiler/monomorph.c`) instantiates every
-concrete generic form (`Box of int`, `Map of String to int`, …)
-before type checking, so the rest of the pipeline only sees fully-
+The **Monomorph** pass instantiates every concrete generic
+form (`Box of int`, `Map of String to int`, …) before type
+checking, so the rest of the pipeline only sees fully-
 specialised types. Names are mangled inside-out:
-`List of Map of String to int` becomes the symbol
-`_List__Map__String__int`.
+`List of Map of String to int` becomes `_List__Map__String__int`.
 
-The **IR backend** is the only backend. It uses cross-block,
-call-aware register allocation: vregs whose live range crosses a
-`bl` are placed in callee-save registers (x19..x28) with proper
-prologue saves; shorter-lived values use x8/x11..x18 (x9 and x10
-are reserved as iremit scratch for large-offset frame addressing).
+The **IR backend** is the only backend. Cross-block, call-aware
+register allocation: vregs whose live range crosses a `bl` are
+placed in callee-save registers (x19..x28) with proper prologue
+saves; shorter-lived values use x8/x11..x18 (x9 and x10 are
+reserved as iremit scratch for large-offset frame addressing).
 See [`docs/ir-pipeline.md`](docs/ir-pipeline.md).
 
 `erbos ir <file.ptt>` emits the .s only, useful for inspecting
-generated assembly. The runtime helpers in
-`compiler/runtime_emit.c` are down to the irreducible kernel-
-boundary set: `_heap_alloc` / `_heap_free`, `_yell_int` /
-`_String_yell`, `_write_bytes`, `_panic_oob` / `_panic_capacity` /
-`_assert_fail`, per-struct `_alloc_<X>` constructors, plus a small
-residual (`_str_eq` / `_str_concat` / `_int_to_str` / `_yell`
-shim) used by the operator + interpolation paths. The pure-Potato
-stdlib (`std/list`, `std/map`, `std/string`) provides every
-collection and String operation through monomorphized user
-methods. See [`docs/runtime.md`](docs/runtime.md) for the full
-breakdown.
+generated assembly.
 
 ---
 
 ## Contributing
 
-The language is in early development. If you want to help shape it, open an issue or PR.
+The language is in early development. If you want to help shape
+it, open an issue or PR.
 
 Before proposing a language change, read
-[`docs/design-decisions.md`](docs/design-decisions.md) — it's
-the running log of what's been decided, what's parked, and the
+[`docs/design-decisions.md`](docs/design-decisions.md) — the
+running log of what's been decided, what's parked, and the
 first-principles reasoning. The standing rule: **every feature
-must pay rent** (improve the user's first hour, or prevent a
-class of bugs in their first thousand lines).
+must pay rent** — improve the user's first hour, or prevent a
+class of bugs in their first thousand lines.
 
 ---
 
