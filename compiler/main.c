@@ -923,16 +923,22 @@ int main(int argc, char **argv) {
     EMIT_IR_TO_FILE(asm_path);
     if (!run_mode) printf("generated %s\n", asm_path);
 
-    // Assemble + link
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd), "as -o %s.o %s", out_name, asm_path);
+    // Assemble + link.
+    // Codex P1-13: every path goes through system() and must be
+    // quoted so paths with spaces or shell metacharacters don't
+    // get split. Single-quotes around all path arguments.
+    // (A `'` in a path would still break — proper fix is
+    // posix_spawn with argv, but that's a bigger refactor; the
+    // single-quote wrap covers the common case.)
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "as -o '%s.o' '%s'", out_name, asm_path);
     if (system(cmd) != 0) { fprintf(stderr, "error: assembly failed\n"); return 1; }
 
-    snprintf(cmd, sizeof(cmd), "ld -o %s %s.o -lSystem -syslibroot $(xcrun --show-sdk-path) -e _start", out_name, out_name);
+    snprintf(cmd, sizeof(cmd), "ld -o '%s' '%s.o' -lSystem -syslibroot $(xcrun --show-sdk-path) -e _start", out_name, out_name);
     if (system(cmd) != 0) { fprintf(stderr, "error: linking failed\n"); return 1; }
 
     // Cleanup
-    snprintf(cmd, sizeof(cmd), "rm -f %s.o %s.s", out_name, out_name);
+    snprintf(cmd, sizeof(cmd), "rm -f '%s.o' '%s.s'", out_name, out_name);
     system(cmd);
 
     if (run_mode) {
@@ -944,12 +950,12 @@ int main(int argc, char **argv) {
         // isn't on $PATH at all).
         char run_cmd[1024];
         if (strchr(out_name, '/'))
-            snprintf(run_cmd, sizeof(run_cmd), "%s", out_name);
+            snprintf(run_cmd, sizeof(run_cmd), "'%s'", out_name);
         else
-            snprintf(run_cmd, sizeof(run_cmd), "./%s", out_name);
+            snprintf(run_cmd, sizeof(run_cmd), "./'%s'", out_name);
         int ret = system(run_cmd);
         // Delete binary after running
-        snprintf(cmd, sizeof(cmd), "rm -f %s", out_name);
+        snprintf(cmd, sizeof(cmd), "rm -f '%s'", out_name);
         system(cmd);
         free(src);
         return WEXITSTATUS(ret);

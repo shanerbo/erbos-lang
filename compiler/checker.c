@@ -704,6 +704,25 @@ static Type check_expr(Checker *c, Node *n) {
                     user_method = find_method(c, "String", m);
                     if (user_method) receiver_type_name = "String";
                 }
+                // Codex P1-14: when the receiver is String and no
+                // method matches, surface the most likely cause —
+                // missing `use std/string`. Pre-fix this fell to
+                // the legacy `len` built-in fallback (returns int
+                // unconditionally) and miscompiled to bare `bl _len`,
+                // surfacing as a cryptic linker error.
+                if (!user_method &&
+                    obj_t.kind == TYPE_STRUCT &&
+                    obj_t.struct_name &&
+                    !strcmp(obj_t.struct_name, "String")) {
+                    fprintf(stderr,
+                        "error:%d: String has no method '%s' in scope\n",
+                        n->line, m);
+                    fprintf(stderr,
+                        "  help: add `use std/string` at the top of "
+                        "the file (or `use std/basics` for the "
+                        "String + List + Map bundle)\n");
+                    exit(1);
+                }
                 if (user_method) {
                     // Implicit `self` is the receiver; user-declared params follow.
                     int expected = user_method->param_count - 1; // minus self

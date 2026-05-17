@@ -1,0 +1,8 @@
+// Codex audit P1-14: missing `use std/string` should produce
+// a checker error with a clear suggestion, not a late linker
+// error for `_len`.
+
+spark {
+  s is "hello"
+  yell(s.len())
+}
