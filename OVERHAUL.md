@@ -1,9 +1,16 @@
 # Potato language overhaul — execution plan
 
-**Status:** in progress. Started 2026-05-16 after the audit
-conversation. This file is the persistent source of truth — if a
-session dies mid-flight, the next session reads this file and
-picks up at the first unchecked task.
+**Status:** ✅ COMPLETE (2026-05-16). Every phase shipped.
+Frozen as a historical record of the major language overhaul
+that retired the legacy keyword forms (`str`, `list`, `map`,
+`imap`), deleted the C-runtime collection helpers, moved the
+collection types into pure Potato, and consolidated testing onto
+the framework runner. The user-facing reference is now
+[`README.md`](README.md) and the docs in `docs/`.
+
+The task checklist below is preserved for context but is not
+the source of truth for current behavior. Look at the actual
+code and tests instead.
 
 ## Goal
 

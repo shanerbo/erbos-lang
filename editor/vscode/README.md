@@ -15,7 +15,7 @@ Then reload VS Code (`Cmd+Shift+P` → "Reload Window").
 
 - Syntax highlighting for all keywords, operators, types
 - String interpolation highlighting (`{var}` inside strings)
-- Comment highlighting (// and /* */)
+- Comment highlighting (`//` and `/* */`)
 - Auto-closing brackets and quotes
 - Auto-indentation on `{`
 
@@ -23,13 +23,15 @@ Then reload VS Code (`Cmd+Shift+P` → "Reload Window").
 
 | Element | Color category |
 |---------|---------------|
-| `spark`, `give`, `through`, `infi`, `stop`, `skip`, `nah` | Control keywords |
-| `is`, `be`, `nomut`, `now`, `rep`, `ref` | Declaration keywords |
+| `spark`, `give`, `through`, `from`, `to`, `by`, `in`, `infi`, `stop`, `skip`, `nah`, `match`, `test` | Control keywords |
+| `is`, `be`, `nomut`, `now`, `rep`, `ref`, `use`, `as`, `of`, `with`, `cap` | Declaration keywords |
 | `and`, `or`, `not` | Logical operators |
 | `eq`, `ne`, `gt`, `lt`, `ge`, `le`, `mod` | Comparison operators |
-| `int`, `str`, `bool`, `void`, `list`, `map`, `task` | Types |
-| `yell`, `len`, `str_concat`, `str_len`, `char_at`, `int_to_str`, `list_set` | Built-in functions |
-| `Point`, `Node` (PascalCase) | Struct/type names |
+| `int`, `bool`, `byte`, `void`, `array`, `task` | Primitive types |
+| `String`, `List`, `Map` | Stdlib types |
+| `yell`, `assert` | Built-in functions |
+| `.push`, `.pop`, `.get`, `.set`, `.keys`, `.len`, `.byte_at`, `.char_at`, `.to_string`, `.equals`, `.empty`, `.concat` | Stdlib methods |
+| `Point`, `Node` (PascalCase) | Struct / enum names |
 | `"hello {name}"` | Strings with interpolation |
-| `true`, `false` | Boolean constants |
+| `true`, `false`, `nil` | Constants |
 | `// comment` | Comments |

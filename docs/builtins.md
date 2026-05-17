@@ -1,39 +1,25 @@
 # Potato Built-in Functions 🥔
 
-> **Status:** post-overhaul. Free-function string builtins
-> (`str_len`, `str_eq`, `str_concat`, `int_to_str`, `char_at`),
-> kernel-layer names (`heap_alloc`, `mem_load`, etc.), and the
-> legacy collection keyword forms (`list of T`, `map of K to V`,
-> `imap of int to V`) are all gone. User code uses the pure-Potato
-> stdlib types (`List of T`, `Map of K to V`, `StringMap of V`)
-> from std/list / std/map / std/string_map. Programs that want
-> the comfortable defaults import `std/basics` for the bundle.
+Reference for the names the Potato compiler treats specially:
+`yell`, `assert`, `len`, plus string / collection methods that
+come from the stdlib (`use std/...`).
 
 ## Output
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `yell(value)` | Print a value with newline. Resolves at compile time on the static type — int / bool / byte → `_yell_int`, String → `_String_yell`, struct T → `_<T>_yell` (user-defined). | `yell(42)`, `yell("hi")`, `yell(c)` (where `Counter.yell(self Counter)` is defined) |
+| `yell(value)` | Print a value with a trailing newline. Resolves at compile time on the static type — int / bool / byte → `_yell_int`, String → `_String_yell`, struct T → `_<T>_yell` (user-defined). | `yell(42)`, `yell("hi")`, `yell(c)` (where `Counter.yell(self Counter)` is defined) |
 
 Users overload `yell` on their own types by defining
 `Type.yell(self Type) { ... }`; subsequent `yell(value : Type)`
 calls resolve to it at compile time.
 
-## Universal
-
-| Function | Description | Example |
-|----------|-------------|---------|
-| `len(value)` | Length of a legacy `list`, `map`, or `imap`. | `len(nums)` |
-
-`len()` on strings is gone — use `s.len()` (which dispatches to
-`String.len`). The free-function `len` will be retired in phase ε
-once the legacy collection keyword forms go.
-
 ## Strings
 
-`String` is a stdlib struct (in `std/string.ptt`); programs that
-manipulate strings explicitly write `use std/string` (or the
-bundle `use std/basics`).
+`String` is a stdlib struct (`std/string.ptt`). String literals
+(`"..."`) are typed as `String` directly — no import needed for
+the literal type itself, though explicit method calls require
+`use std/string` (or the bundle `use std/basics`).
 
 | Method / Operator | Description | Example |
 |---|---|---|
@@ -43,14 +29,14 @@ bundle `use std/basics`).
 | `s.byte_at(i)` | byte at index, as int | `"abc".byte_at(0)` → 97 |
 | `s.char_at(i)` | 1-byte String at index | `"abc".char_at(0)` eq `"a"` |
 | `s + t` | concatenation, returns a fresh String | `"hi" + " there"` |
-| `s eq t`, `s ne t` | structural equality / inequality | `s eq "hello"` |
+| `s eq t`, `s ne t` | structural (byte-by-byte) equality | `s eq "hello"` |
 | `n.to_string()` | int → decimal String | `42.to_string()` |
 | `s.yell()`, `yell(s)` | print + newline | both emit `bl _String_yell` |
 
-String literals (`"..."`) lower to a 32-byte `String` header
-backed by an `array of byte`; the rodata bytes live behind a
-two-tier indirection (String → array of byte → bytes). The
-compiler knows the layout; user code only sees `String`.
+String literals lower to a 32-byte `String` header backed by an
+`array of byte`; the rodata bytes live behind a two-tier
+indirection (String → array of byte → bytes). The compiler knows
+the layout; user code only sees `String`.
 
 String interpolation `"hi {name}"` desugars to a chain of `+`
 operations — same `String.concat` path as explicit concatenation.
@@ -72,20 +58,23 @@ import is present.
 | `[a, b, c]` | list literal | `nums is [1, 2, 3]` |
 | `through (x in xs) { }` | iterate | dispatches to `.len` + `.get` |
 
-## Maps (`std/string_map`, `std/map`)
+## Maps (`std/map`)
 
-`StringMap of V` is the string-keyed map; `Map of K to V` is for
-int / pointer-shaped keys (uses `==` directly). Map literals
-`["k" to v]` lower to `StringMap of int` automatically when
-`use std/string_map` is in scope.
+`Map of K to V` handles every key type: int, pointer-shaped
+struct, or `String`. The binary `eq` operator on String operands
+routes through `_str_eq` (byte-by-byte compare) inside generic
+code, so two `"foo"` literals from different rodata addresses
+match correctly.
+
+Map literals `["k" to v]` lower to `Map of String to int`
+automatically when `use std/map` is in scope.
 
 | Method / Form | Description |
 |---|---|
-| `m is StringMap of V` | construct an empty string-keyed map |
-| `m is Map of K to V` | construct an empty int / pointer-keyed map |
+| `m is Map of K to V` | construct an empty map |
 | `m.set(key, val)` | insert / update |
 | `m.get(key)` | get value (0 if absent) |
-| `m.keys()` | List of keys (StringMap only) |
+| `m.keys()` | `List of K` of keys in insertion order |
 | `m.len()` | entry count |
 | `["k" to v, ...]` | string-keyed map literal |
 
@@ -95,8 +84,12 @@ int / pointer-shaped keys (uses `==` directly). Map literals
 |--------|-------------|---------|
 | `StructName()` | heap-allocate struct | `Point()` |
 | `Type.method(self [ref] Type, ...)` | define a method on a struct or enum | `Counter.bump(self ref Counter) { ... }` |
-| `StructName of T()` | constructor for a generic instantiation | `Box of int ()`, `Map of str to int ()` |
-| `Type of T.method(self [ref] Type of T, ...)` | method on a generic type | `Box of T.set(self ref Box of T, v T) { ... }` |
+| `StructName of T` (no parens) | auto-construct a generic instantiation | `Box of int`, `Map of String to int` |
+| `Type.method(self [ref] Type of T, ...)` | method on a generic type | `Box.set(self ref Box of T, v T) { ... }` |
+
+Struct and enum names must start with an uppercase letter
+(PascalCase). The grammar uses leading-case to disambiguate
+`Foo()` (constructor) from `foo()` (call) at parse time.
 
 ## Tasks (concurrency placeholder)
 
@@ -105,7 +98,7 @@ int / pointer-shaped keys (uses `==` directly). Map literals
 | `t is task()` | create a task handle | `t is task()` |
 | `t.fire(fn(...))` | schedule a call (synchronous in compiled output today) | `t.fire(worker())` |
 
-> The green-thread runtime in `src/runtime.c` runs in
+> The green-thread runtime in `compiler/runtime/` runs in
 > `make test-runtime` only; it is not yet wired into compiled
 > binaries.
 
@@ -115,18 +108,19 @@ int / pointer-shaped keys (uses `==` directly). Map literals
 |----------|-------------|---------|
 | `assert(cond)` | pass if true; on false print line + " assertion failed", exit 1 | `assert(x eq 5)` |
 
-`assert` is no longer a reserved keyword — it parses as a regular
-call but the checker recognises the name and emits the same
-`_assert_fail`-on-false path. Conceptually a `std/test` function.
+`assert` is a regular function call (not a reserved keyword) —
+the checker recognises the name and emits a conditional
+`_assert_fail`-on-false path. Programs at most have a single
+`spark { }` block; the test runner synthesises its own entry
+point that calls each `_test_<i>` function in turn.
 
 ## Standard Library
 
 ```
-use std/basics       // bundle: String + List + Map + StringMap
+use std/basics       // bundle: String + List + Map
 use std/string       // String, String.* methods, int.to_string
 use std/list         // List of T
-use std/map          // Map of K to V (int / pointer-shaped K)
-use std/string_map   // StringMap of V (String keys with .equals)
+use std/map          // Map of K to V (any K, including String)
 use std/math         // min, max, abs, pow
 use std/queue        // queue.new, push, pop, size, empty
 use std/stack        // stack.new, push, pop, peek, size, empty

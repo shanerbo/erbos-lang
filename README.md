@@ -75,7 +75,7 @@ add(a int, b int) int {
   give a + b
 }
 
-greet(name str) {
+greet(name String) {
   yell("hello {name}")
 }
 ```
@@ -94,7 +94,7 @@ x gt 10 ?{
 ### Loops
 ```
 through (i from 0 to 10 by 1) { }   // range
-through (item in list) { }           // collection
+through (item in nums) { }           // collection
 infi (x gt 0) { x be x - 1 }        // while
 infi { stop }                        // infinite + break
 ```
@@ -157,33 +157,30 @@ introduces a key→value pair. There is no `<T>` syntax anywhere
 in type position. Generic structs and methods are monomorphized
 at compile time — each concrete instantiation gets its own
 emitted code with a mangled symbol (`Box of int` → `_Box__int`,
-`Map of str to int` → `_Map__str__int`). No v-tables, no runtime cost.
-See [`docs/generics-syntax.md`](docs/generics-syntax.md) for the
-full rules.
+`Map of String to int` → `_Map__String__int`). No v-tables, no
+runtime cost. See [`docs/generics-syntax.md`](docs/generics-syntax.md)
+for the full rules.
 
 ### Collections
 ```
-use std/basics                // bundle: String + List + Map + StringMap
+use std/basics                // bundle: String + List + Map
 
-xs is List of int             // pure-Potato stdlib type
+xs is List of int
 xs.push(10)
 yell(xs.pop())
 
-m is StringMap of int         // String-keyed map
+m is Map of String to int     // String-keyed
 m.set("key", 42)
 yell(m.get("key"))
 
-mi is Map of int to int       // int-keyed map
+mi is Map of int to int       // int-keyed
 mi.set(42, 100)
 yell(mi.get(42))
 ```
 
-The `[1,2,3]` and `["k" to v]` literal forms lower to
-`List of int` and `StringMap of int` automatically when the
-matching `use std/list` / `use std/string_map` is in scope.
-The legacy `list of T` / `map of K to V` / `imap of int to V`
-keyword forms are retired (phase ε of the
-[overhaul plan](OVERHAUL.md)).
+The `[1,2,3]` literal lowers to `List of int` when `use std/list`
+is in scope. The `["k" to v]` literal lowers to
+`Map of String to int` when `use std/map` is in scope.
 
 ### Ownership & Safety
 ```
@@ -298,9 +295,9 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 |---------|--------|
 | Clone (`is rep`) | Shallow copy (pointer copy). Deep clone not implemented. |
 | `ref` enforcement | Non-ref struct params cannot be mutated (compile error). |
-| Green thread runtime | Separate C library (`src/runtime.c`). Not integrated into compiled `.ptt` output. |
-| Channels | Separate C library (`src/channel.c`). Not integrated into compiled output. |
-| Pure-Potato stdlib (`std/string`, `std/list`, `std/map`, `std/string_map`) | The only collection / String surface. Backed by `array of T`. List / map literals lower through these types automatically. Legacy `list` / `map` / `imap` keyword forms retired (ε1). |
+| Green thread runtime | Separate C library in `compiler/runtime/`. Not integrated into compiled `.ptt` output. |
+| Channels | Separate C library in `compiler/runtime/`. Not integrated into compiled output. |
+| Pure-Potato stdlib (`std/string`, `std/list`, `std/map`) | The only collection / String surface. Backed by `array of T`. List / map literals lower through these types automatically. |
 | `array of T` / `array of byte` | Typed-storage primitives — what the stdlib types are built on. |
 
 ### Planned (v0.2+)
@@ -339,7 +336,7 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 
 ### Potato vs Go
 **Wins:** No GC, move semantics prevent some leaks, word-based syntax.
-**Loses:** No goroutine integration in compiled output (the green-thread runtime in `src/runtime.c` is not yet wired into compiled binaries).
+**Loses:** No goroutine integration in compiled output yet (the green-thread runtime in `compiler/runtime/` is not wired into compiled binaries).
 
 ### Potato vs Python
 **Wins:** 100x+ faster, compiled, type safe at compile time, no runtime needed.
@@ -374,10 +371,9 @@ Both symbol and word forms work for comparisons and modulo. Use whichever you pr
 - [ ] Green-thread runtime integration in compiled output
 - [ ] Self-hosting (compiler written in Potato)
 
-The active overhaul plan with locked design decisions and per-phase
-status is in [`OVERHAUL.md`](OVERHAUL.md). The earlier multi-phase
-plan that got us to the current point is in
-[`docs/native-stdlib-plan.md`](docs/native-stdlib-plan.md).
+[`OVERHAUL.md`](OVERHAUL.md) is the historical record of the major
+2025–2026 language overhaul (typed arrays, pure-Potato stdlib,
+keyword retirement, framework-only testing). All shipped.
 
 ---
 
@@ -394,7 +390,7 @@ test "my feature" {
 Run: `erbos test file.ptt`
 
 ### Compiler test suite
-`make test` runs: passing examples, compile error tests, runtime panic tests, C runtime tests, output-validated leetcode tests, and framework tests.
+`make test` runs: passing examples, leetcode library compile checks, expected compile-error tests, expected runtime panics, C-runtime tests, framework tests across the whole `tests/` tree, and the IR backend regression matrix at `-O0` / `-O1` / `-O2`.
 
 ---
 
@@ -409,8 +405,8 @@ spark {
 ```
 
 Standard library:
-- `std/basics` — bundle (`String` + `List` + `Map` + `StringMap`)
-- `std/string`, `std/list`, `std/map`, `std/string_map`
+- `std/basics` — bundle (`String` + `List` + `Map`)
+- `std/string`, `std/list`, `std/map`
 - `std/math`, `std/queue`, `std/stack`
 
 ---
@@ -422,20 +418,41 @@ source.ptt 🥔 → [Lexer] → [Parser] → [Monomorph] → [Checker] → [Opti
               → [IRGen] → [IROpt] → [RegAlloc] → [IREmit] → ARM64 .s → [as + ld] → binary
 ```
 
-Written in C11. ~7,500 lines across `src/`. No external dependencies.
+Written in C11. The compiler frontend lives in `compiler/`; the
+green-thread runtime + channels live in `compiler/runtime/`. No
+external dependencies.
 
-The **IROpt** stage (`src/iropt.c`) is the optimization-pass framework
-gated by the `-O0`/`-O1`/`-O2` flags. The dispatch table is currently
-empty — `-O0` and `-O1` produce byte-identical output today — but the
-five planned passes (inlining, SRA, escape analysis, bounds-check
-elimination, loop-invariant code motion) plug in as one entry each as
-they land.
+The **IROpt** stage (`compiler/iropt.c`) runs the five optimization
+passes — inlining, scalar replacement of aggregates, escape
+analysis (stackify), bounds-check elimination, and loop-invariant
+code motion — when called at `-O1` or `-O2`. `-O0` skips them all.
 
-The **Monomorph** pass (`src/monomorph.c`) instantiates every concrete generic form (`Box of int`, `Map of str to int`, …) before type checking, so the rest of the pipeline only ever sees fully-specialised types. Names are mangled inside-out: `List of Pair of str to int` becomes the symbol `_List__Pair__str__int`.
+The **Monomorph** pass (`compiler/monomorph.c`) instantiates every
+concrete generic form (`Box of int`, `Map of String to int`, …)
+before type checking, so the rest of the pipeline only sees fully-
+specialised types. Names are mangled inside-out:
+`List of Map of String to int` becomes the symbol
+`_List__Map__String__int`.
 
-The **IR backend** is the only backend. The legacy AST-walking direct codegen was retired after the IR pipeline reached behavioural parity on every program in the test corpus (see `docs/ir-pipeline.md`). The IR uses cross-block, call-aware register allocation: vregs whose live range crosses a `bl` are placed in callee-save registers (x19..x28) with proper prologue saves, while shorter-lived values use the temporary range (x8, x11..x18; x9 and x10 are reserved as scratch for frame addressing).
+The **IR backend** is the only backend. It uses cross-block,
+call-aware register allocation: vregs whose live range crosses a
+`bl` are placed in callee-save registers (x19..x28) with proper
+prologue saves; shorter-lived values use x8/x11..x18 (x9 and x10
+are reserved as iremit scratch for large-offset frame addressing).
+See [`docs/ir-pipeline.md`](docs/ir-pipeline.md).
 
-`erbos ir <file.ptt>` emits the .s only, useful for inspecting generated assembly. The runtime helpers in `src/runtime_emit.c` are now down to the irreducible kernel-boundary set: `_heap_alloc` / `_heap_free`, `_yell_int` / `_String_yell`, `_write_bytes`, `_panic_oob` / `_panic_capacity` / `_assert_fail`, the per-struct `_alloc_<X>` constructors, plus the residual `_str_eq` / `_str_concat` / `_int_to_str` / `_yell` shim used by the operator + interpolation paths. The pure-Potato stdlib (`std/list`, `std/map`, `std/string_map`, `std/string`) provides every collection and String operation through monomorphized user methods. See [`docs/runtime.md`](docs/runtime.md) for the full breakdown.
+`erbos ir <file.ptt>` emits the .s only, useful for inspecting
+generated assembly. The runtime helpers in
+`compiler/runtime_emit.c` are down to the irreducible kernel-
+boundary set: `_heap_alloc` / `_heap_free`, `_yell_int` /
+`_String_yell`, `_write_bytes`, `_panic_oob` / `_panic_capacity` /
+`_assert_fail`, per-struct `_alloc_<X>` constructors, plus a small
+residual (`_str_eq` / `_str_concat` / `_int_to_str` / `_yell`
+shim) used by the operator + interpolation paths. The pure-Potato
+stdlib (`std/list`, `std/map`, `std/string`) provides every
+collection and String operation through monomorphized user
+methods. See [`docs/runtime.md`](docs/runtime.md) for the full
+breakdown.
 
 ---
 

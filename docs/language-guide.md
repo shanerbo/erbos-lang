@@ -29,13 +29,8 @@ All variables must be initialized.
 | `String` | text (stdlib struct from `std/string`; `"..."` literals) |
 | `array of T` | typed-storage primitive — fixed-cap, element-typed |
 | `List of T` | dynamic list (stdlib, from `std/list`) |
-| `Map of K to V` | int / pointer-keyed map (stdlib, from `std/map`) |
-| `StringMap of V` | string-keyed map (stdlib, from `std/string_map`) |
+| `Map of K to V` | dynamic map (stdlib, from `std/map`); K may be int, pointer-shaped, or `String` |
 | `nil` | null/empty pointer |
-
-> The legacy `str` keyword and `list` / `map` / `imap` keyword
-> forms have been retired (γ7 + ε1). Programs use `String` /
-> `List of T` / `Map of K to V` / `StringMap of V` exclusively.
 
 ## Functions
 
@@ -196,22 +191,21 @@ spark {
   // value expression after `is`, the compiler auto-constructs:
   bi is Box of int
   bi.set(42)
-  bs is Box of str
+  bs is Box of String
   bs.set("hello")
   yell(bi.get())   // 42
   yell(bs.get())   // hello
 
-  p is Both of str to int
+  p is Both of String to int
   // ...
 }
 ```
 
 Auto-construct also works for an explicit constructor call —
 `bi is Box of int ()` is equivalent. The trailing `()` is a
-nullary call on the type expression. Either spelling is
-acceptable; the no-parens form is preferred since it matches
-the legacy `xs is list of int` shape and reads as "xs is a list
-of int" rather than "xs is a list-of-int call result".
+nullary call on the type expression. The no-parens form is
+preferred — `xs is List of int` reads as "xs is a list of int"
+rather than "xs is a list-of-int call result".
 
 Rules:
 
@@ -220,23 +214,23 @@ Rules:
   the box with — the compiler reads it off the receiver's `of T`
   clause, so the method head doesn't repeat the parameter list.
 - Constructors at use sites carry their type arguments explicitly:
-  `Box of int ()`, `Both of str to int ()`, `Map of str to int ()`.
+  `Box of int ()`, `Both of String to int ()`, `Map of String to int ()`.
   The compiler does not currently infer type arguments from context.
 - The compiler **monomorphizes**: each unique concrete form
-  (`Box of int`, `Box of str`, `Both of str to int`, …) becomes its
-  own emitted struct layout and its own emitted methods. There are
-  no v-tables and no runtime type tags.
+  (`Box of int`, `Box of String`, `Both of String to int`, …) becomes
+  its own emitted struct layout and its own emitted methods. There
+  are no v-tables and no runtime type tags.
 - Symbols are mangled positionally with `__` separators:
-  `Box of int` → `_Box__int`, `Map of str to int` → `_Map__str__int`,
+  `Box of int` → `_Box__int`, `Map of String to int` → `_Map__String__int`,
   `List of List of int` → `_List__List__int`.
 - Nested generics are supported and parse right-associatively, so
-  `Map of str to List of int` reads as `Map of str to (List of int)`.
+  `Map of String to List of int` reads as `Map of String to (List of int)`.
   No commas, no parens, no `<>` in type position — anywhere.
 - Up to two type parameters per generic (via `of T` or `of K to V`).
-  Three-or-more-parameter generics are not yet supported; wrap
+  Three-or-more-parameter generics are not supported; wrap
   multiple values in a named struct instead.
 - Instantiating an undeclared template is a compile error
-  (`cannot instantiate 'Foo<int>' — no generic type named 'Foo' is in scope`).
+  ("cannot instantiate 'Foo<int>' — no generic type named 'Foo' is in scope").
 
 ## Lists
 
@@ -272,11 +266,10 @@ through (x in nums) {
 ## Maps
 
 ```
-use std/string_map      // String-keyed
-use std/map             // int / pointer-keyed
+use std/map
 
 // String-keyed
-scores is StringMap of int
+scores is Map of String to int
 scores.set("alice", 95)
 yell(scores.get("alice"))     // 95
 yell(scores.len())            // 1
@@ -286,18 +279,23 @@ memo is Map of int to int
 memo.set(42, 100)
 yell(memo.get(42))            // 100
 
-// Map literal — lowers to `StringMap of int` because
-// std/string_map is in scope:
+// Map literal — lowers to `Map of String to int` because
+// std/map is in scope:
 m is ["name" to 1, "age" to 2]
 yell(m.get("name"))           // 1
 
-// Iteration via .keys() returns a List of String:
+// Iteration via .keys() returns a List of K:
 keys is scores.keys()
 through (k in keys) {
   yell(k)
   yell(scores.get(k))
 }
 ```
+
+`Map` handles String keys via byte-equality compare automatically:
+the `eq` operator on String operands routes through `_str_eq`
+inside generic code, so two `"foo"` literals from different
+rodata addresses still match.
 
 ## Enums + Pattern Matching
 
@@ -346,11 +344,10 @@ spark {
 ```
 
 Standard library:
-- `std/basics` — bundle (re-exports String + List + Map + StringMap)
+- `std/basics` — bundle (re-exports String + List + Map)
 - `std/string` — `String`, `String.*`, `int.to_string`
 - `std/list` — `List of T`
-- `std/map` — `Map of K to V`
-- `std/string_map` — `StringMap of V`
+- `std/map` — `Map of K to V` (works for K = int, pointer-shaped, or String)
 - `std/math` — `min`, `max`, `abs`, `pow`
 - `std/queue`, `std/stack` — bounded fixed-cap queues / stacks
 

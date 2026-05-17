@@ -1,29 +1,33 @@
-# Leetcode Examples Guidelines
+# Leetcode Examples — Library Files
 
-## Test Case Requirements
+Each `.ptt` here is a **library** that exposes the algorithm
+(`solve()` and any helpers) — no `spark { }`, no entry point. The
+matching framework tests in `tests/leetcode/test_<name>.ptt`
+import the algorithm and exercise it via assertions.
 
-Every leetcode solution must include **at least 20 test cases** covering:
+## Importing
 
-### Easy (5+ cases)
-- Minimal input (empty, single element, single char)
-- Simple happy path with obvious answer
+The compiler's import resolver searches three roots for a `use`
+path: the importing file's directory, `std/`, then `examples/`.
+That's why a test file can write:
 
-### Medium (10+ cases)
-- Multiple valid inputs of moderate size
-- Edge cases: duplicates, boundaries, all-same values
-- Cases where answer is at start/end/middle
+```
+use leetcode/two_sum
 
-### Hard (5+ cases)
-- Large inputs (stress the algorithm)
-- Worst-case scenarios
-- Tricky edge cases specific to the problem
+test "basic" {
+  assert(two_sum.solve([2, 7], 2, 9) eq 1)
+}
+```
+
+with no relative-path gymnastics.
 
 ## File Structure
 
 ```
 examples/leetcode/
-  problem_name.ptt              # solution code
-  problem_name.ptt.expected     # expected output (one value per line)
+  problem_name.ptt              # library: defines solve() + helpers, no spark
+tests/leetcode/
+  test_problem_name.ptt         # framework tests; uses `use leetcode/problem_name`
 ```
 
 ## Solution Format
@@ -33,46 +37,38 @@ examples/leetcode/
 // Approach: brief description
 // Time: O(?)  Space: O(?)
 
-// ... solution functions ...
+use std/...                     // whatever the algorithm needs
 
-spark {
-  // Easy
-  yell(solve(...))   // case 1
-  yell(solve(...))   // case 2
-  ...
+solve(args...) ReturnType {
+  // ... algorithm ...
+}
 
-  // Medium
-  yell(solve(...))   // case 6
-  ...
-
-  // Hard
-  yell(solve(...))   // case 16
-  ...
+helper(...) {
+  // ... internal helper if needed ...
 }
 ```
 
+The solution must be a function that **returns** the answer (or
+mutates a `ref` argument), not one that prints it. Tests assert
+on the return value or the post-call state.
+
+## Test Coverage
+
+Each test file under `tests/leetcode/` should cover:
+
+- **Easy** (3+ cases): minimal / single-element / obvious-happy-path.
+- **Medium** (3+ cases): edge cases, duplicates, boundaries.
+- **Hard** (1+ case): worst-case, large inputs.
+- **Cross-impl** (when applicable): if there's a brute-force
+  *and* an optimal version, assert they agree on shared inputs
+  (where the answer is unique — note inputs with multiple valid
+  answers if both implementations are valid).
+
 ## Rules
 
-1. Write solution in pure Potato lang — no workarounds for compiler bugs
-2. If the compiler can't handle it, fix the compiler first
-3. Both brute force and optimal solutions when possible
-4. All test cases must pass via `make test` (output validated against .expected)
-5. Do not modify solution code to work around compiler issues
-
-## Validating Output
-
-Run all leetcode tests with output validation:
-```bash
-make test
-```
-
-Run a single solution and compare manually:
-```bash
-./erbos run examples/leetcode/two_sum.ptt > /tmp/actual.txt
-diff /tmp/actual.txt examples/leetcode/two_sum.ptt.expected
-```
-
-Regenerate `.expected` after confirming correctness:
-```bash
-./erbos run examples/leetcode/two_sum.ptt > examples/leetcode/two_sum.ptt.expected
-```
+1. Solution code is pure Potato — no workarounds for compiler bugs.
+2. If the compiler can't handle it, fix the compiler first.
+3. Both brute force and optimal solutions are welcome when
+   they exist (e.g. `two_sum.ptt` + `two_sum_map.ptt`).
+4. Tests use `assert(...)`. The framework runner reports
+   pass/fail; no stdout-snapshot files.

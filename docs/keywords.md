@@ -1,11 +1,8 @@
 # Potato Keywords 🥔
 
-> **Status:** post-overhaul. `assert` was demoted from reserved
-> to a stdlib function (γ3); `spark` was promoted from identifier
-> to reserved keyword (α0). The legacy `list` / `map` / `imap`
-> keyword forms are gone (ε1) — every program uses `List of T` /
-> `Map of K to V` / `StringMap of V` from std/list / std/map /
-> std/string_map.
+The reserved words. Anything not on this list is either an
+identifier (variable, struct name, method name) or a stdlib
+name resolved by `use`.
 
 | Keyword | Purpose | Example |
 |---------|---------|---------|
@@ -38,13 +35,14 @@
 | `test` | define test block | `test "name" { }` |
 | `task` | concurrency handle (compiled-mode placeholder; see note) | `t is task()` |
 
-### No longer reserved
+### Names that look like keywords but aren't
 
-| Word | Why |
-|------|-----|
-| `assert` | Now a stdlib function (γ3). `assert(cond)` parses as a regular call; the checker recognises the name and lowers to `_assert_fail`-on-false. |
-| `list` / `map` / `imap` | Retired in ε1. The legacy keyword forms (`list of T`, `map of K to V`, `imap of int to V`) no longer parse. User code now writes `List of T` / `Map of K to V` / `StringMap of V` (from std/list / std/map / std/string_map). The `[a, b, c]` literal lowers to `List of int` and `["k" to v]` lowers to `StringMap of int` when the matching `use` line is in scope. |
-| `str` | Retired in γ7 — `String` (the std/string struct) is the only spelling now. |
+| Word | What it is |
+|------|------------|
+| `assert` | A stdlib function. `assert(cond)` parses as a regular call; the checker recognises the name and lowers to `_assert_fail`-on-false. Conceptually a `std/test` function. |
+| `String` | The canonical text type, defined as a struct in `std/string.ptt`. String literals (`"..."`) are typed as `String` directly. |
+| `List` / `Map` | Stdlib container structs from `std/list` / `std/map`. Used as `List of T` / `Map of K to V`. |
+| `yell` | A compiler-known function. Resolves at compile time on the static type of its argument (int / bool / String / user struct). Users overload by defining `Type.yell(self Type)`. |
 
 ## Symbols
 
@@ -63,10 +61,9 @@
 | `/* */` | multi-line comment |
 
 > Generics use word-style `of` and `to` only — there is **no** `<T>`
-> syntax in any type position. The angle-bracket form was retired
-> in phase P3.1; see [`generics-syntax.md`](generics-syntax.md).
+> syntax in any type position. See [`generics-syntax.md`](generics-syntax.md).
 
-> **Note on `task`:** the green-thread runtime in `src/runtime.c`
+> **Note on `task`:** the green-thread runtime in `compiler/runtime/`
 > is exercised by `make test-runtime` (C-level harness) but is not
 > yet integrated into compiled `.ptt` output. In compiled mode
 > `_task_fire` and `_task_collapse` are no-ops, so `t.fire(worker())`

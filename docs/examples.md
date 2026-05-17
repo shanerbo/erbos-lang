@@ -62,8 +62,8 @@ spark {
   nums.push(20)
   yell(nums[0])
 
-  // String-keyed map (literal syntax routes through the legacy
-  // `map` keyword today; phase ε retires it for `StringMap of V`):
+  // String-keyed map literal — lowers to `Map of String to int`
+  // because `use std/map` is in scope (via std/basics).
   scores is ["alice" to 95, "bob" to 87]
   yell(scores.get("alice"))
 
