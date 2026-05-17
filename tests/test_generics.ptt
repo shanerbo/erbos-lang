@@ -23,7 +23,10 @@ Box of T is {
 }
 
 Box.set(self ref Box of T, v T) {
-  self.value be v
+  // For primitive T (int, bool) the move is a no-op; for
+  // heap-shaped T (String, struct) it's an explicit ownership
+  // transfer. Either way, `now` keeps the call site honest.
+  self.value be now v
 }
 
 Box.get(self Box of T) T {
@@ -36,11 +39,11 @@ Both of K to V is {
 }
 
 Both.set_key(self ref Both of K to V, k K) {
-  self.key be k
+  self.key be now k
 }
 
 Both.set_value(self ref Both of K to V, v V) {
-  self.value be v
+  self.value be now v
 }
 
 Both.get_key(self Both of K to V) K {

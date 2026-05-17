@@ -53,7 +53,7 @@ String.char_at(self String, i int) String {
   out is String()
   out.cap be 1
   out.count be 1
-  out.data be one
+  out.data be now one
   out.owned be 1
   give out
 }
@@ -72,7 +72,7 @@ String.concat(self String, other String) String {
   out is String()
   out.cap be total
   out.count be total
-  out.data be fresh_data
+  out.data be now fresh_data
   out.owned be 1
   give out
 }
@@ -86,7 +86,7 @@ int.to_string(self int) String {
     out is String()
     out.cap be 1
     out.count be 1
-    out.data be fresh
+    out.data be now fresh
     out.owned be 1
     give out
   }
@@ -123,7 +123,7 @@ int.to_string(self int) String {
   out is String()
   out.cap be pos
   out.count be pos
-  out.data be buf
+  out.data be now buf
   out.owned be 1
   give out
 }

@@ -8,7 +8,7 @@ use std/string
 Box of T is { value T }
 
 Box.set(self ref Box of T, v T) {
-  self.value be v
+  self.value be now v
 }
 
 Box.get(self Box of T) T {

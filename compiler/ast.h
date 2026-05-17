@@ -113,7 +113,18 @@ struct Node {
         } var_decl;
 
         // NODE_ASSIGN
-        struct { char *name; Node *value; } assign;
+        // is_move / is_rep: same role as on NODE_VAR_DECL — `q be now p`
+        // moves ownership; `q be rep p` deep-clones. src_struct_name is
+        // populated by the checker for `is_rep` so irgen can emit
+        // `bl _clone_<X>`. All zero for plain `q be p` (which is itself
+        // restricted to primitives or owned-fresh RHS — Codex P0-7).
+        struct {
+            char *name;
+            Node *value;
+            int is_move;
+            int is_rep;
+            char *src_struct_name;
+        } assign;
 
         // NODE_FIELD_ASSIGN (obj.field = value)
         // is_move/is_rep: set when the assignment uses `now`/`rep`

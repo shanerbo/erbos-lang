@@ -1249,6 +1249,43 @@ static void check_stmt(Checker *c, Node *n) {
             }
             Type existing = get_sym(c, n->assign.name);
             Type new_t = check_expr(c, n->assign.value);
+            // Codex P0-7: same heap-alias ban as on var-decl. Plain
+            // `q be p` for heap-shaped values is silent untracked
+            // aliasing — both bindings would hold the same pointer
+            // with no move tracking. Force `now` (move) or `rep`
+            // (deep clone). The RHS being a non-IDENT (constructor
+            // call, function return, etc.) is OK — those are
+            // owned-fresh values.
+            int rhs_is_ident = (n->assign.value->type == NODE_IDENT);
+            int heap_shaped =
+                (new_t.kind == TYPE_STRUCT || new_t.kind == TYPE_LIST ||
+                 new_t.kind == TYPE_MAP || new_t.kind == TYPE_ARRAY ||
+                 new_t.kind == TYPE_STR);
+            if (!n->assign.is_move && !n->assign.is_rep &&
+                rhs_is_ident && heap_shaped) {
+                fprintf(stderr,
+                    "error:%d: ambiguous alias: `%s be %s` for a "
+                    "heap-shaped value\n",
+                    n->line, n->assign.name, n->assign.value->ident.name);
+                fprintf(stderr,
+                    "  help: use `%s be now %s` to move ownership "
+                    "(source becomes inaccessible)\n",
+                    n->assign.name, n->assign.value->ident.name);
+                fprintf(stderr,
+                    "  help: use `%s be rep %s` to deep-clone "
+                    "(independent copy)\n",
+                    n->assign.name, n->assign.value->ident.name);
+                exit(1);
+            }
+            // `q be now p` marks p moved.
+            if (n->assign.is_move && rhs_is_ident) {
+                mark_moved_sym(c, n->assign.value->ident.name);
+            }
+            // `q be rep p` stashes source struct name for irgen's
+            // `_clone_<X>` dispatch.
+            if (n->assign.is_rep && new_t.kind == TYPE_STRUCT && new_t.struct_name) {
+                n->assign.src_struct_name = (char *)new_t.struct_name;
+            }
             if (existing.kind != TYPE_UNKNOWN && new_t.kind != TYPE_UNKNOWN && !types_equal(existing, new_t)) {
                 fprintf(stderr, "error:%d: cannot assign '%s' to variable '%s' of type '%s'\n",
                     n->line, type_name(new_t), n->assign.name, type_name(existing));
@@ -1328,6 +1365,35 @@ static void check_stmt(Checker *c, Node *n) {
                         }
                     }
                 }
+            }
+            // Codex P0-7: heap alias ban for field-assign. Plain
+            // `obj.field be src` for heap-shaped src (when src is a
+            // bare ident) is silently moved at irgen — that's a
+            // hidden ownership transfer. Force the user to spell
+            // `now` (move) or `rep` (deep clone). Constructor calls,
+            // function returns, etc. as RHS are exempt — they're
+            // owned-fresh values, no aliasing risk.
+            int field_rhs_ident = (n->field_assign.value->type == NODE_IDENT);
+            int field_heap_shaped =
+                (val_t.kind == TYPE_STRUCT || val_t.kind == TYPE_LIST ||
+                 val_t.kind == TYPE_MAP || val_t.kind == TYPE_ARRAY ||
+                 val_t.kind == TYPE_STR);
+            if (!n->field_assign.is_move && !n->field_assign.is_rep &&
+                field_rhs_ident && field_heap_shaped) {
+                fprintf(stderr,
+                    "error:%d: ambiguous alias: `obj.%s be %s` for a "
+                    "heap-shaped value\n",
+                    n->line, n->field_assign.field,
+                    n->field_assign.value->ident.name);
+                fprintf(stderr,
+                    "  help: use `obj.%s be now %s` to move ownership\n",
+                    n->field_assign.field,
+                    n->field_assign.value->ident.name);
+                fprintf(stderr,
+                    "  help: use `obj.%s be rep %s` to deep-clone\n",
+                    n->field_assign.field,
+                    n->field_assign.value->ident.name);
+                exit(1);
             }
             // Enforce ref: if object is a non-ref param, block mutation.
             // Also enforce nomut: a `nomut` binding cannot have its

@@ -373,6 +373,9 @@ static Node *clone_node(Node *n) {
         case NODE_ASSIGN:
             c->assign.name = xstrdup(n->assign.name);
             c->assign.value = clone_node(n->assign.value);
+            c->assign.is_move = n->assign.is_move;
+            c->assign.is_rep = n->assign.is_rep;
+            c->assign.src_struct_name = xstrdup(n->assign.src_struct_name);
             break;
         case NODE_IF:
             c->if_stmt.conds = clone_node_array(n->if_stmt.conds, n->if_stmt.branch_count);

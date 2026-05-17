@@ -1,0 +1,54 @@
+// Codex audit P0-7 positive coverage: `now`/`rep` forms work
+// for both reassignment and field-assign.
+
+use std/string
+
+Point is { x int, y int }
+
+Box is {
+  msg String
+}
+
+test "be now reassigns and marks source moved" {
+  a is Point(x is 1, y is 2)
+  b is Point(x is 9, y is 9)
+  b be now a
+  // a is dead; reading it would be a use-after-move error.
+  assert(b.x eq 1)
+  assert(b.y eq 2)
+}
+
+test "be rep reassigns with deep clone — both alive" {
+  a is Point(x is 5, y is 6)
+  b is Point(x is 0, y is 0)
+  b be rep a
+  // Mutate a; b unchanged.
+  a.x be 99
+  assert(a.x eq 99)
+  assert(b.x eq 5)
+}
+
+test "field be now src for heap RHS" {
+  b is Box()
+  m is "hello"
+  b.msg be now m
+  assert(b.msg.equals("hello"))
+}
+
+test "field be rep src for heap RHS" {
+  b is Box()
+  m is "hi"
+  b.msg be rep m
+  assert(b.msg.equals("hi"))
+  // m still alive after rep
+  assert(m.equals("hi"))
+}
+
+test "primitive reassignment doesn't need now/rep" {
+  x is 10
+  y is 20
+  y be x          // primitive: copy by value, no aliasing
+  x be 99
+  assert(x eq 99)
+  assert(y eq 10)
+}

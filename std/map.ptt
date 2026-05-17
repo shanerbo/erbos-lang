@@ -45,8 +45,8 @@ Map.set(self ref Map of K to V, k K, v V) {
       fresh_k[i] be self.keys[i]
       fresh_v[i] be self.vals[i]
     }
-    self.keys be fresh_k
-    self.vals be fresh_v
+    self.keys be now fresh_k
+    self.vals be now fresh_v
   }
   self.keys[self.count] be k
   self.vals[self.count] be v

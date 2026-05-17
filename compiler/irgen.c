@@ -1039,7 +1039,29 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
             break;
         }
         case NODE_ASSIGN: {
-            VReg v = gen_expr(c, n->assign.value);
+            // Codex P0-7: handle `q be now p` (mark source moved)
+            // and `q be rep p` (deep-clone via _clone_<X>). Plain
+            // `q be p` for heap-shaped values is rejected by the
+            // checker; here we only see the explicit forms.
+            VReg v;
+            if (n->assign.is_rep && n->assign.src_struct_name) {
+                VReg src = gen_expr(c, n->assign.value);
+                v = new_vreg(c);
+                char clone_sym[256];
+                snprintf(clone_sym, sizeof(clone_sym),
+                    "clone_%s", n->assign.src_struct_name);
+                VReg *args = malloc(sizeof(VReg));
+                args[0] = src;
+                emit(c, (IRInst){.op = IR_CALL, .dst = v,
+                                 .str = strdup(clone_sym),
+                                 .args = args, .arg_count = 1});
+            } else {
+                if (n->assign.is_move &&
+                    n->assign.value->type == NODE_IDENT) {
+                    mark_moved_local(c, n->assign.value->ident.name);
+                }
+                v = gen_expr(c, n->assign.value);
+            }
             set_local(c, n->assign.name, v);
             break;
         }

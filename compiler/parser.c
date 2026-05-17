@@ -956,12 +956,25 @@ static Node *parse_stmt(Parser *p) {
             return n;
         }
         // assignment: IDENT be ...
+        // Codex P0-7: also accept `IDENT be now src` and `IDENT be
+        // rep src` for explicit heap reassignment, mirroring the
+        // forms on NODE_VAR_DECL and NODE_FIELD_ASSIGN.
         if (peek_at(p, 1)->type == TOK_BE) {
             char *name = cur(p)->value;
             p->pos++;
             p->pos++; // skip be
             Node *n = alloc_node(NODE_ASSIGN, line);
             n->assign.name = name;
+            n->assign.is_move = 0;
+            n->assign.is_rep = 0;
+            n->assign.src_struct_name = NULL;
+            if (at(p, TOK_NOW)) {
+                p->pos++;
+                n->assign.is_move = 1;
+            } else if (at(p, TOK_REP)) {
+                p->pos++;
+                n->assign.is_rep = 1;
+            }
             n->assign.value = parse_expr(p);
             return n;
         }

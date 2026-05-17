@@ -1,0 +1,15 @@
+// Codex audit P0-7: plain `obj.field be src` for heap-shaped
+// src is also rejected — the field would silently move src
+// without `now`/`rep` honesty.
+
+use std/string
+
+Box is {
+  msg String
+}
+
+spark {
+  b is Box()
+  m is "hello"
+  b.msg be m
+}

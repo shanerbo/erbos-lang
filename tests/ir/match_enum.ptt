@@ -25,7 +25,7 @@ test "match Err arm with message" {
   err_msg is ""
   match r {
     Ok(v) => ok_seen be 1
-    Err(msg) => err_msg be msg
+    Err(msg) => err_msg be now msg
   }
   assert(ok_seen eq 0)
   assert(err_msg eq "oops")
@@ -46,7 +46,7 @@ test "match second Err still routes correctly" {
   err_msg is ""
   match r {
     Ok(v) => assert(false)
-    Err(msg) => err_msg be msg
+    Err(msg) => err_msg be now msg
   }
   assert(err_msg eq "missing")
 }

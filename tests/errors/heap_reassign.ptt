@@ -1,0 +1,13 @@
+// Codex audit P0-7: plain `q be p` for heap-shaped values must
+// be rejected the same way `q is p` is. Force `now` (move) or
+// `rep` (deep clone).
+
+use std/string
+
+Point is { x int, y int }
+
+spark {
+  a is Point(x is 1, y is 2)
+  b is Point(x is 3, y is 4)
+  b be a
+}

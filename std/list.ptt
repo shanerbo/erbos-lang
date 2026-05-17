@@ -47,7 +47,7 @@ List.push(self ref List of T, v T) {
     through (i from 0 to self.count by 1) {
       fresh[i] be self.data[i]
     }
-    self.data be fresh
+    self.data be now fresh
   }
   self.data[self.count] be v
   self.count be self.count + 1
