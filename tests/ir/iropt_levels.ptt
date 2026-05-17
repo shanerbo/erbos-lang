@@ -1,14 +1,9 @@
 // Regression test for the P5.0 iropt scaffold: -O0, -O1, -O2 must
-// all produce a correct binary that prints the expected sequence.
-// Today the iropt pass table is empty, so every level emits
-// byte-identical assembly. As P5.1-P5.5 land, -O1 and higher will
-// progressively shrink the emitted code; correctness is what this
-// test guards.
-//
-// Expected output:
-//   42
-//   hello
-//   3
+// all produce correct results. As P5.1+ optimization passes
+// progressively shrink emitted code at -O1 and higher,
+// correctness across levels is what this test guards.
+
+use std/string
 
 Box of T is { value T }
 
@@ -20,16 +15,22 @@ Box.get(self Box of T) T {
   give self.value
 }
 
-spark {
+test "Box of int round-trip" {
   bi is Box of int
   bi.set(42)
-  yell(bi.get())
+  assert(bi.get() eq 42)
+}
 
-  bs is Box of str
+test "Box of String round-trip" {
+  bs is Box of String
   bs.set("hello")
-  yell(bs.get())
+  assert(bs.get() eq "hello")
+}
 
+test "loop counter visits 0..3" {
+  sum is 0
   through (i from 0 to 3 by 1) {
-    yell(i)
+    sum be sum + i
   }
+  assert(sum eq 3)  // 0+1+2
 }

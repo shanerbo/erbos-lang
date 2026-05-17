@@ -5,16 +5,8 @@
 // flows as int at the value level (one byte zero-extended into a
 // 64-bit register on read; the low byte of the int is stored on
 // write).
-//
-// Output must match across -O0/-O1/-O2.
-//
-// Expected output:
-//   104
-//   111
-//   255
-//   0
 
-spark {
+test "array of byte basic" {
   bs is array of byte with cap 6
   bs[0] be 104
   bs[1] be 101
@@ -22,17 +14,21 @@ spark {
   bs[3] be 108
   bs[4] be 111
   bs[5] be 10
-  yell(bs[0])
-  yell(bs[4])
+  assert(bs[0] eq 104)
+  assert(bs[4] eq 111)
+}
 
-  // Truncation: storing 511 (0x1FF) writes 0xFF (255).
+test "array of byte truncation on store" {
+  // 511 (0x1FF) → 0xFF (255) when stored as a byte.
+  bs is array of byte with cap 4
   bs[0] be 511
-  yell(bs[0])
+  assert(bs[0] eq 255)
+}
 
-  // Round-trip through a loop.
+test "array of byte loop init" {
   zero_buf is array of byte with cap 16
   through (i from 0 to 16 by 1) {
     zero_buf[i] be 0
   }
-  yell(zero_buf[7])
+  assert(zero_buf[7] eq 0)
 }

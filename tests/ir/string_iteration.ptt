@@ -1,15 +1,19 @@
 // Regression test: string literals + collection iteration through
-// the IR backend. Verifies P4.3b (through-in) and the IR_LOAD_STR
-// + string-pool data emission added alongside it.
-//
-// Expected output:
-//   alpha
-//   beta
-//   gamma
+// the IR backend. Verifies the through-in lowering and the
+// IR_LOAD_STR + string-pool data emission.
 
-spark {
-  names is ["alpha", "beta", "gamma"]
+use std/string
+use std/list
+
+test "iterate List of String literals" {
+  names is List of String
+  names.push("alpha")
+  names.push("beta")
+  names.push("gamma")
+
+  joined is ""
   through (s in names) {
-    yell(s)
+    joined be joined + s
   }
+  assert(joined eq "alphabetagamma")
 }

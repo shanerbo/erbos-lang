@@ -1,73 +1,57 @@
 // Regression test: P5.4 bounds-check elimination (BCE).
 //
-// Two things to verify here:
+// Two things to verify:
 //
-//   1. Observable correctness — every well-formed access prints
-//      its element, exactly the same at -O0/-O1/-O2. The output
-//      below is what every level must produce.
+//   1. Observable correctness — every well-formed access reads
+//      its element correctly at -O0/-O1/-O2.
 //
 //   2. Provability — the lower-bound check (`idx < 0`) must be
 //      provably false in the loop-counter pattern (counter starts
 //      at 0, increments by a non-negative const, only flows back
-//      into itself via IR_ADD). At -O1/-O2 the BCE pass should
-//      drop the negative-index panic; at -O0 it doesn't run.
-//      We don't observe the elimination directly here — that
-//      check belongs to a hand-inspection of the .s output — but
-//      we exercise the patterns BCE needs to reason about so any
-//      future regression in is_known_nonneg shows up as either a
-//      build break (mis-typed instruction) or a wrong answer in
-//      the table-driven tests below.
+//      into itself via IR_ADD). At -O1/-O2 the BCE pass drops
+//      the negative-index panic; at -O0 it doesn't run.
+//      We don't observe the elimination directly here — that's a
+//      hand-inspection of the .s output — but we exercise the
+//      patterns BCE needs to reason about so any regression in
+//      is_known_nonneg shows up as either a build break or a
+//      wrong answer below.
 //
 // The negative-index panic still triggers for genuine OOB cases
-// — that's covered by tests/errors/negative_index.ptt and the
-// existing oob_test.ptt; we don't repeat those here.
-//
-// Expected output:
-//   10
-//   20
-//   30
-//   40
-//   100
-//   45
-//   6
-//   3
+// — that's covered by tests/errors/negative_index.ptt and
+// oob_test.ptt; not repeated here.
 
-spark {
-  // Pattern 1: through-range with start=0 and step=1.
+use std/list
+
+test "BCE: through-range with start=0 step=1" {
   // Index `i` provably in [0, len(xs)); lower-bound BCE fires.
   xs is [10, 20, 30, 40]
-  through (i from 0 to len(xs) by 1) {
-    yell(xs[i])
+  expected is [10, 20, 30, 40]
+  through (i from 0 to xs.len() by 1) {
+    assert(xs[i] eq expected[i])
   }
+}
 
-  // Pattern 2: explicit constant index. The compiler should leave
-  // a constant-fold opportunity here too, but BCE alone proves
-  // `2 < 0` is false.
+test "BCE: explicit constant index" {
+  // BCE alone proves `0 < 0` is false; constant-fold also runs.
   ys is [100, 200]
-  yell(ys[0])               // 100
+  assert(ys[0] eq 100)
+}
 
-  // Pattern 3: index derived from non-negative arithmetic. j
-  // ranges 0..3, so 5+j ranges 5..8, all non-negative — even with
-  // a more interesting expression the lower-bound check is safe.
+test "BCE: index from non-negative arithmetic" {
+  // j ranges 0..3 → 5+j ranges 5..8, all non-negative.
   zs is [40, 41, 42, 43, 44, 45, 46, 47, 48, 49]
   total is 0
   through (j from 0 to 4 by 1) {
     total be total + 1
   }
-  yell(zs[total + 1])       // total = 4, zs[5] = 45
+  assert(zs[total + 1] eq 45)  // zs[5]
+}
 
-  // Pattern 4: nested loop accumulating into a list-indexed sum.
-  // Each access uses an independent counter that's still
-  // non-negative-by-construction.
+test "BCE: nested loop with counter-derived index" {
   matrix is [1, 2, 3]
   sum is 0
   through (k from 0 to 3 by 1) {
     sum be sum + matrix[k]
   }
-  yell(sum)                 // 1 + 2 + 3 = 6
-  // A trailing constant marker keeps the expected output's
-  // last line stable across reorderings during regression
-  // bisection.
-  three is 3
-  yell(three)               // 3
+  assert(sum eq 6)
 }

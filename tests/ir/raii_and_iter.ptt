@@ -3,30 +3,22 @@
 // to use the `add x10, x29, #N` scratch sequence).
 //
 // Two bugs are guarded by this test:
-//   1. P4.3e RAII: heap allocations inside a function body must be
-//      freed at scope exit (here at the end of `_spark`). Without
-//      RAII, a long-running program leaks; the regression that
-//      kitchen_sink exposed was state buildup from the leak path.
-//   2. iremit scratch-vs-vreg conflict: the regalloc must not assign
-//      x9 or x10 to any vreg, because iremit reuses them as scratch
-//      for large-offset frame addressing. If a vreg's live range
-//      includes an IR_STORE_LOCAL with offset > 255 and the regalloc
-//      chose x10 for that vreg, the store would corrupt the value.
-//      kitchen_sink section 15's `through (k in scores.keys())` hit
-//      this: the increment-block's `idx + 1` landed in x10, then the
-//      slot-store sequence overwrote it with the slot address.
-//
-// Expected output:
-//   3
-//   apple
-//   banana
-//   cherry
-//   3
+//   1. RAII: heap allocations inside a function body must be
+//      freed at scope exit. Without RAII, a long-running program
+//      leaks; an earlier regression in kitchen_sink was state
+//      buildup from the leak path.
+//   2. iremit scratch-vs-vreg conflict: the regalloc must not
+//      assign x9 or x10 to any vreg, because iremit reuses them
+//      as scratch for large-offset frame addressing. If a vreg's
+//      live range includes an IR_STORE_LOCAL with offset > 255
+//      and the regalloc chose x10 for that vreg, the store would
+//      corrupt the value. The increment-block's `idx + 1` was
+//      where this hit.
 
 use std/map
 use std/list
 
-spark {
+test "iter through-keys with high stack offsets" {
   // Force enough locals + heap allocations that the through-in's
   // hidden coll/idx slots end up at offsets > 255 from x29.
   pad1 is "padding-string-1"
@@ -51,10 +43,17 @@ spark {
   fruits.set("banana", 2)
   fruits.set("cherry", 3)
 
-  yell(fruits.len())
+  assert(fruits.len() eq 3)
+
   keys is fruits.keys()
+  assert(keys.len() eq 3)
+
+  // Walk every key — verifies the increment-block correctness
+  // across high-offset frame addressing.
+  visited is 0
   through (k in keys) {
-    yell(k)
+    visited be visited + fruits.get(k)
   }
-  yell(keys.len())
+  // 1 + 2 + 3 = 6
+  assert(visited eq 6)
 }

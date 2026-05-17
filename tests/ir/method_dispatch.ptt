@@ -1,15 +1,10 @@
 // Regression test: full method dispatch through the IR backend.
 //
-// Verifies P4.3's NODE_METHOD_CALL handling in irgen:
-//   - user method on a typed struct receiver lowers to `_<Type>_<name>`
+// Verifies NODE_METHOD_CALL handling in irgen:
+//   - user method on a typed struct receiver lowers to
+//     `_<Type>_<name>`
 //   - the receiver becomes the implicit first argument
 //   - return values flow back through x0
-//
-// Expected output:
-//   1
-//   2
-//   3
-//   42
 
 Counter is { value int }
 
@@ -25,14 +20,18 @@ Counter.get(self Counter) int {
   give self.value
 }
 
-spark {
+test "method dispatch: bump + get" {
   c is Counter()
   c.bump()
-  yell(c.get())
+  assert(c.get() eq 1)
   c.bump()
-  yell(c.get())
+  assert(c.get() eq 2)
   c.bump()
-  yell(c.get())
+  assert(c.get() eq 3)
+}
+
+test "method dispatch: set with arg" {
+  c is Counter()
   c.set(42)
-  yell(c.get())
+  assert(c.get() eq 42)
 }

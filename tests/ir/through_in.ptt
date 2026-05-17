@@ -1,18 +1,19 @@
 // Regression test: collection iteration through the IR backend.
-// Verifies P4.3b's NODE_THROUGH_IN handler in irgen.c.
-//
-// Expected output:
-//   10
-//   20
-//   30
-//   60
+// Verifies the NODE_THROUGH_IN handler in irgen.c.
 
-spark {
+use std/list
+
+test "through-in walks all elements + accumulates" {
   xs is [10, 20, 30]
+  visited is List of int
   total is 0
   through (v in xs) {
-    yell(v)
+    visited.push(v)
     total be total + v
   }
-  yell(total)
+  assert(visited.len() eq 3)
+  assert(visited[0] eq 10)
+  assert(visited[1] eq 20)
+  assert(visited[2] eq 30)
+  assert(total eq 60)
 }

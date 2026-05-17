@@ -82,33 +82,24 @@ test-fail: $(OUT)
 
 .PHONY: all clean test test-pass test-fail test-runtime test-framework test-ir
 
-# Build and run every tests/ir/*.ptt source through the IR pipeline at
-# each optimization level (-O0/-O1/-O2). Each level must produce
-# byte-identical output against the sibling .expected file: no pass
-# is allowed to change observable program behaviour. As P5.1-P5.5
-# land, this matrix is what guarantees their correctness across
-# levels.
+# Run every tests/ir/*.ptt through the framework runner
+# (`erbos test`) at each optimization level. Each test file uses
+# `test "name" { ... assert(...) }` blocks; non-zero exit on any
+# level means an assertion failed or the program crashed. The
+# multi-level sweep is what guarantees no iropt pass changed
+# observable program behaviour.
 test-ir: $(OUT)
 	@echo "=== IR backend regression tests (matrix: -O0/-O1/-O2) ==="
 	@fail=0; \
 	for f in tests/ir/*.ptt; do \
 		b=$$(basename $$f .ptt); \
-		out_dir=tests/ir; \
-		expected=$$(cat "$$f.expected"); \
 		for level in -O0 -O1 -O2; do \
-			./$(OUT) $$level ir "$$f" > /dev/null 2>&1 || { echo "  FAIL: $$b $$level (IR codegen)"; fail=1; continue; }; \
-			as -o "$$out_dir/$$b.o" "$$out_dir/$$b.s" 2>/dev/null || { echo "  FAIL: $$b $$level (assemble)"; fail=1; rm -f "$$out_dir/$$b.s"; continue; }; \
-			ld -o "$$out_dir/$$b" "$$out_dir/$$b.o" -lSystem -syslibroot $$(xcrun --show-sdk-path) -e _start 2>/dev/null || { echo "  FAIL: $$b $$level (link)"; fail=1; rm -f "$$out_dir/$$b.s" "$$out_dir/$$b.o"; continue; }; \
-			actual=$$("$$out_dir/$$b" 2>/dev/null); \
-			if [ "$$actual" = "$$expected" ]; then \
+			if ./$(OUT) $$level test "$$f" > /dev/null 2>&1; then \
 				echo "  OK:   $$b $$level"; \
 			else \
-				echo "  FAIL: $$b $$level (output mismatch)"; \
-				echo "    expected: $$(echo "$$expected" | tr '\n' '|')"; \
-				echo "    actual:   $$(echo "$$actual" | tr '\n' '|')"; \
+				echo "  FAIL: $$b $$level"; \
 				fail=1; \
 			fi; \
-			rm -f "$$out_dir/$$b" "$$out_dir/$$b.o" "$$out_dir/$$b.s"; \
 		done; \
 	done; \
 	[ $$fail -eq 0 ] || (echo "Some IR backend tests failed"; exit 1)

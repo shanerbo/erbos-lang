@@ -1,23 +1,17 @@
 // Regression test for IR-backend stack-frame layout bug.
 //
 // History: prior to commit (P0 heap spike), the IR emitter set
-// `mov x29, sp` *after* a single combined `stp ... [sp, #-stack_size]!`
+// `mov x29, sp` after a single combined `stp ... [sp, #-stack_size]!`
 // prologue, which left x29 == sp at the bottom of the saved frame.
-// IR_STORE_LOCAL / IR_LOAD_LOCAL then addressed locals as `[x29, #-N]`,
-// landing BELOW the allocated frame. The first `bl _yell` saved fp/lr
-// at exactly that address and clobbered the local. The second yell read
-// the saved fp instead of the heap pointer and dereferenced 0.
+// IR_STORE_LOCAL / IR_LOAD_LOCAL then addressed locals as
+// `[x29, #-N]`, landing below the allocated frame. The first
+// `bl _yell` saved fp/lr at exactly that address and clobbered
+// the local; the second yell read the saved fp instead of the
+// heap pointer and dereferenced 0.
 //
-// Expected output (each line on its own):
-//   100
-//   200
-//   300
-//   100
-//   200
-//   300
-//
-// If this prints zeros after any `yell`, the IR backend has regressed —
-// do NOT modify this test to match buggy output. Fix the emitter.
+// If this test starts asserting zeros after any field access,
+// the IR backend has regressed — do NOT modify the test to
+// match buggy output. Fix the emitter.
 
 Point is {
   x int
@@ -25,15 +19,18 @@ Point is {
   z int
 }
 
-spark {
+test "struct fields read correctly after multiple calls" {
   p is Point()
   p.x be 100
   p.y be 200
   p.z be 300
-  yell(p.x)
-  yell(p.y)
-  yell(p.z)
-  yell(p.x)
-  yell(p.y)
-  yell(p.z)
+  // First triple of accesses.
+  assert(p.x eq 100)
+  assert(p.y eq 200)
+  assert(p.z eq 300)
+  // After the asserts above (which involve internal calls into
+  // _assert_fail's prelude), the fields must STILL read correctly.
+  assert(p.x eq 100)
+  assert(p.y eq 200)
+  assert(p.z eq 300)
 }

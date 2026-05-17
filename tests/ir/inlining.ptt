@@ -1,17 +1,8 @@
 // Regression test: P5.1 aggressive inlining.
 // At -O1 (and -O2) every `b.get()` / `b.value()` call site below
-// should have its `bl _<Mangled>_<method>` replaced with the inlined
-// body — a direct `ldr` of the field. At -O0 the calls remain.
-//
-// Whichever level runs, observable output must be identical.
-//
-// Expected output:
-//   42
-//   100
-//   1
-//   2
-//   3
-//   6
+// should have its `bl _<Mangled>_<method>` replaced with the
+// inlined body — a direct `ldr` of the field. At -O0 the calls
+// remain. Either way the observable result must be identical.
 
 Box of T is { value T }
 
@@ -33,28 +24,31 @@ Counter.value(self Counter) int {
   give self.count
 }
 
-spark {
-  // Single-instantiation Box of int — inlining should turn three
-  // `bl _Box__int_get` calls into three direct loads.
+test "inline Box.get" {
   bi is Box of int
   bi.set(42)
-  yell(bi.get())
+  assert(bi.get() eq 42)
 
   bs is Box of int
   bs.set(100)
-  yell(bs.get())
+  assert(bs.get() eq 100)
+}
 
-  // Counter loop — bump() is a void mutator inlinable as
-  // `self.count = self.count + 1`. value() is inlinable too.
+test "inline Counter.bump + Counter.value" {
   c is Counter()
   c.bump()
-  yell(c.value())   // 1
+  assert(c.value() eq 1)
   c.bump()
-  yell(c.value())   // 2
+  assert(c.value() eq 2)
   c.bump()
-  yell(c.value())   // 3
+  assert(c.value() eq 3)
+}
 
-  // Sum via inlined value()
+test "inlined value() in expression" {
+  c is Counter()
+  c.bump()
+  c.bump()
+  c.bump()
   total is c.value() + c.value()
-  yell(total)       // 6 (= 3 + 3)
+  assert(total eq 6)
 }

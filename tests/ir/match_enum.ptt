@@ -1,39 +1,52 @@
 // Regression test: enum constructors + match dispatch through the
-// IR backend. Verifies P4.3d's NODE_MATCH handler in irgen.c.
-//
-// Expected output:
-//   42
-//   oops
-//   100
-//   missing
+// IR backend. Verifies the NODE_MATCH handler in irgen.c.
+
+use std/string
 
 Result is
   Ok(value int)
-  | Err(message str)
+  | Err(message String)
 
-spark {
+test "match Ok arm with value" {
   r is Result.Ok(42)
+  ok_v is 0
+  err_seen is 0
   match r {
-    Ok(v) => yell(v)
-    Err(msg) => yell(msg)
+    Ok(v) => ok_v be v
+    Err(msg) => err_seen be 1
   }
+  assert(ok_v eq 42)
+  assert(err_seen eq 0)
+}
 
-  bad is Result.Err("oops")
-  match bad {
-    Ok(v) => yell(v)
-    Err(msg) => yell(msg)
+test "match Err arm with message" {
+  r is Result.Err("oops")
+  ok_seen is 0
+  err_msg is ""
+  match r {
+    Ok(v) => ok_seen be 1
+    Err(msg) => err_msg be msg
   }
+  assert(ok_seen eq 0)
+  assert(err_msg eq "oops")
+}
 
-  // Ensure the second match also distinguishes Ok vs Err correctly.
-  good is Result.Ok(100)
-  match good {
-    Ok(v) => yell(v)
-    Err(msg) => yell(msg)
+test "match second Ok still routes correctly" {
+  r is Result.Ok(100)
+  ok_v is 0
+  match r {
+    Ok(v) => ok_v be v
+    Err(msg) => assert(false)
   }
+  assert(ok_v eq 100)
+}
 
-  worse is Result.Err("missing")
-  match worse {
-    Ok(v) => yell(v)
-    Err(msg) => yell(msg)
+test "match second Err still routes correctly" {
+  r is Result.Err("missing")
+  err_msg is ""
+  match r {
+    Ok(v) => assert(false)
+    Err(msg) => err_msg be msg
   }
+  assert(err_msg eq "missing")
 }

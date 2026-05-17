@@ -12,13 +12,6 @@
 // field reads against an uninitialised slot. Function-wide SRA
 // must rewrite every field access on the loaded pointer no matter
 // which block holds it.
-//
-// Expected output:
-//   42
-//   5
-//   15
-//   100
-//   200
 
 Box of T is { value T }
 
@@ -49,24 +42,24 @@ Pair is {
   b int
 }
 
-spark {
-  // Straight-line: alloc + field write + field read all in entry block.
-  // (Per-block SRA already handled this; included for completeness.)
+test "SRA: straight-line (entry-block only)" {
   b is Box of int
   b.set(42)
-  yell(b.get())             // 42
+  assert(b.get() eq 42)
+}
 
-  // Cross-block: the alloc + STORE_LOCAL of the pointer lives in
-  // the entry block; the inlined `c.bump()` field load/store sits
-  // inside the loop body block. Function-wide SRA is required.
+test "SRA: cross-block via loop body" {
+  // The alloc + STORE_LOCAL of the pointer lives in entry; the
+  // inlined `c.bump()` field load/store sits inside the loop
+  // body block. Function-wide SRA is required.
   c is Counter()
   through (i from 0 to 5 by 1) {
     c.bump()
   }
-  yell(c.value())           // 5
+  assert(c.value() eq 5)
+}
 
-  // Cross-block again with branched paths: SRA must rewrite both
-  // arms of the conditional.
+test "SRA: cross-block with branched arms" {
   d is Counter()
   through (j from 0 to 10 by 1) {
     j mod 2 eq 0 ?{
@@ -75,13 +68,14 @@ spark {
       d.add(1)
     }
   }
-  yell(d.value())           // 5*2 + 5*1 = 15
+  // 5*2 + 5*1 = 15
+  assert(d.value() eq 15)
+}
 
-  // Multiple non-overlapping allocations — each gets its own
-  // independent shadow-slot rewrite.
+test "SRA: multiple non-overlapping allocations" {
   p is Pair()
   p.a be 100
   p.b be 200
-  yell(p.a)                 // 100
-  yell(p.b)                 // 200
+  assert(p.a eq 100)
+  assert(p.b eq 200)
 }
