@@ -992,3 +992,111 @@ can't. The cost-benefit of building one substantial example
 program early in a language's life is large. We should keep
 spudlock-style testing in the loop — when a major feature
 ships, run it through spudlock before declaring it done.
+
+---
+
+## Codex review feedback on the audit-fix sweep
+**Date:** 2026-05-17
+**Status:** decided (shipped — three follow-up commits)
+**Decision:** Three P0 ownership-semantics holes from the
+initial audit-fix sweep, plus a P1 framing correction. All
+addressed. Audit-fix work was claimed "complete" prematurely;
+this entry documents the gaps and what tightened them.
+
+### What I missed in the initial sweep
+
+1. **Method receiver ref enforcement (a.k.a. "P0-2 incomplete").**
+   The fix preserved call-site `ref` for ordinary args but
+   never extended the same rule to the implicit `self` argument
+   of method calls. Repro:
+
+       Counter.bump(self ref Counter) { ... }
+       touch(c Counter) { c.bump() }    // mutates caller's c
+                                        // through a non-ref param
+
+   The checker happily accepted this — and an inline comment in
+   NODE_FIELD_ASSIGN (line 1417 pre-fix) explicitly justified
+   it as "Method calls that take `ref self` are still allowed."
+   That stance contradicted the language guide's calling
+   convention, which says non-`ref` params are read-only.
+
+   Fix: when a user method's `self` is `ref`, the receiver must
+   be a local (`is_ref == -1`) or a `ref` parameter (`is_ref == 1`).
+   A non-`ref` parameter receiver is rejected with a teaching
+   error suggesting `ref T`.
+
+2. **Heap replacement leaks the previous owner ("P0-7 incomplete").**
+   The alias ban shipped — `q is p` for heap values now requires
+   `now`/`rep` — but the `now`/`rep` paths themselves overwrote
+   the destination's slot via `set_local` without dropping the
+   prior owned value. Same for `obj.field be now src`. Stress
+   test would show:
+
+       a is List of int; a.push(1)
+       through (i from 0 to 1000 by 1) {
+         fresh is List of int
+         fresh.push(i)
+         a be now fresh   // a's previous List header + array leaks here
+       }
+
+   ASan flagged the leak. Fix: emit a drop call for the old
+   slot value before overwriting. Helper
+   `emit_drop_local_slot` in irgen.c handles both struct and
+   array shapes; field-assign emits the same logic inline
+   based on the field's declared type. Skipped when the slot
+   was never heap-marked or has been moved.
+
+3. **Recursive drop skipped self-type fields ("P0-8 incomplete").**
+   The drop loop's `if (sj == si) continue;` filter — copied
+   from `_alloc_<X>`'s init loop where it's correct (avoids
+   infinite recursion at construction time) — was wrong in
+   `_drop_<X>` and `_clone_<X>`. Self-type fields like
+   `Node.next Node` form chains that terminate via nil; both
+   drop and clone need to walk the chain. The repo even
+   shipped `examples/linked.ptt` exercising exactly this
+   shape. Fix: removed the self-skip in `_drop_<X>` and
+   `_clone_<X>`. Kept in `_alloc_<X>` (recursive auto-init
+   would loop forever at first construction).
+
+4. **P1-13 was partial, framed as complete.** Quoting paths
+   with single-quote wrappers fixes the spaces-in-paths case
+   but not paths containing `'`. The follow-up should be
+   posix_spawn with argv (no shell at all). Re-framed the
+   inline comment to be precise: "spaces-in-paths fixed;
+   pathological characters still don't."
+
+### What this teaches
+
+The same lesson as the spudlock thread: **claim of "fixed"
+must match what's actually fixed.** The audit's evidence-based
+review caught three real holes in code I'd just landed and
+declared green. Three remediations:
+
+- After landing each P0 fix, list the specific surface the fix
+  *doesn't* cover. The `_drop_<X>` initial commit message
+  even acknowledged "replacing an owned heap field via
+  `field be now src` doesn't drop the previous field value"
+  as a known limitation — but didn't elevate that to a
+  follow-up task. The right move was to ship the follow-up
+  before declaring P0-8 done.
+- Stress-test ownership invariants under ASan over loops
+  with many iterations. A single replacement leaks
+  invisibly; 200 of them leaks visibly. The test
+  `tests/test_replace_drops_old.ptt` runs 200/100 iters
+  for exactly this reason.
+- Treat reviewer findings as ground truth even when I think
+  the spec says otherwise. The "comment that explicitly
+  justified ref-self mutation through non-ref params" was
+  load-bearing for *not* fixing P0-2 properly. A reviewer
+  pointing at the code is a stronger signal than my prior
+  reading of the comment.
+
+### Tracking
+
+- `tests/test_replace_drops_old.ptt` — 2 framework tests:
+  200-iter local reassign + 100-iter field reassign. ASan
+  catches the leak pre-fix.
+- `tests/test_self_type_drop.ptt` — Node chain drop test.
+- `examples/linked.ptt` continues to work.
+- Spudlock end-to-end clean under ASan + UBSan.
+- All previous regression tests still green.

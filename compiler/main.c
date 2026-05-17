@@ -690,10 +690,14 @@ int main(int argc, char **argv) {
             for (int fi = 0; fi < s->struct_def.field_count; fi++) {            \
                 const char *ft = s->struct_def.field_types[fi];                 \
                 int off = fi * 8;                                               \
-                /* Identify field kind. */                                      \
+                /* Identify field kind. Same fix as _drop_<X>:                   \
+                 * self-type fields (Node.next of type Node) recurse —           \
+                 * the chain is finite via nil termination and the               \
+                 * source's existing chain is what we need to mirror.            \
+                 * Only _alloc_<X>'s init loop skips self-types (to              \
+                 * avoid infinite recursion at construction time). */            \
                 int is_struct_field = 0;                                        \
                 if (ft) for (int sj = 0; sj < program->program.structs.count; sj++) { \
-                    if (sj == si) continue;                                     \
                     if (!strcmp(program->program.structs.items[sj]->struct_def.name, ft)) { \
                         is_struct_field = 1;                                    \
                         break;                                                  \
@@ -802,8 +806,14 @@ int main(int argc, char **argv) {
                 const char *ft = s->struct_def.field_types[fi];                 \
                 int off = fi * 8;                                               \
                 int is_struct_field = 0;                                        \
+                /* Codex review fix: self-type fields (e.g. Node.next            \
+                 * of type Node) DO need to be dropped — the chain is             \
+                 * finite via nil termination, and skipping the self-             \
+                 * type would leak every link past the head. Distinct             \
+                 * from _alloc_<X>'s init loop, which skips self-type             \
+                 * fields specifically to avoid infinite recursion at             \
+                 * construction. */                                              \
                 if (ft) for (int sj = 0; sj < program->program.structs.count; sj++) { \
-                    if (sj == si) continue;                                     \
                     if (!strcmp(program->program.structs.items[sj]->struct_def.name, ft)) { \
                         is_struct_field = 1;                                    \
                         break;                                                  \
@@ -924,12 +934,13 @@ int main(int argc, char **argv) {
     if (!run_mode) printf("generated %s\n", asm_path);
 
     // Assemble + link.
-    // Codex P1-13: every path goes through system() and must be
-    // quoted so paths with spaces or shell metacharacters don't
-    // get split. Single-quotes around all path arguments.
-    // (A `'` in a path would still break — proper fix is
-    // posix_spawn with argv, but that's a bigger refactor; the
-    // single-quote wrap covers the common case.)
+    // Codex P1-13 (partial): paths with spaces now build because
+    // every path argument is wrapped in single quotes. Paths
+    // containing a literal `'` still break — single quotes don't
+    // escape themselves in shell. Full fix is posix_spawn with
+    // argv (no shell at all), tracked as follow-up. The
+    // common case (paths with spaces) works; pathological
+    // characters in paths still don't.
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "as -o '%s.o' '%s'", out_name, asm_path);
     if (system(cmd) != 0) { fprintf(stderr, "error: assembly failed\n"); return 1; }

@@ -1,0 +1,31 @@
+// Codex review: _drop_<X> and _clone_<X> must recurse on
+// self-type fields. Pre-fix, `Node { next Node }` skipped its
+// next field, leaking every link past the head.
+
+use std/string
+
+Node is {
+  value int
+  next Node
+}
+
+test "Node chain drops every link" {
+  // Build a 5-node chain inside a loop. Each iteration goes
+  // out of scope; without recursive drop, every link past the
+  // head would leak. ASan + UBSan would flag the leak; passing
+  // here proves _drop_Node recurses.
+  through (i from 0 to 20 by 1) {
+    n1 is Node()
+    n1.value be 1
+    n2 is Node()
+    n2.value be 2
+    n2.next be now n1
+    n3 is Node()
+    n3.value be 3
+    n3.next be now n2
+    assert(n3.value eq 3)
+    assert(n3.next.value eq 2)
+    assert(n3.next.next.value eq 1)
+  }
+  assert(true)
+}

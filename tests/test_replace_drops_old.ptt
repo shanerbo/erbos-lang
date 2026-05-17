@@ -1,0 +1,43 @@
+// Codex review: heap replacement (`a be now b`, `obj.field be now src`,
+// and the rep variants) must drop the previous owned value before
+// overwriting. Pre-fix, the old List/array/struct leaked at every
+// replacement and accumulated across loop iterations.
+
+use std/string
+use std/list
+
+Box is {
+  items List of int
+}
+
+test "local reassignment drops previous List" {
+  // Build a list, then reassign a's slot 200 times. Each
+  // iteration's `now` replaces a's prior owned List header +
+  // array. Without drop-on-replace, every iteration leaks
+  // 16 + 64 bytes (List header + initial cap-8 array). ASan
+  // catches the leak.
+  a is List of int
+  a.push(1)
+  through (i from 0 to 200 by 1) {
+    fresh is List of int
+    fresh.push(i)
+    a be now fresh
+  }
+  assert(a.len() eq 1)
+  assert(a.get(0) eq 199)
+}
+
+test "field reassignment drops previous List" {
+  // Same as above but through a struct field. Stress 100
+  // replacements; without drop-on-replace, each leaks the
+  // auto-init'd-empty + previously-pushed contents.
+  b is Box()
+  through (i from 0 to 100 by 1) {
+    fresh is List of int
+    fresh.push(i)
+    fresh.push(i + 1)
+    b.items be now fresh
+  }
+  assert(b.items.len() eq 2)
+  assert(b.items.get(0) eq 99)
+}

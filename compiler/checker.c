@@ -731,6 +731,39 @@ static Type check_expr(Checker *c, Node *n) {
                             n->line, receiver_type_name, m, expected, n->method_call.arg_count);
                         exit(1);
                     }
+                    // Codex review: the implicit `self` argument
+                    // also needs ref enforcement. If the method
+                    // declares `self ref T` it mutates the
+                    // receiver; calling it on a non-ref parameter
+                    // is hidden mutation through a parameter the
+                    // caller declared read-only. The receiver must
+                    // be either a local (owned, -1) or a ref param
+                    // (1); a non-ref param (0) is rejected. Bare
+                    // identifiers only — a transient receiver
+                    // (e.g. a function-call return value) doesn't
+                    // alias caller storage.
+                    int self_is_ref = user_method->param_is_ref
+                        ? user_method->param_is_ref[0] : 0;
+                    if (self_is_ref &&
+                        n->method_call.object->type == NODE_IDENT) {
+                        const char *recv_name =
+                            n->method_call.object->ident.name;
+                        int recv_ref = get_sym_is_ref(c, recv_name);
+                        if (recv_ref == 0) {
+                            fprintf(stderr,
+                                "error:%d: method '%s.%s' takes "
+                                "`ref self` but receiver '%s' is a "
+                                "non-ref parameter\n",
+                                n->line, receiver_type_name, m,
+                                recv_name);
+                            fprintf(stderr,
+                                "  help: declare the parameter as "
+                                "`%s ref %s` so the caller sees the "
+                                "mutation\n",
+                                recv_name, receiver_type_name);
+                            exit(1);
+                        }
+                    }
                     for (int j = 0; j < n->method_call.arg_count; j++) {
                         Type arg_t = check_expr(c, n->method_call.args[j]);
                         Type expected_t = parse_type_str(c, user_method->param_types_str[j + 1]);
@@ -1416,9 +1449,11 @@ static void check_stmt(Checker *c, Node *n) {
             }
             // Enforce ref: if object is a non-ref param, block mutation.
             // Also enforce nomut: a `nomut` binding cannot have its
-            // fields directly mutated. Method calls that take `ref self`
-            // are still allowed because the type author opts into them
-            // via the receiver declaration.
+            // fields directly mutated. Method-call validation lives
+            // in the NODE_METHOD_CALL handler above — it checks the
+            // ref-ness of the receiver against the method's
+            // `self ref T` declaration the same way ordinary args
+            // are validated against `param_is_ref`.
             if (n->field_assign.object->type == NODE_IDENT) {
                 const char *obj_name = n->field_assign.object->ident.name;
                 int ref_status = get_sym_is_ref(c, obj_name);

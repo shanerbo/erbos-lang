@@ -158,6 +158,77 @@ static void mark_moved_local(IRGenCtx *c, const char *name) {
     }
 }
 
+// Codex review (heap replacement leaks old owner): drop the
+// current contents of a local slot before overwriting it. Called
+// from NODE_ASSIGN's `is_move` / `is_rep` paths so that
+//   a is List of int; a.push(1)
+//   a be now b   // a's old List header + array drops here, not leak
+// Only fires when the local is heap-marked and not already moved.
+// Picks _drop_<X> if the struct name is known, falls back to
+// _heap_free / array-cleanup otherwise.
+static void emit_drop_local_slot(IRGenCtx *c, int idx) {
+    if (idx < 0 || idx >= c->local_count) return;
+    if (!c->local_is_heap[idx] || c->local_is_moved[idx]) return;
+    VReg ptr = new_vreg(c);
+    emit(c, (IRInst){.op = IR_LOAD_LOCAL, .dst = ptr,
+                     .imm = c->local_slots[idx]});
+    if (c->local_is_array[idx]) {
+        // Array layout: [cap @ 0, data @ 8]. Free data, then header.
+        VReg cap = new_vreg(c);
+        emit(c, (IRInst){.op = IR_LOAD, .dst = cap, .a = ptr, .imm = 0});
+        VReg esz = new_vreg(c);
+        emit(c, (IRInst){.op = IR_CONST, .dst = esz,
+                         .imm = c->local_array_esz[idx]});
+        VReg data_sz = new_vreg(c);
+        emit(c, (IRInst){.op = IR_MUL, .dst = data_sz, .a = cap, .b = esz});
+        VReg data = new_vreg(c);
+        emit(c, (IRInst){.op = IR_LOAD, .dst = data, .a = ptr, .imm = 8});
+        VReg *fa1 = malloc(2 * sizeof(VReg));
+        fa1[0] = data; fa1[1] = data_sz;
+        VReg ig1 = new_vreg(c);
+        emit(c, (IRInst){.op = IR_CALL, .dst = ig1, .str = "heap_free",
+                         .args = fa1, .arg_count = 2});
+        VReg sz16 = new_vreg(c);
+        emit(c, (IRInst){.op = IR_CONST, .dst = sz16, .imm = 16});
+        VReg *fa2 = malloc(2 * sizeof(VReg));
+        fa2[0] = ptr; fa2[1] = sz16;
+        VReg ig2 = new_vreg(c);
+        emit(c, (IRInst){.op = IR_CALL, .dst = ig2, .str = "heap_free",
+                         .args = fa2, .arg_count = 2});
+        return;
+    }
+    if (c->local_struct_names && c->local_struct_names[idx]) {
+        char drop_sym[256];
+        snprintf(drop_sym, sizeof(drop_sym), "drop_%s",
+                 c->local_struct_names[idx]);
+        VReg *args = malloc(sizeof(VReg));
+        args[0] = ptr;
+        VReg ignored = new_vreg(c);
+        emit(c, (IRInst){.op = IR_CALL, .dst = ignored,
+                         .str = strdup(drop_sym),
+                         .args = args, .arg_count = 1});
+        return;
+    }
+    // Legacy fallback: bare _heap_free with the recorded size.
+    VReg sz = new_vreg(c);
+    int s = c->local_alloc_sizes[idx] ? c->local_alloc_sizes[idx] : 16;
+    emit(c, (IRInst){.op = IR_CONST, .dst = sz, .imm = s});
+    VReg *args = malloc(2 * sizeof(VReg));
+    args[0] = ptr;
+    args[1] = sz;
+    VReg ignored = new_vreg(c);
+    emit(c, (IRInst){.op = IR_CALL, .dst = ignored, .str = "heap_free",
+                     .args = args, .arg_count = 2});
+}
+
+// Find the index of a named local, or -1 if not declared yet.
+static int find_local_index(IRGenCtx *c, const char *name) {
+    for (int i = c->local_count - 1; i >= 0; i--) {
+        if (!strcmp(c->local_names[i], name)) return i;
+    }
+    return -1;
+}
+
 // Emit `_heap_free(ptr, size)` for every local in [from, local_count)
 // that is heap-allocated and not moved. Used at scope end (NODE_BLOCK),
 // at returns (NODE_GIVE), and at function fall-off.
@@ -1121,6 +1192,16 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
             // and `q be rep p` (deep-clone via _clone_<X>). Plain
             // `q be p` for heap-shaped values is rejected by the
             // checker; here we only see the explicit forms.
+            //
+            // Codex review (heap replacement leak): for the
+            // explicit-form cases, drop the destination's previous
+            // owned value before overwriting. Without this, the
+            // old List/Map/struct leaked because set_local just
+            // overwrites the slot.
+            if (n->assign.is_move || n->assign.is_rep) {
+                int dst_idx = find_local_index(c, n->assign.name);
+                emit_drop_local_slot(c, dst_idx);
+            }
             VReg v;
             if (n->assign.is_rep && n->assign.src_struct_name) {
                 VReg src = gen_expr(c, n->assign.value);
@@ -1204,6 +1285,7 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
             // struct pointers as int).
             int offset = 0;
             int found = 0;
+            const char *field_type = NULL;
             if (c->program && n->field_assign.struct_name) {
                 for (int si = 0; si < c->program->program.structs.count && !found; si++) {
                     Node *s = c->program->program.structs.items[si];
@@ -1211,6 +1293,7 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
                     for (int fi = 0; fi < s->struct_def.field_count; fi++) {
                         if (!strcmp(s->struct_def.field_names[fi], n->field_assign.field)) {
                             offset = fi * 8;
+                            field_type = s->struct_def.field_types[fi];
                             found = 1;
                             break;
                         }
@@ -1224,11 +1307,99 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
                     for (int fi = 0; fi < s->struct_def.field_count; fi++) {
                         if (!strcmp(s->struct_def.field_names[fi], n->field_assign.field)) {
                             offset = fi * 8;
+                            field_type = s->struct_def.field_types[fi];
                             local_found = 1;
                             break;
                         }
                     }
                     if (local_found) break;
+                }
+            }
+            // Codex review (heap replacement leak): for `field be
+            // now src` and `field be rep src`, drop the previous
+            // owned value before storing the new pointer. Without
+            // this, the field's old contents leak — auto-init'd
+            // empty Lists/Strings, or any value the field was
+            // earlier set to, accumulates dead memory until the
+            // parent struct goes out of scope.
+            //
+            // Only fires for the explicit move/rep forms with a
+            // heap-shaped declared field type. Plain
+            // `field be primitive_value` doesn't need a drop.
+            if ((n->field_assign.is_move || n->field_assign.is_rep) &&
+                field_type) {
+                int field_is_struct = 0;
+                if (c->program) {
+                    for (int si = 0; si < c->program->program.structs.count; si++) {
+                        if (!strcmp(c->program->program.structs.items[si]->struct_def.name, field_type)) {
+                            field_is_struct = 1;
+                            break;
+                        }
+                    }
+                }
+                int field_is_array = !strncmp(field_type, "array__", 7);
+                int field_is_byte_array = !strcmp(field_type, "array__byte");
+                if (field_is_struct) {
+                    // Load old field value; null-guard; bl _drop_<FieldType>.
+                    VReg old = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_LOAD, .dst = old,
+                                     .a = obj, .imm = offset});
+                    char drop_sym[256];
+                    snprintf(drop_sym, sizeof(drop_sym), "drop_%s", field_type);
+                    VReg *args = malloc(sizeof(VReg));
+                    args[0] = old;
+                    VReg ignored = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_CALL, .dst = ignored,
+                                     .str = strdup(drop_sym),
+                                     .args = args, .arg_count = 1});
+                } else if (field_is_array) {
+                    // Mirror the array two-step cleanup: free data
+                    // (cap*esz) then header (16 bytes). Null-guard
+                    // the whole thing; if the field was nil we
+                    // skip the frees.
+                    int esz = field_is_byte_array ? 1 : 8;
+                    VReg old = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_LOAD, .dst = old,
+                                     .a = obj, .imm = offset});
+                    int skip_label = new_label(c);
+                    int hdr_label = new_label(c);
+                    int after_label = new_label(c);
+                    // if (old == 0) goto skip_label
+                    VReg zero_v = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_CONST, .dst = zero_v, .imm = 0});
+                    VReg is_null = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_CMP_EQ, .dst = is_null, .a = old, .b = zero_v});
+                    emit(c, (IRInst){.op = IR_BR_COND, .a = is_null,
+                                     .label = after_label, .label2 = hdr_label});
+                    // hdr_label: load cap, free data buffer, then header
+                    IRBlock *hb = new_block(c); hb->label = hdr_label;
+                    switch_block(c, hb);
+                    VReg cap = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_LOAD, .dst = cap, .a = old, .imm = 0});
+                    VReg esz_v = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_CONST, .dst = esz_v, .imm = esz});
+                    VReg data_sz = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_MUL, .dst = data_sz,
+                                     .a = cap, .b = esz_v});
+                    VReg data = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_LOAD, .dst = data, .a = old, .imm = 8});
+                    VReg *fa1 = malloc(2 * sizeof(VReg));
+                    fa1[0] = data; fa1[1] = data_sz;
+                    VReg ig1 = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_CALL, .dst = ig1, .str = "heap_free",
+                                     .args = fa1, .arg_count = 2});
+                    VReg sz16 = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_CONST, .dst = sz16, .imm = 16});
+                    VReg *fa2 = malloc(2 * sizeof(VReg));
+                    fa2[0] = old; fa2[1] = sz16;
+                    VReg ig2 = new_vreg(c);
+                    emit(c, (IRInst){.op = IR_CALL, .dst = ig2, .str = "heap_free",
+                                     .args = fa2, .arg_count = 2});
+                    emit(c, (IRInst){.op = IR_BR, .label = after_label});
+                    // after_label: continue
+                    IRBlock *ab = new_block(c); ab->label = after_label;
+                    switch_block(c, ab);
+                    (void)skip_label; // kept for symmetry; same as after
                 }
             }
             emit(c, (IRInst){.op = IR_STORE, .a = obj, .b = val, .imm = offset});
