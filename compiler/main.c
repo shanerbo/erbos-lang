@@ -375,7 +375,44 @@ int main(int argc, char **argv) {
             }
         }
         if (!test_f) {
-            fprintf(stderr, "error: cannot find module '%s'\n", upath_resolved);
+            // Surface a structured error that adapts to which
+            // resolver tier failed, so the user knows the next
+            // step instead of just "cannot find module."
+            int starts_std = (strncmp(upath_resolved, "std/", 4) == 0);
+            char proj_root_check[1024];
+            int has_project_root = find_project_root(input, proj_root_check,
+                                                     sizeof(proj_root_check));
+            fprintf(stderr, "error: cannot resolve `use %s`\n",
+                upath_resolved);
+            if (starts_std) {
+                // Stdlib lookup failed — almost always means the
+                // compiler can't find `std/` next to its binary
+                // (broken install) OR a typo in the module name.
+                char comp_dir_show[1024];
+                if (compiler_dir(comp_dir_show, sizeof(comp_dir_show))) {
+                    fprintf(stderr, "  searched: %s%s.ptt\n",
+                        comp_dir_show, upath_resolved);
+                }
+                fprintf(stderr, "  note: stdlib modules live next to the compiler binary\n");
+                fprintf(stderr, "  help: check the spelling, or that std/ is intact next to the erbos binary\n");
+            } else if (!has_project_root) {
+                // Non-stdlib path AND no potato.toml — the user
+                // is trying to import sibling/project code but
+                // hasn't marked their project root. This is the
+                // most common new-user failure.
+                fprintf(stderr, "  note: no `potato.toml` found in any ancestor of %s\n",
+                    input);
+                fprintf(stderr, "  help: create an empty `potato.toml` at the root of your project\n");
+                fprintf(stderr, "        so `use %s` resolves against `<project-root>/%s.ptt`\n",
+                    upath_resolved, upath_resolved);
+            } else {
+                // potato.toml found but the file genuinely isn't
+                // there. Show what was searched.
+                fprintf(stderr, "  searched: %s%s.ptt (sibling)\n", dir, upath_resolved);
+                fprintf(stderr, "            %s%s.ptt (project root)\n",
+                    proj_root_check, upath_resolved);
+                fprintf(stderr, "  help: check the path matches the file location relative to your project root\n");
+            }
             return 1;
         }
         fclose(test_f);
