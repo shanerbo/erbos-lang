@@ -1,0 +1,23 @@
+// Codex review round 2: `h.counter.bump()` where h is a non-ref
+// parameter must reject the same way `c.bump()` does. The
+// receiver-walker walks NODE_FIELD_ACCESS and NODE_INDEX
+// chains to find the root identifier.
+
+use std/string
+
+Counter is { value int }
+Holder is { counter Counter }
+
+Counter.bump(self ref Counter) {
+  self.value be self.value + 1
+}
+
+touch(h Holder) {
+  h.counter.bump()
+}
+
+spark {
+  h is Holder()
+  touch(h)
+  yell(h.counter.value)
+}

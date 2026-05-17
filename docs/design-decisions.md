@@ -1100,3 +1100,93 @@ declared green. Three remediations:
 - `examples/linked.ptt` continues to work.
 - Spudlock end-to-end clean under ASan + UBSan.
 - All previous regression tests still green.
+
+---
+
+## Codex review round 2: ref-self walker for nested receivers
+**Date:** 2026-05-17
+**Status:** decided (shipped — single follow-up commit)
+**Decision:** Walk the receiver expression to its root identifier
+when checking ref-self method calls. Reject when the root is a
+non-ref parameter, regardless of how many `.field` /
+`[index]` steps sit between the root and the method call.
+
+### What round 1 missed
+
+The previous fix only checked when the method-call object was
+a bare `NODE_IDENT`. Codex found a real escape:
+
+    Counter is { value int }
+    Holder is { counter Counter }
+
+    touch(h Holder) {
+      h.counter.bump()    // h is non-ref; bump takes ref self
+    }
+
+The receiver `h.counter` is a `NODE_FIELD_ACCESS`, not a
+`NODE_IDENT`. The check skipped it; the call went through.
+Caller's data mutated through a parameter the docs call
+read-only.
+
+### Fix
+
+Walk the receiver expression's leftmost child until we hit
+`NODE_IDENT` (root) or a non-rootable expression
+(`NODE_CALL` / `NODE_METHOD_CALL` — transient values).
+Steps recognised:
+
+- `NODE_FIELD_ACCESS` → step into `.object`
+- `NODE_INDEX` → step into `.object`
+
+If the root is a `NODE_IDENT` whose `is_ref == 0` (non-ref
+parameter) and the method is `ref self`, reject. Locals
+(`is_ref == -1`) and ref params (`is_ref == 1`) pass.
+
+Tests:
+- `tests/errors/ref_self_via_field_access.ptt` — depth-1
+  reject (`h.counter.bump()`).
+- `tests/errors/ref_self_via_nested_field.ptt` — depth-2
+  reject (`o.inner.counter.bump()`).
+- `tests/test_ref_self_walk.ptt` — 3 positive tests:
+  ref-param root allowed, local root allowed, bare local
+  control.
+
+### What this still does NOT cover
+
+Receivers rooted at a method-call return value alias caller
+storage but are treated as transient by the walker. Concretely:
+
+    touch(xs List of Counter) {
+      xs.get(0).bump()   // mutates xs's element 0
+    }                     // xs is non-ref but the call is allowed
+
+The walker bottoms out at `xs.get(0)` (a `NODE_METHOD_CALL`),
+treats it as transient, and lets the call through. Empirically
+verified that `xs.get(0).bump()` does mutate the underlying
+list element — so this is a real escape, just narrower than
+what Codex specifically flagged.
+
+Two reasons not to fix in this commit:
+- The minimal fix (reject any ref-self chain through a method
+  call) is overly conservative — it would reject legitimate
+  patterns like `make_counter().bump()` where the method
+  returns a fresh transient.
+- The proper fix needs a function-attribute (each method
+  declares whether its return aliases storage reachable from
+  arguments). That's a non-trivial language feature.
+
+Tracked as task #142. The current shipped scope: rejection
+through `field`/`index` chains; method-call returns remain a
+known gap that requires separate design.
+
+### What this teaches (round 2)
+
+The first-round fix was scoped to "the exact program in the
+audit's repro" rather than "the class of bugs that program
+exemplifies." Codex's round-2 finding was the same class of
+bug, one syntactic level deeper. Pattern: when a fix has the
+shape "if A: reject," ask whether the same logic applies to
+"if A nested under B," "under B and C," etc. The receiver
+walker generalises from the original NODE_IDENT-only check;
+the alias-through-method-return is the next nested case I
+chose not to address yet.

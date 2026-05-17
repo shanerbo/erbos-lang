@@ -1,0 +1,22 @@
+// Codex review round 2: deeper nesting also rejected.
+// `outer.middle.counter.bump()` walks all the way to outer.
+
+use std/string
+
+Counter is { value int }
+Inner is { counter Counter }
+Outer is { inner Inner }
+
+Counter.bump(self ref Counter) {
+  self.value be self.value + 1
+}
+
+touch(o Outer) {
+  o.inner.counter.bump()
+}
+
+spark {
+  o is Outer()
+  touch(o)
+  yell(o.inner.counter.value)
+}

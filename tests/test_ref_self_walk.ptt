@@ -1,0 +1,39 @@
+// Codex review round 2 positive coverage. The receiver walker
+// must reject only when rooted at a non-ref parameter. Local
+// roots and ref-param roots both legitimately allow ref-self
+// method calls through field/index chains.
+
+use std/string
+
+Counter is { value int }
+Holder is { counter Counter }
+
+Counter.bump(self ref Counter) {
+  self.value be self.value + 1
+}
+
+// Ref-param root — caller acknowledged the mutation.
+bump_via_ref_param(h ref Holder) {
+  h.counter.bump()
+}
+
+test "ref-param root allows nested ref-self call" {
+  h is Holder()
+  bump_via_ref_param(ref h)
+  bump_via_ref_param(ref h)
+  assert(h.counter.value eq 2)
+}
+
+test "local root allows nested ref-self call" {
+  h is Holder()
+  h.counter.bump()
+  h.counter.bump()
+  h.counter.bump()
+  assert(h.counter.value eq 3)
+}
+
+test "bare ref-self call on local works (control)" {
+  c is Counter()
+  c.bump()
+  assert(c.value eq 1)
+}
