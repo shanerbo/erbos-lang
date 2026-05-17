@@ -169,11 +169,16 @@ on completion. Don't redo a checked task.
       Acceptance: `tests/test_list_methods.ptt` passes (6
       tests); `grep 'mem_\|heap_\|panic_oob' std/list.ptt`
       returns only the comment line.
-- [ ] **β2** Rewrite `std/map.ptt` against `array of T`. Two
-      parallel arrays (keys, values).
-      Acceptance: `tests/test_map_methods.ptt` passes; clean grep.
-- [ ] **β3** Rewrite `std/string_map.ptt` against `array of T`.
-      Acceptance: clean grep; tests pass.
+- [x] **β2** Rewrote `std/map.ptt` against `array of T` — two
+      parallel `array of K` and `array of V` fields, linear-probe
+      scan, doubling growth on insert.
+      Acceptance met: `tests/test_map_methods.ptt` passes; no
+      `mem_*` / `heap_*` references in std/map.ptt.
+- [x] **β3** Rewrote `std/string_map.ptt` against `array of T` —
+      same two-parallel-array shape as `Map`, but uses
+      `String.equals` for key comparison so distinct String
+      headers carrying equal byte content match correctly.
+      Acceptance met: clean grep; tests pass.
 - [x] **β4** Rewrite `std/string.ptt` against `array of byte`.
       `String.data` becomes `array of byte`. `String.equals`,
       `String.byte_at` use typed indexing on the byte array.
@@ -467,9 +472,11 @@ on completion. Don't redo a checked task.
 
 ### Phase θ — Final verification
 
-- [ ] **θ1** `grep -rE 'heap_alloc|heap_free|mem_load|mem_store
-      |write_bytes|panic_oob|ptr_of|as_string' std/*.ptt
-      tests/*.ptt examples/**/*.ptt` returns nothing.
+- [x] **θ1** `grep -rE 'heap_alloc|heap_free|mem_load|mem_store|
+      write_bytes|panic_oob|ptr_of|as_string' std/*.ptt
+      tests/*.ptt examples/*.ptt examples/**/*.ptt` returns
+      nothing — the kernel layer is unreachable from any
+      user-or-stdlib `.ptt` file. Verified 2026-05-16.
 - [~] **θ2** Partial. `TOK_ASSERT` is gone (γ3); only comments
       mention it. `TOK_STR_TYPE` is still in dispatch positions
       so the legacy `s str` parameter spelling and `map of str
