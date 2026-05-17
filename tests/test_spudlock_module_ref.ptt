@@ -1,0 +1,23 @@
+// Regression for issue #5 from the spudlock report:
+// `module.func(ref x, ...)` was rejected at the call site.
+// Pre-fix, this produced "unexpected token in expression";
+// post-fix, the `ref` arg parses and the receiver is mutated
+// just like a non-module-qualified call.
+
+use std/string
+use tests/lib/spudlock_helper
+
+test "module-qualified ref call site parses and mutates" {
+  t is Holder(x is 0)
+  spudlock_helper.set_value(ref t, 42)
+  assert(t.x eq 42)
+}
+
+test "module-qualified ref still works without ref keyword (pointer pass)" {
+  // Without `ref`, the function still parses and the heap struct
+  // mutates because Potato passes structs by pointer regardless.
+  // This is the workaround the user found before the fix shipped.
+  t is Holder(x is 0)
+  spudlock_helper.set_value(t, 99)
+  assert(t.x eq 99)
+}

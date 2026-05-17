@@ -1,0 +1,49 @@
+// Regression tests for the four parser fixes from the spudlock
+// project's friction report.
+
+use std/string
+use std/list
+
+Package is {
+  name String
+  version int
+}
+
+Order is {
+  items List of int
+}
+
+Inner is { v int }
+Outer is { inner Inner }
+
+test "multiline named-arg constructor parses and assigns correctly" {
+  p is Package(
+    name is "foo",
+    version is 7
+  )
+  assert(p.version eq 7)
+}
+
+test "field be now src transfers ownership of a List" {
+  ctx is List of int
+  ctx.push(10)
+  ctx.push(20)
+  ctx.push(30)
+  out is Order()
+  out.items be now ctx
+  // ctx is dead now; reading it would be use-after-move.
+  assert(out.items.len() eq 3)
+  assert(out.items.get(0) eq 10)
+  assert(out.items.get(2) eq 30)
+}
+
+test "field be rep src deep-clones" {
+  src is Inner()
+  src.v be 42
+  out is Outer()
+  out.inner be rep src
+  // Mutating src must not touch out.inner.
+  src.v be 999
+  assert(out.inner.v eq 42)
+  assert(src.v eq 999)
+}

@@ -1099,7 +1099,32 @@ static void check_stmt(Checker *c, Node *n) {
         }
         case NODE_FIELD_ASSIGN: {
             Type obj_t = check_expr(c, n->field_assign.object);
-            check_expr(c, n->field_assign.value);
+            // Reject `field be now <non-ident>` / `field be rep <non-ident>`.
+            // The forms only make sense with a named local on the RHS:
+            // `now` needs a name to mark moved; `rep` needs the source's
+            // type, which we recover from the local's symbol.
+            if ((n->field_assign.is_move || n->field_assign.is_rep) &&
+                n->field_assign.value->type != NODE_IDENT) {
+                fprintf(stderr,
+                    "error:%d: `field be %s ...` requires a variable on the right-hand side\n",
+                    n->line, n->field_assign.is_move ? "now" : "rep");
+                exit(1);
+            }
+            Type val_t = check_expr(c, n->field_assign.value);
+            // `field be now src` transfers ownership of `src` into
+            // the field. Mark `src` as moved so any subsequent read
+            // produces a use-after-move error. Mirrors `is now`.
+            if (n->field_assign.is_move &&
+                n->field_assign.value->type == NODE_IDENT) {
+                mark_moved_sym(c, n->field_assign.value->ident.name);
+            }
+            // `field be rep src` deep-clones the source. Stash the
+            // source's struct name (when known) so irgen can emit
+            // `bl _clone_<StructName>`. Mirrors the var-decl `is rep`
+            // path.
+            if (n->field_assign.is_rep && val_t.kind == TYPE_STRUCT && val_t.struct_name) {
+                n->field_assign.src_struct_name = (char *)val_t.struct_name;
+            }
             // Tag the assignment with the receiver's struct name when known,
             // so codegen can pick the right field offset deterministically
             // instead of falling through to a name-based global search.

@@ -138,15 +138,19 @@ static Node *parse_primary(Parser *p) {
                 int cap = 4;
                 mc->method_call.args = malloc(cap * sizeof(Node *));
                 mc->method_call.arg_count = 0;
+                skip_newlines(p);
                 if (!at(p, TOK_RPAREN)) {
                     mc->method_call.args[mc->method_call.arg_count++] = parse_expr(p);
+                    skip_newlines(p);
                     while (at(p, TOK_COMMA)) {
                         p->pos++;
+                        skip_newlines(p);
                         if (mc->method_call.arg_count >= cap) {
                             cap *= 2;
                             mc->method_call.args = realloc(mc->method_call.args, cap * sizeof(Node *));
                         }
                         mc->method_call.args[mc->method_call.arg_count++] = parse_expr(p);
+                        skip_newlines(p);
                     }
                 }
                 eat(p, TOK_RPAREN);
@@ -300,6 +304,11 @@ static Node *parse_primary(Parser *p) {
                 n->call.arg_count = 0;
                 int saw_named = 0;
                 int saw_positional = 0;
+                // Multiline argument lists: newlines inside (...) are
+                // ignored. Without these skips, programs that format
+                // long struct constructors across lines would die with
+                // "unexpected token in expression."
+                skip_newlines(p);
                 if (!at(p, TOK_RPAREN)) {
                     if (at(p, TOK_REF)) p->pos++;
                     char *nm = NULL;
@@ -307,8 +316,10 @@ static Node *parse_primary(Parser *p) {
                     n->call.arg_names[n->call.arg_count] = nm;
                     if (nm) saw_named = 1; else saw_positional = 1;
                     n->call.arg_count++;
+                    skip_newlines(p);
                     while (at(p, TOK_COMMA)) {
                         p->pos++;
+                        skip_newlines(p);
                         if (n->call.arg_count >= cap) {
                             cap *= 2;
                             n->call.args = realloc(n->call.args, cap * sizeof(Node *));
@@ -320,6 +331,7 @@ static Node *parse_primary(Parser *p) {
                         n->call.arg_names[n->call.arg_count] = nm;
                         if (nm) saw_named = 1; else saw_positional = 1;
                         n->call.arg_count++;
+                        skip_newlines(p);
                     }
                 }
                 if (saw_named && saw_positional) {
@@ -347,15 +359,19 @@ static Node *parse_primary(Parser *p) {
                             int mcap = 4;
                             mc->method_call.args = malloc(mcap * sizeof(Node *));
                             mc->method_call.arg_count = 0;
+                            skip_newlines(p);
                             if (!at(p, TOK_RPAREN)) {
                                 mc->method_call.args[mc->method_call.arg_count++] = parse_expr(p);
+                                skip_newlines(p);
                                 while (at(p, TOK_COMMA)) {
                                     p->pos++;
+                                    skip_newlines(p);
                                     if (mc->method_call.arg_count >= mcap) {
                                         mcap *= 2;
                                         mc->method_call.args = realloc(mc->method_call.args, mcap * sizeof(Node *));
                                     }
                                     mc->method_call.args[mc->method_call.arg_count++] = parse_expr(p);
+                                    skip_newlines(p);
                                 }
                             }
                             eat(p, TOK_RPAREN);
@@ -394,6 +410,8 @@ static Node *parse_primary(Parser *p) {
             n->call.arg_count = 0;
             int saw_named = 0;
             int saw_positional = 0;
+            // Multiline argument lists: newlines inside (...) are ignored.
+            skip_newlines(p);
             if (!at(p, TOK_RPAREN)) {
                 if (at(p, TOK_REF)) p->pos++; // skip ref at call site
                 char *nm = NULL;
@@ -401,8 +419,10 @@ static Node *parse_primary(Parser *p) {
                 n->call.arg_names[n->call.arg_count] = nm;
                 if (nm) saw_named = 1; else saw_positional = 1;
                 n->call.arg_count++;
+                skip_newlines(p);
                 while (at(p, TOK_COMMA)) {
                     p->pos++;
+                    skip_newlines(p);
                     if (n->call.arg_count >= cap) {
                         cap *= 2;
                         n->call.args = realloc(n->call.args, cap * sizeof(Node *));
@@ -414,6 +434,7 @@ static Node *parse_primary(Parser *p) {
                     n->call.arg_names[n->call.arg_count] = nm;
                     if (nm) saw_named = 1; else saw_positional = 1;
                     n->call.arg_count++;
+                    skip_newlines(p);
                 }
             }
             if (saw_named && saw_positional) {
@@ -446,15 +467,27 @@ static Node *parse_primary(Parser *p) {
                     int cap = 4;
                     mc->method_call.args = malloc(cap * sizeof(Node *));
                     mc->method_call.arg_count = 0;
+                    skip_newlines(p);
                     if (!at(p, TOK_RPAREN)) {
+                        // Accept call-site `ref` here too. The
+                        // method-call AST node is also used for
+                        // module-aliased free-function calls
+                        // (`mod.func(...)` — `mod` is an import alias,
+                        // not a value), and those need `ref` arg
+                        // markers to match their declared parameters.
+                        if (at(p, TOK_REF)) p->pos++;
                         mc->method_call.args[mc->method_call.arg_count++] = parse_expr(p);
+                        skip_newlines(p);
                         while (at(p, TOK_COMMA)) {
                             p->pos++;
+                            skip_newlines(p);
                             if (mc->method_call.arg_count >= cap) {
                                 cap *= 2;
                                 mc->method_call.args = realloc(mc->method_call.args, cap * sizeof(Node *));
                             }
+                            if (at(p, TOK_REF)) p->pos++;
                             mc->method_call.args[mc->method_call.arg_count++] = parse_expr(p);
+                            skip_newlines(p);
                         }
                     }
                     eat(p, TOK_RPAREN);
@@ -884,6 +917,20 @@ static Node *parse_stmt(Parser *p) {
                     Node *n = alloc_node(NODE_FIELD_ASSIGN, line);
                     n->field_assign.object = expr->field_access.object;
                     n->field_assign.field = expr->field_access.field;
+                    n->field_assign.is_move = 0;
+                    n->field_assign.is_rep = 0;
+                    // `field be now src` — transfer ownership of `src`
+                    // into the field. `field be rep src` — deep-clone.
+                    // Same surface as `is now` / `is rep` for var
+                    // declarations. RHS must be an identifier; the
+                    // checker rejects non-IDENT RHS.
+                    if (at(p, TOK_NOW)) {
+                        p->pos++;
+                        n->field_assign.is_move = 1;
+                    } else if (at(p, TOK_REP)) {
+                        p->pos++;
+                        n->field_assign.is_rep = 1;
+                    }
                     n->field_assign.value = parse_expr(p);
                     return n;
                 }

@@ -45,7 +45,7 @@ test-pass: $(OUT)
 		else \
 			echo "  OK:   $$b"; \
 		fi; \
-		rm -f tests/lib/leetcode/$${b%.ptt}.s; \
+		rm -f $${b%.ptt}.s; \
 	done; \
 	[ $$fail -eq 0 ] || (echo "Some passing tests failed"; exit 1)
 

@@ -224,17 +224,30 @@ static void rewrite_calls_with_prefix(Node *n,
 }
 
 int main(int argc, char **argv) {
-    if (argc < 2) {
-        fprintf(stderr,
+    // Recognize a --help-style ask before anything else. Without
+    // this, `erbos --help` falls into the .ptt-input path and dies
+    // with a confusing "expected .ptt file, got '--help'" error.
+    int want_help = (argc < 2);
+    for (int hi = 1; hi < argc; hi++) {
+        if (!strcmp(argv[hi], "--help") ||
+            !strcmp(argv[hi], "-h") ||
+            !strcmp(argv[hi], "help")) {
+            want_help = 1;
+            break;
+        }
+    }
+    if (want_help) {
+        FILE *out = (argc < 2) ? stderr : stdout;
+        fprintf(out,
             "usage: erbos [-O0|-O1|-O2] <file.ptt>      # build to binary\n"
             "       erbos [-O0|-O1|-O2] run <file.ptt>  # build and run, then clean up\n"
             "       erbos [-O0|-O1|-O2] test <file.ptt> # same as run; the test framework runs in the binary\n"
             "       erbos [-O0|-O1|-O2] ir <file.ptt>   # emit the .s only, don't assemble\n"
             "\n"
             "  -O0  skip iropt entirely (no IR-level transformations)\n"
-            "  -O1  default — every iropt pass runs (currently scaffold-only; P5.x passes land here)\n"
+            "  -O1  default — every iropt pass runs\n"
             "  -O2  reserved for tuning; identical to -O1 today\n");
-        return 1;
+        return (argc < 2) ? 1 : 0;
     }
 
     // First pass: extract any -O0/-O1/-O2 anywhere in argv. Default
@@ -292,7 +305,18 @@ int main(int argc, char **argv) {
     if (dot) *dot = '\0';
 
     char asm_path[256];
-    snprintf(asm_path, sizeof(asm_path), "%s.s", out_name);
+    if (ir_only) {
+        // `erbos ir <path>/foo.ptt` should write `foo.s` to cwd, not
+        // dirty the source directory with build artifacts. Strip any
+        // leading directory from the path. (Build mode keeps the
+        // source-dir layout for `out_name` because the resulting
+        // binary is meaningful at that location.)
+        const char *base = strrchr(out_name, '/');
+        base = base ? base + 1 : out_name;
+        snprintf(asm_path, sizeof(asm_path), "%s.s", base);
+    } else {
+        snprintf(asm_path, sizeof(asm_path), "%s.s", out_name);
+    }
 
     // Lex
     char *src = read_file(input);

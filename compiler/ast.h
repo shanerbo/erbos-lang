@@ -116,7 +116,25 @@ struct Node {
         struct { char *name; Node *value; } assign;
 
         // NODE_FIELD_ASSIGN (obj.field = value)
-        struct { Node *object; char *field; Node *value; char *struct_name; } field_assign;
+        // is_move/is_rep: set when the assignment uses `now`/`rep`
+        // ownership-transfer forms: `field be now src` / `field be rep src`.
+        // Mirrors the same flags on NODE_VAR_DECL so the checker and
+        // irgen can apply identical move/clone semantics at field
+        // position. Both default to 0 for plain `field be expr`.
+        //
+        // src_struct_name: when is_rep is set, the checker stashes the
+        // *source's* struct type here so irgen can emit `bl
+        // _clone_<src_struct_name>`. Different from struct_name (which
+        // is the *receiver's* struct type, used for field offset).
+        struct {
+            Node *object;
+            char *field;
+            Node *value;
+            char *struct_name;
+            char *src_struct_name;
+            int is_move;
+            int is_rep;
+        } field_assign;
 
         // NODE_IF
         struct {

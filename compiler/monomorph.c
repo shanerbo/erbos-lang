@@ -336,6 +336,9 @@ static Node *clone_node(Node *n) {
             c->field_assign.field = xstrdup(n->field_assign.field);
             c->field_assign.value = clone_node(n->field_assign.value);
             c->field_assign.struct_name = xstrdup(n->field_assign.struct_name);
+            c->field_assign.src_struct_name = xstrdup(n->field_assign.src_struct_name);
+            c->field_assign.is_move = n->field_assign.is_move;
+            c->field_assign.is_rep = n->field_assign.is_rep;
             break;
         case NODE_INDEX:
             c->index_access.object = clone_node(n->index_access.object);

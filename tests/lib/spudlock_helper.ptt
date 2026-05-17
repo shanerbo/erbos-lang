@@ -1,0 +1,11 @@
+// Library used by tests/test_spudlock_module_ref.ptt to verify
+// that module-qualified free-function calls accept `ref` at the
+// call site (issue #5 from the spudlock report).
+
+use std/string
+
+Holder is { x int }
+
+set_value(t ref Holder, v int) {
+  t.x be v
+}

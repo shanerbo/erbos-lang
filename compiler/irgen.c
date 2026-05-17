@@ -1071,10 +1071,30 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
             // cleanup must skip it on scope exit, otherwise we
             // double-free (the field still points at the buffer
             // that the local also pointed at).
-            if (n->field_assign.value->type == NODE_IDENT) {
+            //
+            // `field be rep src` deep-clones the source; both source
+            // and field end up alive with independent blocks, so the
+            // source is NOT marked moved.
+            if (n->field_assign.value->type == NODE_IDENT && !n->field_assign.is_rep) {
                 mark_moved_local(c, n->field_assign.value->ident.name);
             }
-            VReg val = gen_expr(c, n->field_assign.value);
+            VReg val;
+            if (n->field_assign.is_rep && n->field_assign.src_struct_name) {
+                // Eval source pointer, then `bl _clone_<SrcStruct>`.
+                // The result is the new independent block.
+                VReg src = gen_expr(c, n->field_assign.value);
+                val = new_vreg(c);
+                char clone_sym[256];
+                snprintf(clone_sym, sizeof(clone_sym),
+                    "clone_%s", n->field_assign.src_struct_name);
+                VReg *args = malloc(sizeof(VReg));
+                args[0] = src;
+                emit(c, (IRInst){.op = IR_CALL, .dst = val,
+                                 .str = strdup(clone_sym),
+                                 .args = args, .arg_count = 1});
+            } else {
+                val = gen_expr(c, n->field_assign.value);
+            }
             VReg obj = gen_expr(c, n->field_assign.object);
             // Resolve the field offset using the same per-struct policy
             // P2 introduced for the direct codegen: when the checker
