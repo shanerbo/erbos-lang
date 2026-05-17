@@ -2,6 +2,7 @@
 #define IROPT_H
 
 #include "ir.h"
+#include "ast.h"
 
 // Optimization levels (P5.0 scaffold).
 //
@@ -24,6 +25,13 @@ typedef enum {
 // Pass order matters and is documented at the dispatch table inside
 // iropt.c. A no-op call (IROPT_O0, or any level with no enabled
 // passes) is fine and just returns.
-void iropt_run(IRProgram *ir, IROptLevel level);
+//
+// `program` is the parsed AST root. Some passes (notably SRA) need
+// to consult struct definitions to decide whether `_alloc_<X>` calls
+// are safe to eliminate — specifically, structs with struct-typed
+// fields have auto-init side effects in their constructors and must
+// not be deleted. May be NULL only for tests; the production pipeline
+// always passes the real AST.
+void iropt_run(IRProgram *ir, IROptLevel level, Node *program);
 
 #endif

@@ -1,0 +1,38 @@
+// Regression for bug #114 — auto-init of struct fields must
+// survive the iropt pipeline at -O0/-O1/-O2. Specifically:
+//   - SRA (alloc-elimination) must NOT delete `_alloc_<X>` if X
+//     has a struct-typed field. The _alloc_<X> body recursively
+//     calls _alloc_<FieldType> per field; eliminating it would
+//     leave the field as a null pointer and crash on first use.
+//   - Stackify (stack-promotion) must NOT promote such allocs
+//     to a stack slot for the same reason.
+
+use std/list
+
+Inner is {
+  v int
+}
+
+Outer is {
+  inner Inner
+}
+
+Store is {
+  items List of int
+}
+
+test "user struct field auto-init survives all -O levels" {
+  o is Outer()
+  o.inner.v be 7
+  assert(o.inner.v eq 7)
+}
+
+test "List of T field auto-init survives all -O levels" {
+  s is Store()
+  s.items.push(1)
+  s.items.push(2)
+  s.items.push(3)
+  assert(s.items.len() eq 3)
+  assert(s.items.get(0) eq 1)
+  assert(s.items.get(2) eq 3)
+}

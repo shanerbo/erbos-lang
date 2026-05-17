@@ -1,0 +1,83 @@
+// Regression for bug #114 — struct fields of struct/stdlib type
+// must be auto-initialised by the parent's constructor. Without
+// the auto-init, methods on those fields dereference a null
+// pointer and segfault.
+
+use std/list
+
+Inner is {
+  v int
+}
+
+Outer is {
+  inner Inner
+}
+
+Item is {
+  v int
+}
+
+Store is {
+  items List of Item
+}
+
+NestedDeep is {
+  outer Outer
+}
+
+test "user struct field auto-inits to a fresh zero-default value" {
+  o is Outer()
+  // Without auto-init, o.inner is null and o.inner.v segfaults.
+  assert(o.inner.v eq 0)
+  o.inner.v be 42
+  assert(o.inner.v eq 42)
+}
+
+test "stdlib generic field (List of T) auto-inits to empty list" {
+  s is Store()
+  assert(s.items.len() eq 0)
+  s.items.push(Item(v is 1))
+  s.items.push(Item(v is 2))
+  s.items.push(Item(v is 3))
+  assert(s.items.len() eq 3)
+  // Look up by index — the canonical arena-pattern access.
+  i0 is s.items.get(0)
+  i2 is s.items.get(2)
+  assert(i0.v eq 1)
+  assert(i2.v eq 3)
+}
+
+test "two structs sharing the same field type both auto-init" {
+  a is Outer()
+  b is Outer()
+  // Each gets its own independent inner; mutating one doesn't
+  // touch the other.
+  a.inner.v be 100
+  b.inner.v be 200
+  assert(a.inner.v eq 100)
+  assert(b.inner.v eq 200)
+}
+
+test "deeply nested struct fields auto-init recursively" {
+  d is NestedDeep()
+  // d.outer must be allocated; d.outer.inner must be allocated.
+  // Both auto-inits are recursive in the constructor.
+  assert(d.outer.inner.v eq 0)
+  d.outer.inner.v be 99
+  assert(d.outer.inner.v eq 99)
+}
+
+test "method call on List field works (the arena pattern)" {
+  // Mirrors the README's arena example end-to-end.
+  s is Store()
+  s.items.push(Item(v is 32000))
+  icon_id is s.items.len() - 1
+  // Multiple "consumers" each hold the same int handle.
+  consumer_a is icon_id
+  consumer_b is icon_id
+  // Both reach the same Item through the arena.
+  ia is s.items.get(consumer_a)
+  ib is s.items.get(consumer_b)
+  assert(ia.v eq 32000)
+  assert(ib.v eq 32000)
+}

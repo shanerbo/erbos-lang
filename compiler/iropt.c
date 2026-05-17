@@ -72,13 +72,23 @@ static const IROptPassEntry g_passes[] = {
     { NULL, IROPT_O0, NULL }, // sentinel
 };
 
-void iropt_run(IRProgram *ir, IROptLevel level) {
+// AST root, set by `iropt_run` for the lifetime of the call. Passes
+// that need to consult struct definitions (e.g. SRA needs to know
+// whether `_alloc_<X>` has auto-init side effects from struct-typed
+// fields) read this through `g_iropt_program`. NULL when iropt is
+// invoked outside the production pipeline (e.g. unit tests); the
+// affected passes treat NULL as "be conservative."
+static Node *g_iropt_program = NULL;
+
+void iropt_run(IRProgram *ir, IROptLevel level, Node *program) {
     if (!ir || level == IROPT_O0) return;
+    g_iropt_program = program;
     for (const IROptPassEntry *p = g_passes; p->name != NULL; p++) {
         if (level >= p->min_level && p->run) {
             p->run(ir);
         }
     }
+    g_iropt_program = NULL;
 }
 
 // ============================================================
@@ -404,6 +414,35 @@ static int alloc_call_field_count(IRProgram *ir, const char *call_name) {
     // IRFunc entries for the `_alloc_*` symbols — those are emitted
     // directly to the .s file from main.c.
     //
+    // Bug #114: `_alloc_<X>` is no longer guaranteed to be a pure
+    // size-only allocation. When struct X has any struct-typed field,
+    // its constructor recursively calls `_alloc_<FieldType>` per
+    // field and stores the pointers — so eliminating the call would
+    // skip those auto-inits and leave fields as null pointers, which
+    // segfault on first use. Refuse to eliminate any alloc whose
+    // struct has at least one struct-typed field.
+    const char *struct_name = call_name + 6; // skip "alloc_"
+    if (g_iropt_program) {
+        Node *prog = g_iropt_program;
+        for (int si = 0; si < prog->program.structs.count; si++) {
+            Node *s = prog->program.structs.items[si];
+            if (strcmp(s->struct_def.name, struct_name) != 0) continue;
+            // Found the struct. Check if any field's type matches
+            // another struct in the program — that's the auto-init
+            // signal.
+            for (int fi = 0; fi < s->struct_def.field_count; fi++) {
+                const char *ft = s->struct_def.field_types[fi];
+                if (!ft) continue;
+                for (int sj = 0; sj < prog->program.structs.count; sj++) {
+                    if (sj == si) continue;
+                    if (!strcmp(prog->program.structs.items[sj]->struct_def.name, ft)) {
+                        return -1; // bail: SRA cannot eliminate this alloc
+                    }
+                }
+            }
+            break;
+        }
+    }
     // Since we can't recover the field count from IR alone, we
     // accept any `_alloc_*` call and treat the struct as having an
     // unbounded field count: the field_slot table grows lazily as
@@ -881,6 +920,37 @@ static int aliases_dont_escape(IRFunc *func, int *aliases, int *max_off_out) {
     return 1;
 }
 
+// Bug #114 helper: an `_alloc_<X>` whose struct has at least one
+// struct-typed field has auto-init side effects (see main.c's
+// EMIT_IR_TO_FILE: per-field `bl _alloc_<FieldType>`). Stackify must
+// not lower such allocs to stack slots — the auto-inits would be
+// skipped and downstream method calls on the field would dereference
+// null. Returns 1 iff `call_name` is `alloc_<X>` for a struct that
+// has at least one struct-typed field.
+static int alloc_has_field_init(const char *call_name) {
+    if (!call_name) return 0;
+    if (strncmp(call_name, "alloc_", 6) != 0) return 0;
+    if (!g_iropt_program) return 0;
+    const char *struct_name = call_name + 6;
+    Node *prog = g_iropt_program;
+    for (int si = 0; si < prog->program.structs.count; si++) {
+        Node *s = prog->program.structs.items[si];
+        if (strcmp(s->struct_def.name, struct_name) != 0) continue;
+        for (int fi = 0; fi < s->struct_def.field_count; fi++) {
+            const char *ft = s->struct_def.field_types[fi];
+            if (!ft) continue;
+            for (int sj = 0; sj < prog->program.structs.count; sj++) {
+                if (sj == si) continue;
+                if (!strcmp(prog->program.structs.items[sj]->struct_def.name, ft)) {
+                    return 1;
+                }
+            }
+        }
+        return 0;
+    }
+    return 0;
+}
+
 static void stackify_func(IRFunc *func) {
     for (int bi = 0; bi < func->block_count; bi++) {
         IRBlock *b = &func->blocks[bi];
@@ -890,6 +960,8 @@ static void stackify_func(IRFunc *func) {
             if (!alloc->str) continue;
             if (strncmp(alloc->str, "alloc_", 6) != 0) continue;
             if (alloc->dst < 0) continue;
+            // Bug #114 — auto-init alloc must stay on the heap.
+            if (alloc_has_field_init(alloc->str)) continue;
 
             // Build the alias set rooted at alloc->dst.
             int *aliases = alias_set_new(func->vreg_count);

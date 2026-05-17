@@ -162,11 +162,18 @@ Image is {
   pixels int
 }
 
+ImageStore is {
+  images List of Image
+}
+
+ImageStore.add(self ref ImageStore, img Image) int {
+  self.images.push(img)
+  give self.images.len() - 1
+}
+
 spark {
-  // The arena: a List that owns every Image.
-  images is List of Image
-  images.push(Image(pixels is 32000))
-  icon_id is images.len() - 1
+  store is ImageStore()
+  icon_id is store.add(Image(pixels is 32000))
 
   // Many "consumers" all reference the same image — by integer.
   window_icon is icon_id
@@ -174,7 +181,7 @@ spark {
   about_icon is icon_id
 
   // Look up via the arena when you need the actual data.
-  icon is images.get(window_icon)
+  icon is store.images.get(window_icon)
   yell(icon.pixels)        // 32000
 
   // The image exists ONCE in memory; window_icon, toolbar_icon,

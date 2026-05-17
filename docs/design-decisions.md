@@ -490,3 +490,78 @@ discussion ends.
 If the answer is yes, the feature must still survive the other
 language principles (no magic, no `<T>`, KISS, every decision
 serves cohesion over completeness).
+
+---
+
+## Struct field auto-init for struct-typed fields
+**Date:** 2026-05-17
+**Status:** decided (shipped — bug #114 fix)
+**Decision:** When a struct's field has a type that is itself a
+struct (user-defined OR stdlib generic like `List of T`,
+`Map of K to V`, `String`), the parent's `_alloc_<X>`
+constructor recursively calls `_alloc_<FieldType>` for that
+field and stores the resulting pointer.
+
+### The bug
+
+Without this, `Store is { items List of Item }` followed by
+`s is Store(); s.items.push(...)` segfaults at `-O0` (visible
+on macOS as exit code 139). At `-O1+` the optimizer's stackify
+pass *partially* hides the crash by stack-allocating the Store,
+but the underlying issue remains — and the same bug bites for
+any nested user struct (`Outer { inner Inner }; o.inner.v` →
+null deref).
+
+The root cause is the layout: every struct field is an 8-byte
+*pointer* slot, never an inlined struct body. After
+`_alloc_Store` zero-fills the block, `s.items` is a null
+pointer. Calling `List.push` dereferences it and crashes.
+
+### Why auto-init (not "user must initialize explicitly")
+
+We considered three options:
+
+| Option | What | Trade |
+|---|---|---|
+| A. Auto-init | `_alloc_<X>` recursively allocates struct-typed fields. | Hidden allocation per construction. Matches user expectation: "every field starts at its type's zero value" extends to "an empty List for List fields, an empty String for String fields, ...". |
+| B. Require explicit init | User must use named-arg form `Store(items is List of Item)` for any struct with struct-typed fields. | No hidden allocation. But makes zero-default useless for any struct that contains a stdlib collection — every Store-like type forces verbose construction. |
+| C. Runtime null-check | Insert null-deref guards on every method call. | Per-access overhead. Doesn't fix the actual problem, just turns a segfault into a panic. |
+
+Picked A. The principle "no hidden allocations" was meant to
+mean "no allocations the user can't see in source," not "an
+int field allocates nothing, and a struct field also allocates
+nothing." A struct-typed field is a struct in the type system's
+view; allocating it as part of the parent's construction is
+consistent with how every other heap allocation in the language
+works (`p is Point()` allocates).
+
+### Implementation
+
+`compiler/main.c`'s `EMIT_IR_TO_FILE` macro generates two
+shapes for `_alloc_<X>`:
+
+- **No struct-typed fields** → simple `_heap_alloc(size)` + zero-fill.
+- **At least one struct-typed field** → 32-byte frame (preserves
+  x29/x30 + x19/x20 across recursive `bl _alloc_<FieldType>`
+  calls). Allocate parent, zero-fill, then per-field call
+  `_alloc_<FieldType>` and store the pointer at the field offset.
+
+`compiler/iropt.c` was updated for both relevant passes:
+
+- **SRA** (`alloc_call_field_count`) — refuses to eliminate
+  any `_alloc_<X>` whose struct has a struct-typed field. The
+  alloc has side effects beyond just the heap_alloc.
+- **Stackify** (`alloc_has_field_init`) — refuses to promote
+  such allocs to stack slots. Same reason.
+
+Both passes consult a module-level `g_iropt_program` set by
+`iropt_run`, which now takes the parsed AST as a third argument.
+
+### Tracking
+
+- `tests/test_struct_field_init.ptt` — 5 framework tests
+  (user struct field, stdlib generic field, two-struct
+  independence, deep nesting, full arena pattern).
+- `tests/ir/struct_field_auto_init.ptt` — 2 IR regression tests
+  at -O0/-O1/-O2.
+- All tests pass clean at -O0/-O1/-O2; ASan + UBSan clean.

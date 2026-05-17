@@ -502,7 +502,7 @@ int main(int argc, char **argv) {
     // Returns the number of IR functions emitted.
     #define EMIT_IR_TO_FILE(asm_path_arg) ({                                    \
         IRProgram *ir = irgen_generate(program);                                \
-        iropt_run(ir, opt_level);                                               \
+        iropt_run(ir, opt_level, program);                                      \
         FILE *ir_out = fopen((asm_path_arg), "w");                              \
         fprintf(ir_out, ".global _start\n.align 2\n");                          \
         fprintf(ir_out, ".section __TEXT,__text\n\n");                          \
@@ -511,23 +511,86 @@ int main(int argc, char **argv) {
             Node *s = program->program.structs.items[si];                       \
             int size = s->struct_def.field_count * 8;                           \
             if (size == 0) size = 8;                                            \
+            /* Decide whether this constructor needs to recursively              \
+             * initialise struct-typed fields. A field type counts if            \
+             * (after monomorphisation) its spelling matches another             \
+             * struct's name in this program — including stdlib types            \
+             * like `List__Item`, `Map__String__int`, `String`. If no            \
+             * such field exists we keep the simple alloc + zero body            \
+             * (no extra prologue, no callee-saves). */                         \
+            int needs_field_init = 0;                                           \
+            for (int fi = 0; fi < s->struct_def.field_count; fi++) {            \
+                const char *ft = s->struct_def.field_types[fi];                 \
+                if (!ft) continue;                                              \
+                for (int sj = 0; sj < program->program.structs.count; sj++) {   \
+                    if (sj == si) continue;                                     \
+                    if (!strcmp(program->program.structs.items[sj]->struct_def.name, ft)) { \
+                        needs_field_init = 1;                                   \
+                        break;                                                  \
+                    }                                                           \
+                }                                                               \
+                if (needs_field_init) break;                                    \
+            }                                                                   \
             fprintf(ir_out, ".globl _alloc_%s\n.p2align 2\n_alloc_%s:\n",       \
                     s->struct_def.name, s->struct_def.name);                    \
-            fprintf(ir_out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");\
-            fprintf(ir_out, "    mov x0, #%d\n    bl _heap_alloc\n", size);     \
-            /* ε5 prerequisite: zero the freshly-allocated bytes.               \
-             * `_heap_alloc` returns either a fresh mmap'd page (already        \
-             * zeroed) or a recycled free-list block whose first 16 bytes       \
-             * still hold [next, size] metadata. Stdlib types like              \
-             * `List of T` rely on `self.data eq 0` as a lazy-init signal;      \
-             * without zeroing, recycled blocks read garbage and the lazy       \
-             * path doesn't fire. Zero up to `size` bytes in 8-byte strides.    \
-             * x0 holds the alloc pointer; preserve it across the loop. */     \
-            fprintf(ir_out, "    mov x9, x0\n    mov x10, #0\n");                \
-            for (int z = 0; z < size; z += 8) {                                  \
-                fprintf(ir_out, "    str xzr, [x9, #%d]\n", z);                  \
-            }                                                                    \
-            fprintf(ir_out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n"); \
+            if (!needs_field_init) {                                            \
+                fprintf(ir_out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n"); \
+                fprintf(ir_out, "    mov x0, #%d\n    bl _heap_alloc\n", size); \
+                /* ε5 prerequisite: zero the freshly-allocated bytes.           \
+                 * `_heap_alloc` returns either a fresh mmap'd page (already    \
+                 * zeroed) or a recycled free-list block whose first 16 bytes   \
+                 * still hold [next, size] metadata. Stdlib types like          \
+                 * `List of T` rely on `self.data eq 0` as a lazy-init signal;  \
+                 * without zeroing, recycled blocks read garbage and the lazy   \
+                 * path doesn't fire. Zero up to `size` bytes in 8-byte strides.\
+                 * x0 holds the alloc pointer; preserve it across the loop. */ \
+                fprintf(ir_out, "    mov x9, x0\n    mov x10, #0\n");           \
+                for (int z = 0; z < size; z += 8) {                             \
+                    fprintf(ir_out, "    str xzr, [x9, #%d]\n", z);             \
+                }                                                               \
+                fprintf(ir_out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n"); \
+            } else {                                                            \
+                /* Auto-init path: every field whose type is itself             \
+                 * a struct gets a fresh `_alloc_<FieldType>` call and          \
+                 * its pointer stored at the field's offset. Bug #114 —         \
+                 * without this, `s is Outer(); s.field.method()` segfaults     \
+                 * because `s.field` is a null pointer.                         \
+                 *                                                              \
+                 * Frame: 32 bytes (x29/x30 pair + x19/x20 pair). x19           \
+                 * holds the parent pointer across recursive bl calls. */      \
+                fprintf(ir_out, "    stp x29, x30, [sp, #-32]!\n");             \
+                fprintf(ir_out, "    stp x19, x20, [sp, #16]\n");               \
+                fprintf(ir_out, "    mov x29, sp\n");                           \
+                fprintf(ir_out, "    mov x0, #%d\n    bl _heap_alloc\n", size); \
+                /* Zero the block first so any non-struct field is 0. */        \
+                fprintf(ir_out, "    mov x19, x0\n");                           \
+                for (int z = 0; z < size; z += 8) {                             \
+                    fprintf(ir_out, "    str xzr, [x19, #%d]\n", z);            \
+                }                                                               \
+                /* Per-field auto-init: for each field whose type is a          \
+                 * struct in this program, call `_alloc_<FieldType>` and        \
+                 * store the result at offset (fi*8) of the parent. */         \
+                for (int fi = 0; fi < s->struct_def.field_count; fi++) {        \
+                    const char *ft = s->struct_def.field_types[fi];             \
+                    if (!ft) continue;                                          \
+                    int is_struct_field = 0;                                    \
+                    for (int sj = 0; sj < program->program.structs.count; sj++) { \
+                        if (sj == si) continue;                                 \
+                        if (!strcmp(program->program.structs.items[sj]->struct_def.name, ft)) { \
+                            is_struct_field = 1;                                \
+                            break;                                              \
+                        }                                                       \
+                    }                                                           \
+                    if (!is_struct_field) continue;                             \
+                    fprintf(ir_out, "    bl _alloc_%s\n", ft);                  \
+                    fprintf(ir_out, "    str x0, [x19, #%d]\n", fi * 8);        \
+                }                                                               \
+                /* Return parent pointer in x0. */                              \
+                fprintf(ir_out, "    mov x0, x19\n");                           \
+                fprintf(ir_out, "    ldp x19, x20, [sp, #16]\n");               \
+                fprintf(ir_out, "    ldp x29, x30, [sp], #32\n");               \
+                fprintf(ir_out, "    ret\n\n");                                 \
+            }                                                                   \
         }                                                                       \
         for (int i = 0; i < ir->func_count; i++) {                              \
             RegAllocResult alloc = regalloc_run(&ir->funcs[i]);                 \
