@@ -774,6 +774,91 @@ int main(int argc, char **argv) {
             fprintf(ir_out, "    ldp x19, x20, [sp, #16]\n");                   \
             fprintf(ir_out, "    ldp x29, x30, [sp], #48\n");                   \
             fprintf(ir_out, "    ret\n\n");                                     \
+            /* `_drop_<X>(ptr)` — recursively free a struct and its              \
+             * owned heap fields. Codex P0-8.                                    \
+             *                                                                   \
+             * Per field, three cases (mirrors _clone_<X>):                      \
+             *   - primitive (anything not in struct registry and not            \
+             *     `array__*`): nothing to free.                                 \
+             *   - struct in this program: bl _drop_<FieldType> if non-null.     \
+             *   - `array__<elem>`: free data buffer (cap*esz bytes), free       \
+             *     header (16 bytes). Both null-guarded.                         \
+             * Then heap_free the struct itself (`size` bytes).                  \
+             *                                                                   \
+             * x0 in: ptr to struct. No return value.                            \
+             * Frame: 32 bytes — x29/x30 + x19/x20 (x19=ptr saved across         \
+             * recursive calls). x21/x22 not needed: array path uses             \
+             * x9..x14 directly between heap_free calls without                  \
+             * intermediate calls. */                                            \
+            fprintf(ir_out, ".globl _drop_%s\n.p2align 2\n_drop_%s:\n",         \
+                    s->struct_def.name, s->struct_def.name);                    \
+            fprintf(ir_out, "    cbz x0, _drop_%s_done\n",                       \
+                    s->struct_def.name);                                        \
+            fprintf(ir_out, "    stp x29, x30, [sp, #-32]!\n");                 \
+            fprintf(ir_out, "    stp x19, x20, [sp, #16]\n");                   \
+            fprintf(ir_out, "    mov x29, sp\n");                               \
+            fprintf(ir_out, "    mov x19, x0\n");                               \
+            for (int fi = 0; fi < s->struct_def.field_count; fi++) {            \
+                const char *ft = s->struct_def.field_types[fi];                 \
+                int off = fi * 8;                                               \
+                int is_struct_field = 0;                                        \
+                if (ft) for (int sj = 0; sj < program->program.structs.count; sj++) { \
+                    if (sj == si) continue;                                     \
+                    if (!strcmp(program->program.structs.items[sj]->struct_def.name, ft)) { \
+                        is_struct_field = 1;                                    \
+                        break;                                                  \
+                    }                                                           \
+                }                                                               \
+                int is_array_field = ft && !strncmp(ft, "array__", 7);          \
+                int is_byte_array  = ft && !strcmp(ft, "array__byte");          \
+                if (is_struct_field) {                                          \
+                    fprintf(ir_out, "    ldr x9, [x19, #%d]\n", off);           \
+                    fprintf(ir_out, "    cbz x9, _drop_%s_skip%d\n",            \
+                        s->struct_def.name, fi);                                \
+                    fprintf(ir_out, "    mov x0, x9\n");                        \
+                    fprintf(ir_out, "    bl _drop_%s\n", ft);                   \
+                    fprintf(ir_out, "_drop_%s_skip%d:\n",                       \
+                        s->struct_def.name, fi);                                \
+                } else if (is_array_field) {                                    \
+                    int esz = is_byte_array ? 1 : 8;                            \
+                    fprintf(ir_out, "    ldr x9, [x19, #%d]\n", off);           \
+                    fprintf(ir_out, "    cbz x9, _drop_%s_skip%d\n",            \
+                        s->struct_def.name, fi);                                \
+                    /* Array layout: [cap @ 0, data @ 8]. Free data first       \
+                     * (size = cap*esz), then the 16-byte header. Mirrors       \
+                     * the array RAII path in compiler/irgen.c                  \
+                     * emit_scope_cleanup. */                                   \
+                    fprintf(ir_out, "    ldr x10, [x9, #0]\n");                 \
+                    fprintf(ir_out, "    ldr x11, [x9, #8]\n");                 \
+                    /* x9=array_hdr, x10=cap, x11=data_ptr */                   \
+                    fprintf(ir_out, "    cbz x11, _drop_%s_hdr%d\n",            \
+                        s->struct_def.name, fi);                                \
+                    if (esz == 1) {                                             \
+                        fprintf(ir_out, "    mov x1, x10\n");                   \
+                    } else {                                                    \
+                        fprintf(ir_out, "    lsl x1, x10, #3\n");               \
+                    }                                                           \
+                    fprintf(ir_out, "    mov x0, x11\n");                       \
+                    fprintf(ir_out, "    bl _heap_free\n");                     \
+                    fprintf(ir_out, "_drop_%s_hdr%d:\n",                        \
+                        s->struct_def.name, fi);                                \
+                    fprintf(ir_out, "    ldr x0, [x19, #%d]\n", off);           \
+                    fprintf(ir_out, "    mov x1, #16\n");                       \
+                    fprintf(ir_out, "    bl _heap_free\n");                     \
+                    fprintf(ir_out, "_drop_%s_skip%d:\n",                       \
+                        s->struct_def.name, fi);                                \
+                }                                                               \
+                /* Primitive fields require no drop. */                         \
+            }                                                                   \
+            /* Free the struct itself. */                                       \
+            fprintf(ir_out, "    mov x0, x19\n");                               \
+            fprintf(ir_out, "    mov x1, #%d\n", size);                         \
+            fprintf(ir_out, "    bl _heap_free\n");                             \
+            fprintf(ir_out, "    ldp x19, x20, [sp, #16]\n");                   \
+            fprintf(ir_out, "    ldp x29, x30, [sp], #32\n");                   \
+            fprintf(ir_out, "_drop_%s_done:\n",                                 \
+                    s->struct_def.name);                                        \
+            fprintf(ir_out, "    ret\n\n");                                     \
         }                                                                       \
         for (int i = 0; i < ir->func_count; i++) {                              \
             RegAllocResult alloc = regalloc_run(&ir->funcs[i]);                 \

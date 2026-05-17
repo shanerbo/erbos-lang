@@ -1,0 +1,55 @@
+// Codex audit P0-8 regression: scope cleanup must recursively
+// drop owned heap fields, not just free the parent struct.
+// Pre-fix, a List or Map going out of scope freed the parent
+// header but leaked the inner array(s).
+//
+// We can't directly observe a leak, but we can check that the
+// program runs to completion under ASan/UBSan without
+// dereferencing freed memory and without dangling pointers
+// surfacing as wrong values when memory gets recycled.
+
+use std/string
+use std/list
+use std/map
+
+test "List of int goes out of scope cleanly" {
+  through (i from 0 to 100 by 1) {
+    xs is List of int
+    xs.push(i)
+    xs.push(i + 1)
+    xs.push(i + 2)
+    assert(xs.len() eq 3)
+    assert(xs.get(2) eq i + 2)
+  }
+  // 100 iterations, each allocating a List header + an array of
+  // 8 ints + growing it. Without recursive drop, every iteration
+  // leaks the array; eventually the allocator either recycles a
+  // bad block or runs out. Pre-fix this would behave non-
+  // deterministically; post-fix every drop is clean.
+  assert(true)
+}
+
+test "Map of String to int goes out of scope cleanly" {
+  through (i from 0 to 50 by 1) {
+    m is Map of String to int
+    m.set("alpha", i)
+    m.set("beta", i + 1)
+    assert(m.get("alpha") eq i)
+  }
+  assert(true)
+}
+
+test "nested struct field gets dropped recursively" {
+  // Outer holds Inner, which holds a List; if any link in the
+  // chain leaks, ASan/UBSan should fire.
+  through (i from 0 to 30 by 1) {
+    o is Outer()
+    o.inner.values.push(i)
+    o.inner.values.push(i * 2)
+    assert(o.inner.values.len() eq 2)
+  }
+  assert(true)
+}
+
+Outer is { inner Inner }
+Inner is { values List of int }

@@ -30,6 +30,14 @@ typedef struct {
                              // for `array of int`, 1 for `array of byte`).
                              // Used by emit_scope_cleanup to compute the
                              // data-buffer size for _heap_free.
+    char **local_struct_names; // P0-8: when the local is a struct, its
+                             // monomorphised type name. Lets
+                             // emit_scope_cleanup call _drop_<X>
+                             // (recursive drop) instead of bare
+                             // _heap_free, so owned heap fields like
+                             // List.data and Map.keys are freed too.
+                             // NULL when the local isn't a struct
+                             // (primitives, raw arrays).
     int local_count;
     int local_cap;
     int slot_next;      // next stack slot
@@ -77,6 +85,7 @@ static void set_local(IRGenCtx *c, const char *name, VReg v) {
         c->local_alloc_sizes = realloc(c->local_alloc_sizes, c->local_cap * sizeof(int));
         c->local_is_array = realloc(c->local_is_array, c->local_cap * sizeof(int));
         c->local_array_esz = realloc(c->local_array_esz, c->local_cap * sizeof(int));
+        c->local_struct_names = realloc(c->local_struct_names, c->local_cap * sizeof(char *));
     }
     c->local_names[c->local_count] = (char *)name;
     c->local_vregs[c->local_count] = v;
@@ -87,6 +96,7 @@ static void set_local(IRGenCtx *c, const char *name, VReg v) {
     c->local_alloc_sizes[c->local_count] = 0;
     c->local_is_array[c->local_count] = 0;
     c->local_array_esz[c->local_count] = 8;
+    c->local_struct_names[c->local_count] = NULL;
     // Store initial value
     emit(c, (IRInst){.op = IR_STORE_LOCAL, .a = v, .imm = c->local_slots[c->local_count]});
     c->local_count++;
@@ -119,6 +129,19 @@ static void mark_heap_size(IRGenCtx *c, const char *name, int size) {
         if (!strcmp(c->local_names[i], name)) {
             c->local_is_heap[i] = 1;
             c->local_alloc_sizes[i] = size;
+            return;
+        }
+    }
+}
+
+// P0-8: tag a heap local with the struct type name it holds.
+// emit_scope_cleanup uses this to call _drop_<struct_name> instead
+// of bare _heap_free, so owned heap fields (List.data, Map.keys,
+// nested struct fields) are recursively freed.
+static void mark_struct_local(IRGenCtx *c, const char *name, const char *struct_name) {
+    for (int i = c->local_count - 1; i >= 0; i--) {
+        if (!strcmp(c->local_names[i], name)) {
+            c->local_struct_names[i] = strdup(struct_name);
             return;
         }
     }
@@ -175,6 +198,23 @@ static void emit_scope_cleanup(IRGenCtx *c, int from) {
             VReg ig2 = new_vreg(c);
             emit(c, (IRInst){.op = IR_CALL, .dst = ig2, .str = "heap_free",
                              .args = fa2, .arg_count = 2});
+            continue;
+        }
+
+        // P0-8: struct locals call _drop_<X> for recursive cleanup
+        // of owned heap fields. Falls through to plain heap_free
+        // for locals whose struct type isn't tracked (legacy
+        // collection allocators, untyped pointers).
+        if (c->local_struct_names && c->local_struct_names[i]) {
+            char drop_sym[256];
+            snprintf(drop_sym, sizeof(drop_sym), "drop_%s",
+                c->local_struct_names[i]);
+            VReg *args = malloc(sizeof(VReg));
+            args[0] = header;
+            VReg ignored = new_vreg(c);
+            emit(c, (IRInst){.op = IR_CALL, .dst = ignored,
+                             .str = strdup(drop_sym),
+                             .args = args, .arg_count = 1});
             continue;
         }
 
@@ -991,8 +1031,27 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
                 if (n->var_decl.value->type == NODE_IDENT)
                     mark_moved_local(c, n->var_decl.value->ident.name);
                 mark_heap_size(c, n->var_decl.name, 0); // size unknown — use default 16
+                // P0-8: carry the struct name through `is now` so
+                // the new owner gets recursive drop. Source's struct
+                // name was stashed by checker for is_rep; for is_now
+                // it's not stashed but we can read it from the
+                // moved-from local.
+                if (n->var_decl.value->type == NODE_IDENT) {
+                    for (int i = c->local_count - 1; i >= 0; i--) {
+                        if (!strcmp(c->local_names[i],
+                                    n->var_decl.value->ident.name) &&
+                            c->local_struct_names[i]) {
+                            mark_struct_local(c, n->var_decl.name,
+                                c->local_struct_names[i]);
+                            break;
+                        }
+                    }
+                }
             } else if (n->var_decl.is_rep) {
                 mark_heap_size(c, n->var_decl.name, 0);
+                if (n->var_decl.type_name) {
+                    mark_struct_local(c, n->var_decl.name, n->var_decl.type_name);
+                }
             } else if (n->var_decl.value->type == NODE_CALL) {
                 const char *fn = n->var_decl.value->call.name;
                 int size = 0;
@@ -1008,6 +1067,12 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
                 }
                 if (size > 0) {
                     mark_heap_size(c, n->var_decl.name, size);
+                    // P0-8: tag the local with its struct type so
+                    // emit_scope_cleanup can call _drop_<X> instead
+                    // of bare _heap_free, recursively freeing
+                    // owned heap fields (List.data, Map.keys,
+                    // nested struct fields).
+                    mark_struct_local(c, n->var_decl.name, fn);
                 } else if (!strcmp(fn, "list") || !strcmp(fn, "list_new")) {
                     mark_heap_size(c, n->var_decl.name, 520);
                 } else if (!strcmp(fn, "map") || !strcmp(fn, "map_new")
@@ -1022,12 +1087,25 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
                 // 24-byte list header is the untagged fallback.
                 int sz = n->var_decl.value->list_lit.elem_type_name ? 16 : 520;
                 mark_heap_size(c, n->var_decl.name, sz);
+                if (n->var_decl.value->list_lit.elem_type_name) {
+                    char struct_name[256];
+                    snprintf(struct_name, sizeof(struct_name), "List__%s",
+                        n->var_decl.value->list_lit.elem_type_name);
+                    mark_struct_local(c, n->var_decl.name, struct_name);
+                }
             } else if (n->var_decl.value->type == NODE_MAP_LIT) {
                 // ε4: tagged map literals lower to a 24-byte
                 // `StringMap of V` struct (count + 2 array-ptrs);
                 // legacy 152-byte map_new is the untagged fallback.
                 int sz = n->var_decl.value->map_lit.val_type_name ? 24 : 152;
                 mark_heap_size(c, n->var_decl.name, sz);
+                if (n->var_decl.value->map_lit.val_type_name) {
+                    char struct_name[256];
+                    snprintf(struct_name, sizeof(struct_name),
+                        "Map__String__%s",
+                        n->var_decl.value->map_lit.val_type_name);
+                    mark_struct_local(c, n->var_decl.name, struct_name);
+                }
             } else if (n->var_decl.value->type == NODE_ARRAY_NEW) {
                 // α7/α8: array gets two-step RAII free (data + header).
                 // Element size is 1 for `array of byte`, 8 for
