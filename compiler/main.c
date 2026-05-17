@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <mach-o/dyld.h>   // _NSGetExecutablePath (macOS)
 #include "lexer.h"
 #include "parser.h"
 #include "monomorph.h"
@@ -24,6 +25,42 @@ static char *read_file(const char *path) {
     buf[len] = '\0';
     fclose(f);
     return buf;
+}
+
+// Locate the directory containing this compiler binary. On macOS,
+// _NSGetExecutablePath returns the path; we strip the trailing
+// filename to get the directory.
+//
+// This is the canonical "where is std/" anchor: the bundled stdlib
+// lives in `<compiler-dir>/std/` (in a build tree, that's the project
+// root; in an installed layout, it'd be wherever the install put the
+// stdlib next to the binary). Resolving stdlib relative to the binary
+// — rather than to cwd — lets users run `erbos run /any/path/file.ptt`
+// from any directory and still find `std/string`, `std/list`, etc.
+//
+// Returns 1 on success and writes the directory path (with trailing
+// `/`) into `out`. Returns 0 if the path can't be resolved (in which
+// case callers should fall back to cwd-relative lookup so the
+// existing dev workflow keeps working).
+static int compiler_dir(char *out, size_t out_size) {
+    char raw[1024];
+    uint32_t size = sizeof(raw);
+    if (_NSGetExecutablePath(raw, &size) != 0) return 0;
+    // Resolve any symlinks/.. so the resulting path is canonical;
+    // realpath() handles both. Falling back to the raw path when
+    // realpath fails is fine — `_NSGetExecutablePath` typically
+    // returns a usable absolute path even before resolution.
+    char resolved[1024];
+    const char *src = realpath(raw, resolved) ? resolved : raw;
+    // Strip the binary filename to get the directory. Include the
+    // trailing `/` so callers can `snprintf("%s%s", dir, suffix)`.
+    const char *last_slash = strrchr(src, '/');
+    if (!last_slash) return 0;
+    size_t dir_len = (size_t)(last_slash - src) + 1; // include '/'
+    if (dir_len + 1 > out_size) return 0;
+    memcpy(out, src, dir_len);
+    out[dir_len] = '\0';
+    return 1;
 }
 
 // Rewrite NODE_CALL sites within an imported function's body so a
@@ -245,25 +282,24 @@ int main(int argc, char **argv) {
         int is_string_self = !strcmp(self_basename, "string.ptt") &&
                              strstr(input, "/std/") != NULL;
         if (!is_string_self) {
-            // Locate std/string.ptt: try cwd-relative first, then
-            // input-dir-relative.
+            // Locate std/string.ptt — anchored to the compiler
+            // binary's directory. Falling back to cwd / input-dir
+            // walks keeps the dev workflow functional if the
+            // binary-dir lookup ever fails (it shouldn't on macOS).
             char std_path[512];
             FILE *test_f = NULL;
-            const char *candidates[] = {
-                "std/string.ptt",
-                NULL
-            };
-            // Try cwd-relative
-            for (int ci = 0; candidates[ci]; ci++) {
-                test_f = fopen(candidates[ci], "r");
-                if (test_f) {
-                    snprintf(std_path, sizeof(std_path), "%s", candidates[ci]);
-                    break;
-                }
+            char comp_dir[1024];
+            if (compiler_dir(comp_dir, sizeof(comp_dir))) {
+                snprintf(std_path, sizeof(std_path), "%sstd/string.ptt", comp_dir);
+                test_f = fopen(std_path, "r");
             }
             if (!test_f) {
-                // Try relative to input file directory and walking up
-                // a few levels.
+                // Fallback: cwd-relative.
+                snprintf(std_path, sizeof(std_path), "std/string.ptt");
+                test_f = fopen(std_path, "r");
+            }
+            if (!test_f) {
+                // Last-resort: walk up from input file's directory.
                 char dir[256] = {0};
                 strncpy(dir, input, sizeof(dir) - 1);
                 char *last_slash = strrchr(dir, '/');
@@ -355,24 +391,37 @@ int main(int argc, char **argv) {
         else dir[0] = '\0';
 
         // Resolve `use <path>` against three roots in order:
-        //   1. <dir-of-input>/<path>.ptt  — sibling to importer
-        //   2. std/<path>.ptt              — stdlib
-        //   3. examples/<path>.ptt         — example fixtures
-        //      (lets `tests/leetcode/test_two_sum.ptt` write
-        //      `use leetcode/two_sum` to import the shared
-        //      reference implementation from examples/).
-        snprintf(import_path, sizeof(import_path), "%s%s.ptt", dir, program->program.use_paths[ui]);
+        //   1. <dir-of-input>/<path>.ptt          — sibling to importer
+        //   2. <compiler-binary-dir>/<path>.ptt   — bundled stdlib
+        //                                            (e.g. `std/list`,
+        //                                            `std/string`)
+        //   3. examples/<path>.ptt                — legacy fixture root,
+        //                                            removed in a follow-up
+        //                                            commit.
+        const char *upath_resolved = program->program.use_paths[ui];
+        snprintf(import_path, sizeof(import_path), "%s%s.ptt", dir, upath_resolved);
         FILE *test_f = fopen(import_path, "r");
         if (!test_f) {
-            snprintf(import_path, sizeof(import_path), "std/%s.ptt", program->program.use_paths[ui] + (strncmp(program->program.use_paths[ui], "std/", 4) == 0 ? 4 : 0));
+            char comp_dir[1024];
+            if (compiler_dir(comp_dir, sizeof(comp_dir))) {
+                snprintf(import_path, sizeof(import_path),
+                         "%s%s.ptt", comp_dir, upath_resolved);
+                test_f = fopen(import_path, "r");
+            }
+        }
+        if (!test_f) {
+            // Cwd fallback. Preserves the dev workflow where
+            // `make test` runs from the project root and expects
+            // `std/...` to resolve there.
+            snprintf(import_path, sizeof(import_path), "%s.ptt", upath_resolved);
             test_f = fopen(import_path, "r");
         }
         if (!test_f) {
-            snprintf(import_path, sizeof(import_path), "examples/%s.ptt", program->program.use_paths[ui]);
+            snprintf(import_path, sizeof(import_path), "examples/%s.ptt", upath_resolved);
             test_f = fopen(import_path, "r");
         }
         if (!test_f) {
-            fprintf(stderr, "error: cannot find module '%s'\n", program->program.use_paths[ui]);
+            fprintf(stderr, "error: cannot find module '%s'\n", upath_resolved);
             return 1;
         }
         fclose(test_f);
@@ -668,8 +717,18 @@ int main(int argc, char **argv) {
     system(cmd);
 
     if (run_mode) {
-        // Run the binary
-        int ret = system(out_name);
+        // Run the binary. If `out_name` is a bare basename (no `/`),
+        // prepend `./` so the shell finds it via the cwd rather than
+        // searching $PATH — otherwise an unrelated binary with the
+        // same name on $PATH gets executed (or, more commonly, the
+        // shell errors with "command not found" because the basename
+        // isn't on $PATH at all).
+        char run_cmd[1024];
+        if (strchr(out_name, '/'))
+            snprintf(run_cmd, sizeof(run_cmd), "%s", out_name);
+        else
+            snprintf(run_cmd, sizeof(run_cmd), "./%s", out_name);
+        int ret = system(run_cmd);
         // Delete binary after running
         snprintf(cmd, sizeof(cmd), "rm -f %s", out_name);
         system(cmd);
