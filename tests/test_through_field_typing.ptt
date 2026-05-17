@@ -1,0 +1,51 @@
+// Regression for spudlock issue #1: when iterating a struct
+// field of stdlib generic type (e.g. `List of Item` stored as a
+// field of another struct), the loop variable's element type
+// was being lost. Symptom: `x.field` for a String field came
+// back as int, breaking `x.field + "..."` with a confusing
+// "String + int" error.
+//
+// Two underlying causes, both fixed:
+//   1. parse_type_str("List__Item") now populates val_type so
+//      the through-in loop binds the loop variable correctly.
+//   2. Field access on an UNKNOWN-typed receiver now returns
+//      the actual declared field type (was: always TYPE_INT).
+
+use std/basics
+
+Item is {
+  name String
+  command String
+}
+
+Holder is {
+  items List of Item
+  rendered List of String
+}
+
+test "through (x in struct.list_of_T) types x correctly" {
+  h is Holder()
+  item is Item()
+  item.name be "compile"
+  item.command be "build"
+  h.items.push(item)
+
+  through (x in h.items) {
+    h.rendered.push("x: " + x.name + " -> " + x.command)
+  }
+  assert(h.rendered.len() eq 1)
+  assert(h.rendered.get(0).equals("x: compile -> build"))
+}
+
+test "field access on iter var resolves String, not int" {
+  // Direct read — without the fix, `x.name` was treated as int
+  // and yelled as a pointer-shaped integer.
+  h is Holder()
+  item is Item()
+  item.name be "hello"
+  h.items.push(item)
+  through (x in h.items) {
+    assert(x.name.equals("hello"))
+    assert(x.name.len() eq 5)
+  }
+}

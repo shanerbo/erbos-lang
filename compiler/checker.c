@@ -241,7 +241,34 @@ static Type parse_type_str(Checker *c, const char *t) {
     if (!strncmp(t, "array__", 7)) {
         return make_array_of(parse_type_str(c, t + 7));
     }
-    if (is_struct(c, t)) return make_struct(t);
+    if (is_struct(c, t)) {
+        Type r = make_struct(t);
+        // Populate val_type / key_type for monomorphised stdlib
+        // generic types so downstream code (e.g. `through (x in
+        // h.items)` element-type lookup) sees the parameter type.
+        // Without this, after `parse_type_str("List__Item")` the
+        // resulting Type has struct_name="List__Item" but
+        // val_type=NULL, and the through-in checker can't bind the
+        // loop variable's type. Symptom: `x.name` falls through the
+        // untyped-receiver path and gets miscategorized as int.
+        if (!strncmp(t, "List__", 6)) {
+            r.val_type = alloc_type(parse_type_str(c, t + 6));
+        } else if (!strncmp(t, "Map__", 5)) {
+            // `Map__K__V` — split at the first __ after the head.
+            const char *p = t + 5;
+            const char *sep = strstr(p, "__");
+            if (sep) {
+                int klen = (int)(sep - p);
+                char kbuf[256];
+                if (klen >= (int)sizeof(kbuf)) klen = (int)sizeof(kbuf) - 1;
+                memcpy(kbuf, p, klen);
+                kbuf[klen] = '\0';
+                r.key_type = alloc_type(parse_type_str(c, kbuf));
+                r.val_type = alloc_type(parse_type_str(c, sep + 2));
+            }
+        }
+        return r;
+    }
     return make_type(TYPE_INT);
 }
 
@@ -786,6 +813,7 @@ static Type check_expr(Checker *c, Node *n) {
                 int matches = 0;
                 const char *first = NULL;
                 const char *second = NULL;
+                const char *first_field_type = NULL;
                 for (int i = 0; i < c->struct_count; i++) {
                     StructInfo *si = &c->structs[i];
                     for (int j = 0; j < si->field_count; j++) {
@@ -794,6 +822,7 @@ static Type check_expr(Checker *c, Node *n) {
                             if (matches == 0) {
                                 unique_offset = off;
                                 first = si->name;
+                                first_field_type = si->field_types[j];
                             } else if (off != unique_offset && !second) {
                                 second = si->name;
                             }
@@ -810,6 +839,17 @@ static Type check_expr(Checker *c, Node *n) {
                         first, n->field_access.field,
                         second, n->field_access.field);
                     exit(1);
+                }
+                // Bug surfaced by spudlock #1: when the receiver's
+                // type is unknown but the field name resolves to a
+                // unique declared field, return that field's actual
+                // type. Previously we returned TYPE_INT here, which
+                // caused String fields read from `through (x in
+                // list_of_struct)` to be miscategorized as int and
+                // then fail later expressions like `x.name + "..."`
+                // with a "String + int" type error.
+                if (matches >= 1 && first_field_type) {
+                    return parse_type_str(c, first_field_type);
                 }
             }
             return make_type(TYPE_INT);
