@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <unistd.h>        // access(2), realpath()
 #include <mach-o/dyld.h>   // _NSGetExecutablePath (macOS)
 #include "lexer.h"
 #include "parser.h"
@@ -61,6 +62,55 @@ static int compiler_dir(char *out, size_t out_size) {
     memcpy(out, src, dir_len);
     out[dir_len] = '\0';
     return 1;
+}
+
+// Walk up from the source file's directory looking for `potato.toml`.
+// First ancestor that contains the marker is treated as the project
+// root; the path is written into `out` (with trailing `/`) and 1 is
+// returned. Returns 0 if no marker is found anywhere up to the
+// filesystem root.
+//
+// `potato.toml` is currently consulted only as a marker — its
+// content isn't read. The empty file is enough to signal "this
+// directory is the root of a Potato project." The marker filename
+// will eventually carry build/dependency metadata; doing the
+// lookup now means programs in proper project layouts already get
+// stable resolution without any further user action when content
+// arrives.
+static int find_project_root(const char *source_file, char *out, size_t out_size) {
+    // Build absolute, normalised path to the source file's directory.
+    char abs[1024];
+    if (!realpath(source_file, abs)) {
+        // realpath fails for non-existent paths; for a missing
+        // source the rest of the pipeline will produce a clearer
+        // error than we can here. Bail.
+        return 0;
+    }
+    // Strip the filename component to get the directory.
+    char *last_slash = strrchr(abs, '/');
+    if (!last_slash) return 0;
+    *last_slash = '\0'; // abs is now the directory
+    // Walk up. Stop at filesystem root ("/" — i.e., abs == "" after
+    // we strip the trailing slash one final time).
+    while (abs[0] != '\0') {
+        char marker[1024];
+        snprintf(marker, sizeof(marker), "%s/potato.toml", abs);
+        if (access(marker, F_OK) == 0) {
+            // Found it. Return the directory with trailing slash so
+            // callers can `snprintf("%s%s", root, suffix)`.
+            size_t len = strlen(abs);
+            if (len + 2 > out_size) return 0;
+            memcpy(out, abs, len);
+            out[len] = '/';
+            out[len + 1] = '\0';
+            return 1;
+        }
+        // Step up one directory.
+        char *up = strrchr(abs, '/');
+        if (!up) break;
+        *up = '\0';
+    }
+    return 0;
 }
 
 // Rewrite NODE_CALL sites within an imported function's body so a
@@ -390,17 +440,34 @@ int main(int argc, char **argv) {
         if (last_slash) *(last_slash + 1) = '\0';
         else dir[0] = '\0';
 
-        // Resolve `use <path>` against three roots in order:
+        // Resolve `use <path>` against four roots in order:
         //   1. <dir-of-input>/<path>.ptt          — sibling to importer
-        //   2. <compiler-binary-dir>/<path>.ptt   — bundled stdlib
+        //   2. <project-root>/<path>.ptt          — anywhere under
+        //                                            the user's project
+        //                                            tree, found by
+        //                                            walking up looking
+        //                                            for `potato.toml`
+        //   3. <compiler-binary-dir>/<path>.ptt   — bundled stdlib
         //                                            (e.g. `std/list`,
         //                                            `std/string`)
-        //   3. examples/<path>.ptt                — legacy fixture root,
+        //   4. examples/<path>.ptt                — legacy fixture root,
         //                                            removed in a follow-up
         //                                            commit.
+        // Cwd-relative is also tried as a last resort so the existing
+        // dev workflow (`make test` from the project root) keeps
+        // working without requiring a potato.toml in the Potato repo
+        // itself yet — that's a follow-up.
         const char *upath_resolved = program->program.use_paths[ui];
         snprintf(import_path, sizeof(import_path), "%s%s.ptt", dir, upath_resolved);
         FILE *test_f = fopen(import_path, "r");
+        if (!test_f) {
+            char proj_root[1024];
+            if (find_project_root(input, proj_root, sizeof(proj_root))) {
+                snprintf(import_path, sizeof(import_path),
+                         "%s%s.ptt", proj_root, upath_resolved);
+                test_f = fopen(import_path, "r");
+            }
+        }
         if (!test_f) {
             char comp_dir[1024];
             if (compiler_dir(comp_dir, sizeof(comp_dir))) {
