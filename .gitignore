@@ -59,9 +59,9 @@ examples/leetcode/phone_combos
 examples/leetcode/rotting_oranges
 
 # C-runtime test binaries
-tests/test_runtime
-tests/test_channel
-tests/test_parallel
+tests/compiler/test_runtime
+tests/compiler/test_channel
+tests/compiler/test_parallel
 
 # OS
 .DS_Store

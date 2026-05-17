@@ -115,11 +115,11 @@ test-ir: $(OUT)
 
 test-runtime:
 	@echo "=== Runtime C tests ==="
-	@$(CC) $(CFLAGS) -Icompiler/runtime -pthread -o tests/test_runtime tests/test_runtime.c $(RUNTIME_SRC)
-	@./tests/test_runtime > /dev/null && echo "  OK:   test_runtime" || echo "  FAIL: test_runtime"
-	@$(CC) $(CFLAGS) -Icompiler/runtime -o tests/test_channel tests/test_channel.c $(RUNTIME_SRC) $(CHANNEL_SRC)
-	@./tests/test_channel > /dev/null && echo "  OK:   test_channel" || echo "  FAIL: test_channel"
-	@rm -f tests/test_runtime tests/test_channel
+	@$(CC) $(CFLAGS) -Icompiler/runtime -pthread -o tests/compiler/test_runtime tests/compiler/test_runtime.c $(RUNTIME_SRC)
+	@./tests/compiler/test_runtime > /dev/null && echo "  OK:   test_runtime" || echo "  FAIL: test_runtime"
+	@$(CC) $(CFLAGS) -Icompiler/runtime -o tests/compiler/test_channel tests/compiler/test_channel.c $(RUNTIME_SRC) $(CHANNEL_SRC)
+	@./tests/compiler/test_channel > /dev/null && echo "  OK:   test_channel" || echo "  FAIL: test_channel"
+	@rm -f tests/compiler/test_runtime tests/compiler/test_channel
 
 test-framework: $(OUT)
 	@echo "=== Framework tests (erbos test) ==="
