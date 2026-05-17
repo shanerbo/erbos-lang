@@ -1,3 +1,5 @@
+use std/string
+
 spark {
   through (i from 1 to 16 by 1) {
     i mod 15 eq 0 ?{

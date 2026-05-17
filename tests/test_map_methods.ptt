@@ -1,3 +1,5 @@
+use std/string
+
 // Regression test: std/map — generic Map of K to V with
 // set/get/len for int-comparable keys (K is `int` or any
 // pointer-shaped value).

@@ -1,3 +1,5 @@
+use std/string
+
 // Rotting Oranges tests — solve() comes from
 // tests/lib/leetcode/rotting_oranges.ptt.
 

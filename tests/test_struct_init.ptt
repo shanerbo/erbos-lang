@@ -1,3 +1,5 @@
+use std/string
+
 // Coverage for struct construction:
 //   - zero-default: Point()
 //   - named-arg:    Point(x is 1, y is 2)

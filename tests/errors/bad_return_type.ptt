@@ -1,2 +1,4 @@
+use std/string
+
 foo() int { give "hello" }
 spark { yell(foo()) }

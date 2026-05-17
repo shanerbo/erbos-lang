@@ -1,3 +1,5 @@
+use std/string
+
 // Regression test: P5.3 escape analysis + stack allocation
 // (a.k.a. "stackify").
 //

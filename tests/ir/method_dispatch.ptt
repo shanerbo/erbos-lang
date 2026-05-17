@@ -1,3 +1,5 @@
+use std/string
+
 // Regression test: full method dispatch through the IR backend.
 //
 // Verifies NODE_METHOD_CALL handling in irgen:

@@ -1,3 +1,5 @@
+use std/string
+
 // Regression test: collection iteration through the IR backend.
 // Verifies the NODE_THROUGH_IN handler in irgen.c.
 

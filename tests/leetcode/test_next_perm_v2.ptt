@@ -1,3 +1,5 @@
+use std/string
+
 // Next Permutation v2 tests — same algorithm, different helper
 // implementation. Result must match the v1 implementation on
 // every input.

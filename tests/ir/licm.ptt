@@ -1,3 +1,5 @@
+use std/string
+
 // Regression test: P5.5 loop-invariant code motion (LICM).
 //
 // At -O1/-O2 the LICM pass identifies natural loops and hoists

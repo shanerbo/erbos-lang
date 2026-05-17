@@ -1,3 +1,5 @@
+use std/string
+
 spark {
   t is task()
   t.fire(worker())

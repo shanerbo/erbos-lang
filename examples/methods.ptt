@@ -1,3 +1,5 @@
+use std/string
+
 Point is {
   x int
   y int

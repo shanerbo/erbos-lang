@@ -1,3 +1,5 @@
+use std/string
+
 // Regression test for IR-backend stack-frame layout bug.
 //
 // History: prior to commit (P0 heap spike), the IR emitter set

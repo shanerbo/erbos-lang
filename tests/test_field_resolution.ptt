@@ -1,3 +1,5 @@
+use std/string
+
 // Per-struct field resolution: two structs with same-named fields at
 // different offsets must each access their own offset.
 //

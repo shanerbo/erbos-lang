@@ -1,3 +1,5 @@
+use std/string
+
 // Two Sum tests — solve() comes from tests/lib/leetcode/two_sum.ptt
 // via project-root resolution of `use tests/lib/leetcode/two_sum`.
 

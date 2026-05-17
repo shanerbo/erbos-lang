@@ -1,3 +1,5 @@
+use std/string
+
 // Regression test: α — `array of T` typed-storage primitive.
 //
 // Layout (synthesised by the compiler, never visible in source):

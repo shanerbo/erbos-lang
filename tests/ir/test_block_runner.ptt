@@ -1,3 +1,5 @@
+use std/string
+
 // Regression test: `test "..." { ... }` blocks run correctly through
 // the IR backend. Verifies P4.3e2's per-test _test_N synthesis +
 // multi-test _start runner in irgen.c and main.c, plus the new

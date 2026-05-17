@@ -1,3 +1,5 @@
+use std/string
+
 // Regression: a function compiled through the IR backend must save
 // any callee-save register (x19..x28) it uses in its prologue and
 // restore it in its epilogue. Otherwise a caller keeping a value in

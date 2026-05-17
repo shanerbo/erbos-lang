@@ -1,3 +1,5 @@
+use std/string
+
 // Longest Substring Without Repeating Characters tests —
 // `longest()` comes from tests/lib/leetcode/longest_substr.ptt
 // (the sliding-window version) and

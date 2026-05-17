@@ -1,3 +1,5 @@
+use std/string
+
 // Two Sum (Map approach) tests — solve() comes from
 // tests/lib/leetcode/two_sum_map.ptt. Verifies the O(n) Map-keyed
 // implementation produces the same answers as the O(n^2) brute

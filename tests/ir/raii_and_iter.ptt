@@ -1,3 +1,5 @@
+use std/string
+
 // Regression test: RAII heap-free + a `through (k in collection)`
 // loop whose increment slot lands at an offset > 255 (forcing iremit
 // to use the `add x10, x29, #N` scratch sequence).

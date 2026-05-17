@@ -1,3 +1,4 @@
+use std/string
 use std/math
 
 test "math.max" {

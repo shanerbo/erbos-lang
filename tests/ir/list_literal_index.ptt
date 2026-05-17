@@ -1,3 +1,5 @@
+use std/string
+
 // Regression test: list literal allocation + index access through
 // the IR backend. Verifies the NODE_LIST_LIT and NODE_INDEX
 // handlers in irgen.c.

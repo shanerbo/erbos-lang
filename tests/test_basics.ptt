@@ -1,3 +1,5 @@
+use std/string
+
 test "arithmetic" {
   assert(1 + 2 eq 3)
   assert(10 - 3 eq 7)

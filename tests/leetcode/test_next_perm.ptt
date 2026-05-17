@@ -1,3 +1,5 @@
+use std/string
+
 // Next Permutation tests — next_perm() comes from
 // tests/lib/leetcode/next_perm.ptt.
 

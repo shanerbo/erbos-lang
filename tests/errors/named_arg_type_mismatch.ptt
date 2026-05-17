@@ -1,3 +1,5 @@
+use std/string
+
 // Type mismatch on a field's value must be a compile error.
 
 Point is {

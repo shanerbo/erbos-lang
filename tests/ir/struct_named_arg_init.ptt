@@ -1,3 +1,5 @@
+use std/string
+
 // Regression: named-arg constructor must store each value at the
 // declared field's offset even when source order differs from
 // declaration order. The IR backend looks up each arg's name in

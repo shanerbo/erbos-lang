@@ -1,3 +1,5 @@
+use std/string
+
 // Regression for bug #114 — auto-init of struct fields must
 // survive the iropt pipeline at -O0/-O1/-O2. Specifically:
 //   - SRA (alloc-elimination) must NOT delete `_alloc_<X>` if X

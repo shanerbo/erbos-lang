@@ -1,3 +1,5 @@
+use std/string
+
 spark {
   a is "hello"
   b is " world"

@@ -1,3 +1,5 @@
+use std/string
+
 // Regression test: P5.1 aggressive inlining.
 // At -O1 (and -O2) every `b.get()` / `b.value()` call site below
 // should have its `bl _<Mangled>_<method>` replaced with the

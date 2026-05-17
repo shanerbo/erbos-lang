@@ -1,3 +1,5 @@
+use std/string
+
 test "string interpolation int" {
   x is 42
   msg is "val is {x}"

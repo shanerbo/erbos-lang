@@ -1,3 +1,5 @@
+use std/string
+
 // Regression for bug #114 — struct fields of struct/stdlib type
 // must be auto-initialised by the parent's constructor. Without
 // the auto-init, methods on those fields dereference a null
