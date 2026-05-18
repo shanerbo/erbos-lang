@@ -395,6 +395,7 @@ static Node *clone_node(Node *n) {
             c->index_assign.is_move = n->index_assign.is_move;
             c->index_assign.is_rep = n->index_assign.is_rep;
             c->index_assign.src_struct_name = xstrdup(n->index_assign.src_struct_name);
+            c->index_assign.elem_struct_name = xstrdup(n->index_assign.elem_struct_name);
             break;
         case NODE_VAR_DECL:
             c->var_decl.name = xstrdup(n->var_decl.name);

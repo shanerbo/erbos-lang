@@ -367,6 +367,29 @@ Compiler/runtime root-cause fixes that landed alongside Map:
 4. `NODE_INDEX_ASSIGN` now has a `clone_node` case in
    monomorph.c, so generic-method bodies that write to array
    slots are deep-copied per instantiation rather than aliased.
+5. F-001 fix: `arr[i] be now src` and `arr[i] be rep src`
+   over a typed array whose element type is a heap-shaped struct
+   now drop the slot's previous owner before storing the new
+   pointer. The checker fills `index_assign.elem_struct_name`
+   when the array's element resolves to a struct in this program;
+   irgen null-guards the slot's prior value and calls
+   `_drop_<elem_struct_name>` before the IR_STORE. Plain
+   `arr[i] be src` (no `now`/`rep`) keeps the legacy raw-store
+   semantics so shift/swap loops do not free aliased pointers.
+   `std/list.ptt::List.set` switched its body to the
+   clone-then-transfer pattern already in use by `Map.set` and
+   `Set.add`: `v_clone is rep v; self.data[i] be now v_clone`.
+   The deep-clone is the alias-safety guarantee — a caller can
+   pass the slot's own current value (e.g.
+   `v is xs.get(0); xs.set(0, v)`) and the slot still ends up
+   with an independent block, never a use-after-free. For
+   primitive T, `is rep` collapses to a value copy and `be now`
+   collapses to a plain store, so the perf cost is nil. The
+   same fix flows through every stdlib container that delegates
+   to `List.set` (`Pool.set`, `Pool.insert` reuse path).
+   `Map.set` and `Set.add` already used `be now <clone>` and
+   now correctly drop tombstoned and updated slots' previous
+   occupants because of the new compiler-side drop.
 
 Tests in place:
 

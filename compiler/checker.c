@@ -1215,6 +1215,20 @@ static Type check_expr(Checker *c, Node *n) {
             n->index_assign.is_array = (obj_t.kind == TYPE_ARRAY);
             n->index_assign.is_byte = (obj_t.kind == TYPE_ARRAY &&
                 obj_t.elem_type && obj_t.elem_type->kind == TYPE_BYTE);
+            // F-001: when the array element type resolves to a
+            // heap-shaped struct declared in this program, stash
+            // its name so irgen can drop the previous occupant of
+            // the slot before storing a new owner via
+            // `arr[i] be now src` / `arr[i] be rep src`. Plain
+            // `arr[i] be src` keeps the legacy raw-store semantics
+            // (shift/swap loops rely on it).
+            if (obj_t.kind == TYPE_ARRAY && obj_t.elem_type &&
+                obj_t.elem_type->kind == TYPE_STRUCT &&
+                obj_t.elem_type->struct_name &&
+                find_struct(c, obj_t.elem_type->struct_name)) {
+                n->index_assign.elem_struct_name =
+                    strdup(obj_t.elem_type->struct_name);
+            }
             // ε5: same struct-method routing as NODE_INDEX.
             if (obj_t.kind == TYPE_STRUCT && obj_t.struct_name) {
                 const char *sn = obj_t.struct_name;

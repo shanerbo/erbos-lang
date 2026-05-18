@@ -362,6 +362,20 @@ struct Node {
             int is_move;
             int is_rep;
             char *src_struct_name;
+            // F-001 fix: heap-shaped slot overwrite needs to drop
+            // the previous owned value before storing the new one,
+            // otherwise `arr[i] be now v` / `arr[i] be rep v` over a
+            // live heap-shaped slot leaks the previous occupant.
+            // The checker fills `elem_struct_name` whenever the
+            // array's element type resolves to a heap-shaped struct
+            // declared in this program (e.g. `String`, `List__int`).
+            // irgen uses it to call `_drop_<elem_struct_name>` on
+            // the previous slot value when `is_move` or `is_rep` is
+            // set (the explicit-ownership-transfer forms). Plain
+            // `arr[i] be src` keeps the legacy raw-store semantics
+            // because shift/swap loops rely on aliased writes that
+            // must not free.
+            char *elem_struct_name;
         } index_assign;
 
         // NODE_ENUM_DEF

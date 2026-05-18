@@ -1591,6 +1591,50 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
             }
             VReg addr = new_vreg(c);
             emit(c, (IRInst){.op = IR_ADD, .dst = addr, .a = data_ptr, .b = byte_off_w});
+            // F-001: drop the slot's prior owner before overwriting
+            // it. Only fires for the explicit `now` / `rep` forms
+            // and only when the array's element type is a heap-
+            // shaped struct (the checker fills `elem_struct_name`).
+            // Plain `arr[i] be src` keeps raw-store semantics so
+            // shift/swap loops (`self.data[j] be self.data[j-1]`)
+            // do NOT free aliased pointers and stay correct.
+            //
+            // Fresh slots are guaranteed null because heap_alloc
+            // zero-fills, so the null guard skips the drop on
+            // previously-uninitialized capacity. The fix is a
+            // load + cbz + drop sequence for live slots.
+            if ((n->index_assign.is_move || n->index_assign.is_rep) &&
+                n->index_assign.elem_struct_name && !is_byte_elem_w) {
+                VReg prev = new_vreg(c);
+                emit(c, (IRInst){.op = IR_LOAD, .dst = prev,
+                                 .a = addr, .imm = 0});
+                VReg z = new_vreg(c);
+                emit(c, (IRInst){.op = IR_CONST, .dst = z, .imm = 0});
+                VReg is_null = new_vreg(c);
+                emit(c, (IRInst){.op = IR_CMP_EQ, .dst = is_null,
+                                 .a = prev, .b = z});
+                int after_drop_lbl = new_label(c);
+                int do_drop_lbl = new_label(c);
+                emit(c, (IRInst){.op = IR_BR_COND, .a = is_null,
+                                 .label = after_drop_lbl,
+                                 .label2 = do_drop_lbl});
+                IRBlock *do_drop_b = new_block(c);
+                do_drop_b->label = do_drop_lbl;
+                switch_block(c, do_drop_b);
+                char drop_sym[256];
+                snprintf(drop_sym, sizeof(drop_sym), "drop_%s",
+                         n->index_assign.elem_struct_name);
+                VReg *da = malloc(sizeof(VReg));
+                da[0] = prev;
+                VReg dignored = new_vreg(c);
+                emit(c, (IRInst){.op = IR_CALL, .dst = dignored,
+                                 .str = strdup(drop_sym),
+                                 .args = da, .arg_count = 1});
+                emit(c, (IRInst){.op = IR_BR, .label = after_drop_lbl});
+                IRBlock *after_drop_b = new_block(c);
+                after_drop_b->label = after_drop_lbl;
+                switch_block(c, after_drop_b);
+            }
             emit(c, (IRInst){
                 .op = is_byte_elem_w ? IR_STORE_BYTE : IR_STORE,
                 .a = addr, .b = val, .imm = 0

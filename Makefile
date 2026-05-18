@@ -21,6 +21,9 @@ clean:
 	rm -f $(OUT) *.o *.s examples/*.s examples/*.o tests/ir/*.s tests/ir/*.o
 	rm -f $(addprefix tests/ir/,$(notdir $(basename $(wildcard tests/ir/*.ptt))))
 	rm -f tests/leaks/*.s tests/leaks/*.o tests/leaks/named_arg_string_literal
+	rm -f named_arg_string_literal.s named_arg_string_literal named_arg_string_literal.o
+	rm -f named_arg_nested_string_literal.s named_arg_nested_string_literal named_arg_nested_string_literal.o
+	rm -f heap_slot_drop_emits_drop.s heap_slot_drop_emits_drop heap_slot_drop_emits_drop.o
 
 test: $(OUT) test-pass test-fail test-runtime test-framework test-ir test-paths test-leaks
 	@echo ""
@@ -186,4 +189,19 @@ test-leaks: $(OUT)
 		echo "  FAIL: nested named-arg String literals leak auto-init"; fail=1; \
 	fi; \
 	rm -f "$$asm" named_arg_nested_string_literal named_arg_nested_string_literal.o; \
+	src=tests/leaks/heap_slot_drop_emits_drop.ptt; \
+	asm=heap_slot_drop_emits_drop.s; \
+	rm -f "$$asm" heap_slot_drop_emits_drop heap_slot_drop_emits_drop.o; \
+	if ! ./$(OUT) ir "$$src" > /dev/null 2>&1; then \
+		echo "  FAIL: $$src did not lower to IR"; fail=1; \
+	else \
+		for fn in _List__String_set _Set__String_add _Map__String__String_set; do \
+			if awk -v fn="$$fn:" 'index($$0, fn)==1{inside=1; next} inside && /^_/{inside=0} inside && /bl _drop_String/{found=1} END{exit found ? 0 : 1}' "$$asm"; then \
+				echo "  OK:   $$fn drops String before slot overwrite"; \
+			else \
+				echo "  FAIL: $$fn missing _drop_String before slot overwrite (F-001)"; fail=1; \
+			fi; \
+		done; \
+	fi; \
+	rm -f "$$asm" heap_slot_drop_emits_drop heap_slot_drop_emits_drop.o; \
 	[ $$fail -eq 0 ] || (echo "Some leak tests failed"; exit 1)

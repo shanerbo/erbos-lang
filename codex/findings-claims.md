@@ -64,12 +64,11 @@ If another implementation batch starts before audit:
 ## Header
 
 - `State`: READY_FOR_AUDIT
-- `Claim ID`: C-001
-- `Against findings revision`: 1
-- `Target commit`: dd17f87
-- `Claimed fixed`: (no specific finding IDs — see Claim C-001
-  body for the stdlib + compiler batch ready for review)
-- `Last updated`: 2026-05-18T03:30:00-07:00
+- `Claim ID`: C-002
+- `Against findings revision`: 3
+- `Target commit`: 1935bb3 + working tree (uncommitted)
+- `Claimed fixed`: F-001
+- `Last updated`: 2026-05-18T20:35:00+00:00
 
 ## Claim C-001
 - State: READY_FOR_AUDIT
@@ -142,6 +141,127 @@ If another implementation batch starts before audit:
     - `tests/test_pool.ptt`
     - `tests/test_path.ptt`
 
+## Claim C-002
+- State: READY_FOR_AUDIT
+- Against findings revision: 3
+- Target commit: 1935bb3 + working tree (uncommitted; Codex
+  may verify against `git diff` for the listed files)
+- Claimed fixed: F-001
+- Last updated: 2026-05-18T20:35:00+00:00
+- Verification context:
+  - `make test` ends with `All tests passed.` from a clean
+    rebuild on the working tree.
+  - `tests/test_heap_slot_drop.ptt` (18 cases including three
+    aliasing regression cases) passes at `-O0`, `-O1`, `-O2`.
+  - `tests/leaks/heap_slot_drop_emits_drop.ptt` IR-static check
+    confirms `bl _drop_String` appears in
+    `_List__String_set`, `_Set__String_add`, and
+    `_Map__String__String_set` before the slot's `str` of the
+    new pointer.
+- Root-cause fix:
+  - Compiler change at the index-assign lowering layer.
+    `compiler/checker.c`'s `NODE_INDEX_ASSIGN` now stores the
+    array's element struct name in
+    `index_assign.elem_struct_name` whenever the element type
+    resolves to a heap-shaped struct in this program.
+    `compiler/irgen.c`'s `NODE_INDEX_ASSIGN` reads that field
+    and, when `is_move` or `is_rep` is set and the element is
+    heap-shaped, null-guards the slot's prior pointer and
+    calls `_drop_<elem_struct_name>` before storing the new
+    pointer. Plain `arr[i] be src` keeps the legacy raw-store
+    semantics so shift/swap loops are not affected.
+    `compiler/monomorph.c`'s `clone_node` for
+    `NODE_INDEX_ASSIGN` carries the new field through every
+    instantiation.
+    `compiler/ast.h` declares the new field on
+    `index_assign`.
+  - Stdlib change: `std/list.ptt::List.set` body switched to
+    the clone-then-transfer pattern already in use by
+    `Map.set` and `Set.add`:
+        v_clone is rep v
+        self.data[i] be now v_clone
+    The deep-clone is the alias-safety guarantee — caller can
+    pass the slot's own current value (`v is xs.get(0); xs.set(0, v)`)
+    and the slot still ends up holding an independent block.
+    For primitive T, `is rep` collapses to a value copy and
+    `be now` collapses to a plain store, so the perf cost is
+    nil. The new compiler drop-before-overwrite logic then
+    drops the slot's previous occupant before storing the
+    clone. Pool's `Pool.set` and the `Pool.insert` reuse path
+    both delegate to `List.set`, so the same fix flows
+    transitively.
+  - Stdlib unchanged but now correct: `std/map.ptt::Map.set`
+    (update-existing branch and tombstone-reuse insert) and
+    `std/set.ptt::Set.add` already used `arr[i] be now <clone>`;
+    they did not drop the previous occupant before because
+    the compiler-side drop did not exist. The new compiler
+    logic makes them ownership-correct without changing those
+    files.
+- Files changed:
+  - `compiler/ast.h`
+  - `compiler/checker.c`
+  - `compiler/irgen.c`
+  - `compiler/monomorph.c`
+  - `std/list.ptt`
+  - `std/STDLIB_CHECKLIST.md`
+  - `Makefile` (clean target + new leak check)
+  - `tests/test_heap_slot_drop.ptt` (new)
+  - `tests/leaks/heap_slot_drop_emits_drop.ptt` (new)
+- Tests added (per F-001 required-test list):
+  - heap-shaped `List.set` replacement stress: covered by
+    `List.set replacement stress over the same slot` and
+    `List.set on multiple slots after grow keeps content`.
+  - `Pool of String` repeated set on one live id plus
+    remove+reuse cycles: covered by
+    `Pool.set replaces heap-shaped value at a live id` and
+    `Pool remove + reuse cycles a slot for a heap-shaped T`
+    plus `Pool clear and reinsert heap-shaped values`.
+  - `Set of String` remove+re-add into tombstoned buckets and
+    clear+reinsert cycles: covered by
+    `Set remove + readd into tombstoned bucket drops prior`,
+    `Set clear + reinsert cycles`, and
+    `Set add stress with collisions exercises tombstone reuse`.
+  - `Map of String, String` matching regression: covered by
+    `Map.set update-in-place drops previous value`,
+    `Map remove + readd into tombstoned bucket`,
+    `Map.clear + reinsert cycles`, and
+    `Map of String, String survives capacity doublings`.
+  - Primitive-T fast path is preserved: `List.set with
+    primitive T stays raw-store`. The corresponding IR-static
+    check lives in the leaks suite (no `_drop_<...>` symbol
+    for primitive element types).
+  - Aliasing safety: `List.set self-alias` and
+    `List.set cross-slot alias` lock down the convention that
+    `List.set(i, v)` deep-clones v before dropping slot[i],
+    so v can be the slot's own current value or a value from
+    elsewhere in the same list without a use-after-free.
+    `Map.set self-alias` is a sentinel that the same
+    convention in Map.set survives.
+  - IR-static gate that locks the fix in place:
+    `tests/leaks/heap_slot_drop_emits_drop.ptt` plus the new
+    Makefile `test-leaks` stanza asserts
+    `bl _drop_String` is emitted in `_List__String_set`,
+    `_Set__String_add`, and `_Map__String__String_set` ahead
+    of the slot store.
+- Out of F-001 scope (deliberately not changed):
+  - Heap-shaped values still leak when the parent
+    `List of String` / `Set of String` / `Map of String, String`
+    is dropped at scope end, because `_drop_<X>`'s array path
+    frees the data buffer without iterating elements. F-001's
+    text and required tests are scoped to slot-overwrite leaks
+    on reuse, not parent-drop element leaks. If Codex wants
+    parent-drop element drop in the same batch, that is a
+    separate compiler change that should be claimed as a new
+    fix once F-001 is verified.
+  - `List.insert`'s shift-loop is unchanged. The shift uses
+    plain `be` (alias-shuffle), and the final write at `[i]`
+    is also plain `be` because the slot at `[i]` is an alias
+    of the value now at `[i+1]` after the shift; a drop there
+    would double-free. Heap-shaped insert ownership matches
+    the existing pattern (caller passes ownership; List acquires
+    it via the final raw store; parameter local is not heap-
+    marked so no scope-end double-free).
+
 ## Claim Template
 
 ```md
@@ -159,3 +279,12 @@ If another implementation batch starts before audit:
 ## Change Log
 
 - Claim file created; no pending audit requests yet.
+- Claim C-001 submitted, audited, and rejected for release;
+  F-001 was opened against the slot-overwrite leak class.
+- Claim C-002 submitted: F-001 fix (compiler + stdlib +
+  comprehensive regression tests + IR-static gate). All-level
+  `make test` green from a clean rebuild.
+- Claim C-002 strengthened: `List.set` switched to the
+  clone-then-transfer pattern (`v_clone is rep v; self.data[i] be now v_clone`)
+  to lock down alias safety; added three aliasing regression
+  tests; full suite still green.

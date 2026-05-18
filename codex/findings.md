@@ -60,6 +60,14 @@ Only Codex moves a finding into `VERIFIED` or `CLOSED`.
 
 - `Codex` is the only authority that may authorize the final
   stdlib-phase `commit and push` handoff.
+- The findings header also carries a separate `Conclusion` field.
+- `ALL_CLEAR` means there are no active known findings for the current
+  audited batch and no in-flight audit still open against that batch.
+- `FINDINGS_OPEN` means at least one finding is still active, an audit
+  is in flight, or the current batch has not yet been cleared by Codex.
+- `Conclusion` and `Release action` are related but not identical:
+  `Conclusion` answers whether the audited batch is clear of known
+  findings, while `Release action` answers whether Claude may land it.
 - The findings header carries this as `Release action`.
 - `HOLD` means Claude must keep implementing or wait for audit.
 - `COMMIT_AND_PUSH` means Codex has verified the current claim, the
@@ -67,6 +75,19 @@ Only Codex moves a finding into `VERIFIED` or `CLOSED`.
   commit and push it.
 - When practical, Codex should also add a short `Release note`
   describing the approved scope.
+
+### Conclusion transition rule
+
+- On audit start, Codex should set `Conclusion: FINDINGS_OPEN`.
+- After consuming a new ready claim:
+  - if any finding remains `OPEN` or `FIX CLAIMED`, keep
+    `Conclusion: FINDINGS_OPEN`
+  - if zero active findings remain and the audit is complete, set
+    `Conclusion: ALL_CLEAR`
+- Any newly-added finding must flip `Conclusion` back to
+  `FINDINGS_OPEN`.
+- If no new ready claim exists, periodic sweeps should leave
+  `Conclusion` unchanged.
 
 ### Claude consumption rule
 
@@ -81,8 +102,12 @@ Claude should:
    `Revision` exists.
 6. When you want verification, update `codex/findings-claims.md`
    instead of touching this file.
-7. Do not commit or push a stdlib completion batch unless this file's
-   header says `Release action: COMMIT_AND_PUSH`.
+7. Treat `Conclusion: ALL_CLEAR` as the explicit signal that the
+   current audited batch has no active known findings and no in-flight
+   code audit still open against it.
+8. Do not commit or push a stdlib completion batch unless this file's
+   header says both `Conclusion: ALL_CLEAR` and
+   `Release action: COMMIT_AND_PUSH`.
 
 ### Scope rule
 
@@ -102,17 +127,73 @@ This file is not for:
 ## Header
 
 - `State`: QUIESCENT
-- `Revision`: 1
-- `Last updated`: 2026-05-18T02:02:00-07:00
-- `Audited commit`: current working tree at time of file creation
-- `Last claim audited`: none
-- `Release action`: HOLD
-- `Release note`: none
+- `Revision`: 4
+- `Last updated`: 2026-05-18T13:07:19-07:00
+- `Audited commit`: 1935bb3 + working tree
+- `Last claim audited`: C-002
+- `Conclusion`: ALL_CLEAR
+- `Release action`: COMMIT_AND_PUSH
+- `Release note`: Claim C-002 accepted; F-001 is fixed and this finding batch may land as its own commit.
 
 ## Active Findings
 
-None yet in this ledger. Add findings below this section using the
-template.
+None.
+
+## Closed Findings
+
+### F-001
+- State: CLOSED
+- Severity: P1
+- Area: compiler | stdlib
+- Opened at: 2026-05-18T03:40:31-07:00
+- Last reviewed at: 2026-05-18T13:07:19-07:00
+- Audited commit: 1935bb3 + working tree
+- Evidence:
+  - [std/pool.ptt](/Users/erbos/erbos-lang/std/pool.ptt:63)
+  - [std/list.ptt](/Users/erbos/erbos-lang/std/list.ptt:148)
+  - [std/set.ptt](/Users/erbos/erbos-lang/std/set.ptt:105)
+  - [compiler/irgen.c](/Users/erbos/erbos-lang/compiler/irgen.c:1593)
+  - Fresh full-suite rebuild on `dd17f87` ends with `All tests passed.`,
+    but a generated IR probe for `List of String.set(0, "b")` still
+    lowers `_List__String_set` to a raw `str` store with no
+    `_drop_String` call before overwriting the previous owned slot.
+- Problem:
+  Heap-shaped element replacement is still ownership-incorrect. Pool
+  slot reuse goes through `self.items.set(id, value)`, Set tombstone
+  reuse writes a fresh clone into a previously-live bucket, and the
+  shared array-slot lowering in `NODE_INDEX_ASSIGN` only emits a raw
+  store. The previous owned value in that live slot is never dropped
+  before overwrite, so `Pool.set`, Pool remove+reuse, Set remove+readd,
+  Set clear+reinsert, and the analogous Map paths leak heap-shaped
+  entries even though the current tests stay green.
+- Required fix:
+  Add a real drop-before-overwrite path for live owned array/list slots
+  and apply it at the layers that know slot liveness. A blanket
+  compiler-side "always drop on index assign" is not sufficient because
+  many writes target previously-uninitialized capacity. The final fix
+  must make `List.set` and the Set/Map/Pool reuse/clear paths ownership-
+  correct for heap-shaped values without regressing primitive or fresh-
+  slot stores.
+- Required tests:
+  - heap-shaped `List.set` replacement stress that proves the previous
+    value is dropped, not leaked
+  - `Pool of String`: repeated `set` on one live id plus remove+reuse
+    cycles
+  - `Set of String`: remove+re-add into tombstoned buckets and
+    clear+reinsert cycles
+  - matching `Map of String, String` regression because Set copies the
+    same bucket-reuse machinery
+- Verification notes:
+  Claim `C-002` fixes the root cause at the correct layers:
+  checker tags heap-shaped array element types, monomorph preserves the
+  metadata, irgen now emits a null-guarded `_drop_<elem>` before
+  `be now` / `be rep` overwrites, and `List.set` switched to
+  `self.data[i] be now v` so live-slot replacement actually takes that
+  path. A fresh rebuild from source plus full `make test` passed, and
+  the new regressions now cover both behavior
+  (`tests/test_heap_slot_drop.ptt`) and emitted code
+  (`tests/leaks/heap_slot_drop_emits_drop.ptt`) for `List`, `Pool`,
+  `Set`, and `Map` heap-shaped overwrite/reuse paths.
 
 ## Finding Template
 
@@ -142,3 +223,13 @@ template.
 - Revision 1: created single-writer findings contract and empty ledger.
 - Revision 1: added release handoff gate (`HOLD` /
   `COMMIT_AND_PUSH`) so Claude only commits after auditor approval.
+- Revision 2: started audit pass for claim `C-001` against commit
+  `dd17f87`; release gate held during verification.
+- Revision 2: completed audit of claim `C-001`; release remains on HOLD
+  because F-001 was found in array-slot overwrite ownership semantics.
+- Revision 3: added the `Conclusion` field with `ALL_CLEAR` /
+  `FINDINGS_OPEN` semantics so scheduler-driven audits can explicitly
+  signal whether a batch is clear of known findings.
+- Revision 4: audited claim `C-002` against commit `1935bb3 + working tree`;
+  accepted the F-001 fix, closed the finding, and marked the batch
+  `ALL_CLEAR` with `COMMIT_AND_PUSH`.

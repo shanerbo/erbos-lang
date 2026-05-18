@@ -1,0 +1,365 @@
+// F-001 regression: heap-shaped element replacement must drop
+// the previous slot owner before overwriting.
+//
+// The bug class is "raw store on a live owned slot". The fix is
+// the index-assign drop-before-overwrite path in irgen.c and
+// the stdlib `List.set` switch from `be v` to `be now v`. Before
+// the fix:
+//   - List.set on heap-shaped T leaked the previous occupant
+//     on every replacement
+//   - Pool.set / Pool.insert reuse via List.set inherited the
+//     leak because Pool delegates to List.set
+//   - Set.add into a tombstoned bucket lowered to `be now v`
+//     but the prior value never dropped
+//   - Map.set update-in-place and tombstone-reuse paths had the
+//     same shape
+//   - Set.clear + reinsert and Map.clear + reinsert paths also
+//     overwrote the (still-pointed-at) slot
+//
+// These tests stress every reuse path with a heap-shaped element
+// type (`String`, which carries an owned `array of byte`). They
+// assert content correctness across many replacements; the
+// matching IR-level "drop must be emitted" check lives in
+// `tests/leaks/heap_slot_drop_emits_drop.ptt` so a regression in
+// either the irgen guard or the stdlib `be now` flag fails fast.
+
+use std/list
+use std/set
+use std/pool
+use std/map
+use std/string
+use std/option
+
+// ---------------------------------------------------------------
+// List.set
+// ---------------------------------------------------------------
+
+test "List.set replaces heap-shaped element correctly" {
+  xs is List of String()
+  xs.push("alpha")
+  xs.set(0, "beta")
+  assert(xs.len() eq 1)
+  assert(xs.get(0) eq "beta")
+}
+
+test "List.set replacement stress over the same slot" {
+  // Repeatedly overwrite slot 0 with a fresh heap-shaped value.
+  // Pre-fix this leaked one String header + payload per call;
+  // post-fix the slot's prior occupant is dropped before the
+  // overwrite, so live memory is bounded by the cap and the
+  // single live element. Final read must observe the last value.
+  xs is List of String()
+  xs.push("seed")
+  through (i from 0 to 500 by 1) {
+    xs.set(0, "new")
+  }
+  assert(xs.len() eq 1)
+  assert(xs.get(0) eq "new")
+}
+
+test "List.set on multiple slots after grow keeps content" {
+  // Force a few capacity doublings, then replace every slot via
+  // set. Catches both the grow-time copy semantics and the post-
+  // grow set's drop-before-overwrite.
+  xs is List of String()
+  through (i from 0 to 32 by 1) {
+    xs.push("placeholder")
+  }
+  through (i from 0 to 32 by 1) {
+    xs.set(i, "fixed")
+  }
+  through (i from 0 to 32 by 1) {
+    assert(xs.get(i) eq "fixed")
+  }
+}
+
+test "List.set with primitive T stays raw-store" {
+  // The drop-before-overwrite path is gated on a heap-shaped
+  // element type. Primitive T must still take the legacy raw-
+  // store fast path, with no compiler-side drop call. This test
+  // is a behavior smoke-screen; the corresponding IR check is in
+  // the leaks suite.
+  xs is List of int()
+  xs.push(0)
+  through (i from 0 to 1000 by 1) {
+    xs.set(0, i)
+  }
+  assert(xs.len() eq 1)
+  assert(xs.get(0) eq 999)
+}
+
+// ---------------------------------------------------------------
+// Pool of String — set + remove+reuse
+// ---------------------------------------------------------------
+
+test "Pool.set replaces heap-shaped value at a live id" {
+  p is Pool of String()
+  id is p.insert("orig")
+  through (i from 0 to 500 by 1) {
+    p.set(id, "fresh")
+  }
+  assert(p.has(id))
+  assert(p.get(id) eq "fresh")
+  assert(p.len() eq 1)
+}
+
+test "Pool remove + reuse cycles a slot for a heap-shaped T" {
+  // Insert, remove, insert: the slot index is reused via the
+  // free list. The reused slot's old String must be dropped
+  // before the new String lands. Stress this many times so a
+  // leak would blow up to a measurable amount.
+  p is Pool of String()
+  id is p.insert("first")
+  through (i from 0 to 200 by 1) {
+    ok is p.remove(id)
+    assert(ok)
+    new_id is p.insert("rebound")
+    // Free list is LIFO — the same slot must come back.
+    assert(new_id eq id)
+    assert(p.has(id))
+    assert(p.get(id) eq "rebound")
+  }
+  assert(p.len() eq 1)
+  // High-water mark stays at 1: the Pool reused the same slot
+  // every time instead of growing.
+  assert(p.slot_count() eq 1)
+}
+
+test "Pool clear and reinsert heap-shaped values" {
+  // Pool.clear drops the items list (releases the array), so
+  // reinsert starts from id 0 again with no leak.
+  p is Pool of String()
+  through (i from 0 to 50 by 1) {
+    p.insert("a")
+    p.insert("b")
+    p.insert("c")
+    p.clear()
+    assert(p.len() eq 0)
+    assert(p.slot_count() eq 0)
+  }
+  // Final state: empty Pool, no inserts.
+  assert(p.empty())
+}
+
+// ---------------------------------------------------------------
+// Set of String — remove+readd into tombstoned bucket,
+// clear+reinsert
+// ---------------------------------------------------------------
+
+test "Set remove + readd into tombstoned bucket drops prior" {
+  // remove() flips the slot's state byte to DELETED but leaves
+  // the data slot's pointer intact. The next add() that lands
+  // on that bucket must drop the stale pointer before storing
+  // the fresh clone.
+  s is Set of String()
+  s.add("alpha")
+  s.add("beta")
+  s.add("gamma")
+  through (i from 0 to 200 by 1) {
+    ok is s.remove("alpha")
+    assert(ok)
+    added is s.add("alpha")
+    assert(added)
+    assert(s.has("alpha"))
+    assert(s.has("beta"))
+    assert(s.has("gamma"))
+  }
+  assert(s.len() eq 3)
+}
+
+test "Set clear + reinsert cycles" {
+  // clear() resets state bytes to EMPTY but data slots still
+  // hold stale pointers. Re-adding values that hash to those
+  // buckets must drop the stale pointer (now in an EMPTY-coded
+  // slot) before storing.
+  s is Set of String()
+  through (i from 0 to 100 by 1) {
+    s.add("a")
+    s.add("b")
+    s.add("c")
+    assert(s.len() eq 3)
+    s.clear()
+    assert(s.len() eq 0)
+  }
+  // Final reinsert verifies the table still works.
+  s.add("x")
+  s.add("y")
+  assert(s.len() eq 2)
+  assert(s.has("x"))
+  assert(s.has("y"))
+}
+
+test "Set add stress with collisions exercises tombstone reuse" {
+  // Collide many entries into the same probe chain by inserting,
+  // removing, and reinserting at random offsets. Set.add must
+  // honor drop-before-overwrite even when the empty slot it
+  // chose was previously DELETED with a non-null payload.
+  s is Set of String()
+  through (round from 0 to 50 by 1) {
+    s.add("k_a")
+    s.add("k_b")
+    s.add("k_c")
+    s.add("k_d")
+    s.remove("k_a")
+    s.remove("k_b")
+    s.add("k_a")
+    s.add("k_b")
+    assert(s.has("k_a"))
+    assert(s.has("k_b"))
+    assert(s.has("k_c"))
+    assert(s.has("k_d"))
+    s.clear()
+  }
+  s.add("final")
+  assert(s.len() eq 1)
+}
+
+// ---------------------------------------------------------------
+// Map of String, String — same bucket-reuse machinery
+// ---------------------------------------------------------------
+
+test "Map.set update-in-place drops previous value" {
+  // The update-existing branch in Map.set explicitly does
+  // `self.vals[i] be now v_clone`. Pre-fix this leaked the prior
+  // value because NODE_INDEX_ASSIGN raw-stored. Post-fix the
+  // drop-before-overwrite IR fires because elem_struct_name is
+  // String.
+  m is Map of String, String()
+  m.set("k", "v0")
+  through (i from 0 to 500 by 1) {
+    m.set("k", "v1")
+  }
+  assert(m.len() eq 1)
+  assert(m.get("k") eq "v1")
+}
+
+test "Map remove + readd into tombstoned bucket" {
+  m is Map of String, String()
+  m.set("a", "1")
+  m.set("b", "2")
+  m.set("c", "3")
+  through (i from 0 to 200 by 1) {
+    ok is m.remove("a")
+    assert(ok)
+    m.set("a", "fresh")
+    assert(m.has("a"))
+    assert(m.get("a") eq "fresh")
+    assert(m.get("b") eq "2")
+    assert(m.get("c") eq "3")
+  }
+  assert(m.len() eq 3)
+}
+
+test "Map.clear + reinsert cycles" {
+  m is Map of String, String()
+  through (round from 0 to 100 by 1) {
+    m.set("a", "1")
+    m.set("b", "2")
+    m.set("c", "3")
+    assert(m.len() eq 3)
+    m.clear()
+    assert(m.empty())
+  }
+  m.set("x", "y")
+  assert(m.get("x") eq "y")
+}
+
+// ---------------------------------------------------------------
+// Cross-paths: heap-shaped values stay correct through grow
+// ---------------------------------------------------------------
+
+test "Map of String, String survives capacity doublings" {
+  // The resize path moves heap-shaped K and V into freshly-
+  // allocated arrays; the new cells are null (heap_alloc zero-
+  // fills) so the drop-before-overwrite null guard skips. After
+  // resize, every set/remove/reinsert continues to honor the
+  // drop.
+  m is Map of String, String()
+  through (i from 0 to 50 by 1) {
+    k is "key"
+    v is "val"
+    m.set(k, v)
+    m.remove(k)
+  }
+  m.set("k0", "v0")
+  m.set("k1", "v1")
+  m.set("k2", "v2")
+  assert(m.get("k0") eq "v0")
+  assert(m.get("k1") eq "v1")
+  assert(m.get("k2") eq "v2")
+}
+
+test "List.set preserves String identity across mass replace" {
+  // Verify the slot's drop didn't accidentally double-free the
+  // new value. If the drop ran AFTER the store (or used the new
+  // value as the drop target), this would corrupt content or
+  // crash on subsequent reads.
+  xs is List of String()
+  through (i from 0 to 64 by 1) {
+    xs.push("base")
+  }
+  through (round from 0 to 20 by 1) {
+    through (i from 0 to 64 by 1) {
+      xs.set(i, "rep")
+    }
+    through (i from 0 to 64 by 1) {
+      assert(xs.get(i) eq "rep")
+    }
+  }
+}
+
+// ---------------------------------------------------------------
+// Aliasing — set with a value that already lives in the same
+// list (or another container). The drop-before-overwrite path
+// must not free a pointer the caller still holds before the
+// store completes; List.set deep-clones via `is rep` + `be now`
+// so the slot ends up holding an independent block even when the
+// caller passed the slot's own current value.
+// ---------------------------------------------------------------
+
+test "List.set self-alias: v from xs.get(i), set back to xs[i]" {
+  xs is List of String()
+  xs.push("alpha")
+  v is xs.get(0)
+  xs.set(0, v)
+  // Slot should still read back as "alpha" — the clone preserved
+  // the bytes through the drop-before-overwrite cycle.
+  assert(xs.get(0) eq "alpha")
+  // Stress the same pattern; an unsound implementation would
+  // either crash or corrupt the slot after the first iteration.
+  through (i from 0 to 200 by 1) {
+    w is xs.get(0)
+    xs.set(0, w)
+  }
+  assert(xs.get(0) eq "alpha")
+}
+
+test "List.set cross-slot alias: copy slot 1 into slot 0" {
+  xs is List of String()
+  xs.push("alpha")
+  xs.push("beta")
+  v is xs.get(1)
+  xs.set(0, v)
+  assert(xs.get(0) eq "beta")
+  assert(xs.get(1) eq "beta")
+  // The two slots must be independent copies — mutating one via
+  // a fresh set must not change the other.
+  xs.set(0, "gamma")
+  assert(xs.get(0) eq "gamma")
+  assert(xs.get(1) eq "beta")
+}
+
+test "Map.set self-alias: copy map[k] back via try_get" {
+  // `Map.set` already deep-clones the value, so passing the
+  // map's current value back is safe both before and after the
+  // F-001 fix. This is a regression sentinel that locks down
+  // the convention.
+  m is Map of String, String()
+  m.set("k", "v")
+  via is m.try_get("k")
+  via.is_some() ?{
+    cur is via.unwrap()
+    m.set("k", cur)
+  }
+  assert(m.get("k") eq "v")
+}

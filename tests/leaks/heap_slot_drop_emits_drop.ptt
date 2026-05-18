@@ -1,0 +1,52 @@
+// F-001 IR-level regression: the slot drop-before-overwrite path
+// must actually emit `bl _drop_String` in every set/insert lowering
+// that writes a heap-shaped element into a typed array slot.
+//
+// The framework tests in `tests/test_heap_slot_drop.ptt` cover
+// behavior end-to-end. This file forces the relevant monomorphic
+// instantiations (`List__String`, `Set__String`, `Map__String__String`,
+// `Pool__String`) so a single `erbos ir` invocation produces an
+// assembly file the Makefile can grep over.
+//
+// The Makefile leak-test stanza asserts that the lowered bodies
+// of `_List__String_set`, `_Set__String_add`, and
+// `_Map__String__String_set` each contain `bl _drop_String` —
+// proof that the heap-shaped slot's prior occupant is dropped
+// before the new pointer lands. `Pool of String` does not need
+// its own check because `Pool.set` and the `Pool.insert` reuse
+// path delegate to `List.set` (`self.items.set(id, value)`); the
+// drop happens inside `_List__String_set`'s body.
+
+use std/list
+use std/set
+use std/map
+use std/pool
+use std/string
+
+spark {
+  // List of String — set
+  xs is List of String()
+  xs.push("a")
+  xs.set(0, "b")
+
+  // Set of String — add (tombstone reuse uses the same NODE_INDEX_ASSIGN
+  // shape as the empty-slot insert path).
+  s is Set of String()
+  s.add("a")
+  s.remove("a")
+  s.add("a")
+
+  // Map of String, String — set update + tombstone reuse.
+  m is Map of String, String()
+  m.set("k", "v0")
+  m.set("k", "v1")
+  m.remove("k")
+  m.set("k", "v2")
+
+  // Pool of String — insert + remove + reuse.
+  p is Pool of String()
+  id is p.insert("x")
+  p.set(id, "y")
+  p.remove(id)
+  p.insert("z")
+}
