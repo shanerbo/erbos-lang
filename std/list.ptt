@@ -71,7 +71,7 @@ List.empty(self List of T) bool {
 
 // Append `v` to the end. Doubles `data`'s cap if full.
 //
-// The struct constructor zero-inits `data` (no NODE_ARRAY_NEW
+// Zero-value formation (`List of T()`) zero-inits `data` (no NODE_ARRAY_NEW
 // fires for field defaults), so a freshly-built List has
 // data == 0. The first push triggers an inline allocation.
 // Subsequent grows allocate fresh, copy, then `be now`-replace

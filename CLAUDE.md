@@ -20,7 +20,8 @@ retirement, framework-only testing) all shipped.
    conversions, no auto-coercion. Everything user-visible is
    spelled out in `.ptt` source.
 2. **No `<T>` template syntax anywhere.** Generics are word-style:
-   `Box of T`, `Map of K to V`. Period.
+   `Box of T`, `Map of K, V`. Type arguments are comma-separated;
+   `to` is not a generic separator.
 3. **No `str` ↔ `String` sugar.** `str` is gone. `String` is the
    stdlib struct, defined in `std/string.ptt`. Every program that
    uses `String` (literal `"..."`, type name, method call) must
@@ -47,9 +48,15 @@ compiler/          C11 compiler frontend (was src/, renamed in the overhaul)
 std/               Potato stdlib (.ptt source — pure Potato, no C)
   basics.ptt       bundle: re-exports string + list + map
   list.ptt         List of T
-  map.ptt          Map of K to V
+  map.ptt          Map of K, V
   string.ptt       String struct
-  math.ptt, queue.ptt, stack.ptt
+  option.ptt       Option of T (factories: none, some)
+  result.ptt       Result of T, E (factories: ok, err)
+  stack.ptt, queue.ptt, deque.ptt    sequence containers
+  ring_buffer.ptt, arena.ptt          fixed-cap and arena-by-id
+  string_builder.ptt, byte_buffer.ptt repeated-build buffers
+  math.ptt, algo.ptt
+  STDLIB_CHECKLIST.md                stdlib roadmap / target API
 examples/          standalone demo programs (have spark blocks; readable as tutorials)
 tests/
   compiler/        C runtime tests
@@ -88,14 +95,14 @@ forward-only and identifier-shaped.
 
 | File | Read when |
 |------|-----------|
-| `docs/language-guide.md` | designing user-facing syntax / semantics; need to see what types/constructs exist |
+| `docs/language-law.md` | the canonical value-formation grammar (type expression vs. value formation, enum factories). Code, checker, and tests enforce this exactly. |
+| `docs/language-guide.md` | designing user-facing syntax / semantics; need to see what types/constructs exist. The "Generics" section is the single place generics syntax is taught. |
 | `docs/keywords.md` | quick keyword reference |
 | `docs/builtins.md` | what `yell`/`assert` and the runtime intrinsics resolve to |
-| `docs/generics-syntax.md` | adding/changing generic monomorphization |
 | `docs/runtime.md` | touching `compiler/runtime_emit.c` or the `_alloc_*` / `_panic_*` symbols |
 | `docs/ir-pipeline.md` | working on irgen / iropt / regalloc / iremit |
-| `docs/examples.md` | adding example programs |
-| `docs/design-decisions.md` | **READ BEFORE proposing language changes.** Append-only log of decided/parked discussions. The whole point is to not relitigate the same trade-offs. |
+| `docs/design-decisions.md` | **READ BEFORE proposing language changes.** Append-only historical log of decided/parked discussions. Older entries may show pre-cleanup grammar; `language-law.md` is the live truth. |
+| `std/STDLIB_CHECKLIST.md` | implementing or extending the standard library; lists target API per type. |
 
 ## Build + test
 
@@ -167,9 +174,10 @@ Concretely:
   happens in their real driver — my repro budget shouldn't cap
   the conversation. Get the failing project, debug it there.
 
-### `AUDITING.md` is Codex's territory — DO NOT TOUCH
+### `codex/AUDITING.md` is Codex's territory — DO NOT TOUCH
 
-`AUDITING.md` at the repo root is **owned by Codex 5.5**. It is
+`codex/AUDITING.md` is **owned by Codex 5.5**. The whole
+`codex/` directory is Codex's working area. The file is
 **read-only for me**. Never:
 
 - modify it (`Edit` / `Write`)
@@ -180,9 +188,9 @@ Concretely:
 I may **only read** it, and only when its content is directly
 relevant to a task — not preemptively.
 
-This is a hard rule. If a tool call would touch `AUDITING.md` in
-any way other than reading, abort and surface the situation
-instead of proceeding.
+This is a hard rule. If a tool call would touch
+`codex/AUDITING.md` in any way other than reading, abort and
+surface the situation instead of proceeding.
 
 ## Out of scope without explicit ask
 
@@ -190,5 +198,6 @@ instead of proceeding.
 - Integrating the green-thread runtime into compiled `.ptt`
   output (the runtime exists in `compiler/runtime/` but is not
   wired in).
-- Operator overloading, traits, `Result`/`Option` as built-in
-  types — all on the roadmap, none in flight.
+- Operator overloading, traits, async — on the roadmap, not in
+  flight. (`Option of T` and `Result of T, E` already ship; see
+  `std/option.ptt` and `std/result.ptt`.)

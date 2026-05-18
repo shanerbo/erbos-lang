@@ -108,6 +108,39 @@ static int types_equal(Type a, Type b) {
     return 1;
 }
 
+// Render a post-monomorph mangled type name back to its
+// user-facing word-style form for diagnostics. The mangled form
+// from monomorph uses `__` as the head/arg separator and between
+// successive args:
+//
+//   "Foo"                   -> "Foo"
+//   "Option__int"           -> "Option of int"
+//   "Result__int__String"   -> "Result of int, String"
+//   "List__List__int"       -> "List of List of int"
+//
+// Output goes into `out` (size `outsz`); always NUL-terminated.
+static void format_mangled_word_style(const char *mangled, char *out, int outsz) {
+    if (outsz <= 0) return;
+    if (!mangled) { out[0] = '\0'; return; }
+    int oi = 0;
+    int saw_first_sep = 0;
+    int i = 0;
+    while (mangled[i] && oi + 1 < outsz) {
+        // `__` is the separator. The first one becomes ` of `;
+        // each subsequent one becomes `, `.
+        if (mangled[i] == '_' && mangled[i + 1] == '_') {
+            const char *sep = saw_first_sep ? ", " : " of ";
+            int sl = (int)strlen(sep);
+            for (int k = 0; k < sl && oi + 1 < outsz; k++) out[oi++] = sep[k];
+            saw_first_sep = 1;
+            i += 2;
+            continue;
+        }
+        out[oi++] = mangled[i++];
+    }
+    out[oi] = '\0';
+}
+
 static void set_sym(Checker *c, const char *name, Type t) {
     for (int i = 0; i < c->count; i++)
         if (!strcmp(c->syms[i].name, name)) {
@@ -351,9 +384,11 @@ static Type check_expr(Checker *c, Node *n) {
             // type used as bare values get a teaching error pointing
             // the user at the value-formation forms.
             if (is_struct(c, n->ident.name) || is_enum_type(c, n->ident.name)) {
+                char display[256];
+                format_mangled_word_style(n->ident.name, display, sizeof(display));
                 fprintf(stderr,
                     "error:%d: type expression `%s` is not a value\n",
-                    n->line, n->ident.name);
+                    n->line, display);
                 if (is_enum_type(c, n->ident.name)) {
                     fprintf(stderr,
                         "  help: enum values are formed with factories; "
@@ -363,7 +398,7 @@ static Type check_expr(Checker *c, Node *n) {
                     fprintf(stderr,
                         "  help: form a value with `%s()` or "
                         "`%s(field is value, ...)`\n",
-                        n->ident.name, n->ident.name);
+                        display, display);
                 }
                 exit(1);
             }
@@ -710,9 +745,14 @@ static Type check_expr(Checker *c, Node *n) {
                 }
                 if (sym_t.kind == TYPE_UNKNOWN && is_enum_type(c, obj_name)) {
                     if (!is_factory_body) {
+                        char display[256];
+                        format_mangled_word_style(obj_name, display, sizeof(display));
+                        // The space before `.` matches the source-code
+                        // shape `Option of int .Some(...)`.
+                        const char *dot_sp = strchr(display, ' ') ? " " : "";
                         fprintf(stderr,
-                            "error:%d: enum values are formed with factories, not `%s.%s(...)`\n",
-                            n->line, obj_name, m);
+                            "error:%d: enum values are formed with factories, not `%s%s.%s(...)`\n",
+                            n->line, display, dot_sp, m);
                         fprintf(stderr,
                             "  help: use `none of T ()`, `some of T (v)`, "
                             "`ok of T, E (v)`, or `err of T, E (e)`\n");
@@ -725,13 +765,15 @@ static Type check_expr(Checker *c, Node *n) {
                     return make_struct(obj_name);
                 }
                 if (sym_t.kind == TYPE_UNKNOWN && is_struct(c, obj_name)) {
+                    char display[256];
+                    format_mangled_word_style(obj_name, display, sizeof(display));
                     fprintf(stderr,
                         "error:%d: type expression `%s` is not a value\n",
-                        n->line, obj_name);
+                        n->line, display);
                     fprintf(stderr,
                         "  help: form a value with `%s()` or "
                         "`%s(field is value, ...)` first, then call `%s(...)` on it\n",
-                        obj_name, obj_name, m);
+                        display, display, m);
                     exit(1);
                 }
             }

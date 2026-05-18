@@ -1,234 +1,31 @@
 # Potato Examples 🥔
 
-## Hello World
-```
-use std/string
+Runnable example programs live in
+[`../examples/`](../examples/). Each file is a self-contained
+program with a `spark { }` entry point; run any of them with:
 
-spark {
-  yell("hello world")
-}
-```
-
-## FizzBuzz
-```
-use std/string
-
-spark {
-  through (i from 1 to 100 by 1) {
-    i mod 15 eq 0 ?{
-      yell("fizzbuzz")
-    } i mod 3 eq 0 ?{
-      yell("fizz")
-    } i mod 5 eq 0 ?{
-      yell("buzz")
-    } nah {
-      yell(i)
-    }
-  }
-}
+```bash
+./erbos run examples/<name>.ptt
 ```
 
-## Fibonacci
-```
-fib(n int) int {
-  n le 1 ?{ give n }
-  give fib(n - 1) + fib(n - 2)
-}
+| File | What it shows |
+|------|---------------|
+| `examples/hello.ptt` | minimal entry point + `yell` |
+| `examples/fizzbuzz.ptt` | `through` range loop + `?{ } nah { }` chain |
+| `examples/concat.ptt` | string interpolation, `+`, methods |
+| `examples/loop.ptt` | `infi` + `stop` / `skip` |
+| `examples/recursion.ptt` | recursive `give` |
+| `examples/funcs.ptt` | free functions, parameters, return types |
+| `examples/methods.ptt` | `Type.method(self ref Type, ...)` |
+| `examples/struct_func.ptt` | struct construction + factory function |
+| `examples/list_methods.ptt` | `List of T` push / pop / iter |
+| `examples/map_methods.ptt`, `map_iter.ptt`, `map_update.ptt` | `Map of K, V` |
+| `examples/move_valid.ptt`, `give_ownership.ptt` | move semantics |
+| `examples/linked.ptt` | self-referential struct |
+| `examples/interp.ptt` | string interpolation deep dive |
+| `examples/kitchen_sink.ptt` | end-to-end demo touching most features |
+| `examples/task_test.ptt` | `task` placeholder (runtime not yet wired) |
 
-spark {
-  yell(fib(10))
-}
-```
-
-## Structs
-```
-Point is {
-  x int
-  y int
-}
-
-spark {
-  p is Point()
-  p.x be 3
-  p.y be 4
-  yell(p.x + p.y)
-}
-```
-
-## Collections
-```
-use std/basics
-
-spark {
-  // Typed list — zero-value formation requires `()`.
-  nums is List of int()
-  nums.push(10)
-  nums.push(20)
-  yell(nums[0])
-
-  // String-keyed map literal — lowers to `Map of String, int`
-  // because `use std/map` is in scope (via std/basics).
-  scores is ["alice" to 95, "bob" to 87]
-  yell(scores.get("alice"))
-
-  // Int-keyed map
-  memo is Map of int, int()
-  memo.set(1, 100)
-  yell(memo.get(1))
-}
-```
-
-## Enums + Error Handling
-```
-use std/string
-use std/result
-
-divide(a int, b int) Result of int, String {
-  b eq 0 ?{ give err of int, String ("division by zero") }
-  give ok of int, String (a / b)
-}
-
-spark {
-  match divide(10, 2) {
-    Ok(v) => yell(v)
-    Err(msg) => yell(msg)
-  }
-}
-```
-
-## Methods
-```
-Counter is { value int }
-
-Counter.bump(self ref Counter) {
-  self.value be self.value + 1
-}
-
-Counter.get(self Counter) int {
-  give self.value
-}
-
-spark {
-  c is Counter()
-  c.bump()
-  c.bump()
-  c.bump()
-  yell(c.get())   // 3
-}
-```
-
-## Generics
-
-Word-style only — no `<T>` anywhere. Use `of` to introduce type
-arguments and commas for additional arguments. See
-[`generics-syntax.md`](generics-syntax.md) for full rules.
-
-```
-use std/string
-
-Box of T is {
-  value T
-}
-
-Box.set(self ref Box of T, v T) {
-  self.value be v
-}
-
-Box.get(self Box of T) T {
-  give self.value
-}
-
-Pair of K, V is {
-  key K
-  value V
-}
-
-Pair.set_key(self ref Pair of K, V, k K) {
-  self.key be k
-}
-
-Pair.set_value(self ref Pair of K, V, v V) {
-  self.value be v
-}
-
-spark {
-  // Each instantiation produces its own emitted code:
-  //   Box of int            -> _Box__int
-  //   Box of String         -> _Box__String
-  //   Pair of String, int -> _Pair__String__int
-  bi is Box of int()
-  bi.set(42)
-  yell(bi.get())   // 42
-
-  bs is Box of String()
-  bs.set("hello")
-  yell(bs.get())   // hello
-
-  p is Pair of String, int()
-  p.set_key("alice")
-  p.set_value(95)
-}
-```
-
-## BST (Binary Search Tree)
-```
-TreeNode is {
-  value int
-  left int
-  right int
-}
-
-new_node(val int) TreeNode {
-  n is TreeNode()
-  n.value be val
-  n.left be nil
-  n.right be nil
-  give n
-}
-
-insert(root int, val int) int {
-  root eq nil ?{ give new_node(val) }
-  val lt root.value ?{ root.left be insert(root.left, val) }
-  val gt root.value ?{ root.right be insert(root.right, val) }
-  give root
-}
-```
-
-## Imports
-```
-use std/math
-
-spark {
-  yell(math.max(10, 20))
-  yell(math.pow(2, 8))
-}
-```
-
-## Testing
-```
-add(a int, b int) int { give a + b }
-
-test "addition" {
-  assert(add(1, 2) eq 3)
-  assert(add(-1, 1) eq 0)
-}
-```
-
-Run: `erbos test file.ptt`
-
-## Ownership
-```
-Point is { x int, y int }
-
-spark {
-  a is Point()
-  a.x be 10
-  b is now a        // move: a is dead
-  yell(b.x)        // 10
-
-  {
-    tmp is Point()  // scoped
-    tmp.x be 42
-  }                 // tmp freed here (RAII)
-}
-```
+The narrative reference for each language feature is in
+[`language-guide.md`](language-guide.md). The canonical grammar
+for value formation is [`language-law.md`](language-law.md).

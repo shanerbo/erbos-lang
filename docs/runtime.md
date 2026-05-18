@@ -26,7 +26,7 @@ language defines. They have no pure-Potato replacement.
 | `_write_bytes(ptr, len)` | Raw write(2) syscall wrapper. The kernel-layer building block; not user-callable. |
 | `_panic_oob` / `_panic_capacity` | Bounds-check / capacity-overflow panic. Print message via `_yell_str` then `exit(1)`. |
 | `_assert_fail(line)` | Print line number + " assertion failed" then `exit(1)`. The `assert(cond)` lowering target. |
-| `_alloc_<Struct>` | Per-user-struct constructor — emits `_heap_alloc(field_count*8)` then zero-fills. The latter is required for stdlib container lazy-init sentinels (`self.data eq 0`). |
+| `_alloc_<Struct>` | Per-user-struct allocator (emitted by the compiler for `Type()` zero-value formation). Calls `_heap_alloc(field_count*8)` then zero-fills. The zero-fill is required for stdlib container lazy-init sentinels (`self.data eq 0`). |
 | `_task_fire` / `_task_collapse` | No-op placeholders for the green-thread runtime not yet wired into compiled output. |
 
 ## Transitional — minor residue

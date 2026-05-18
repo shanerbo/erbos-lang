@@ -32,7 +32,7 @@ Queue of T is {
 // -----------------------------------------------------------------
 
 // Reserve capacity for `cap` elements without changing length.
-// Zero-default construction (`q is Queue of T`) is the normal
+// Zero-value formation (`q is Queue of T()`) is the normal
 // empty-value path; `reserve` is the explicit preallocation hook.
 // If the new cap is smaller than the current one or non-positive,
 // this is a no-op.

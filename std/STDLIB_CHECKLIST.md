@@ -3,9 +3,11 @@
 This document is the implementation checklist for turning `std/` from a
 prototype into a serious standard library.
 
-Read this with `README.md`, `docs/language-guide.md`,
-`docs/design-decisions.md`, and `AUDITING.md`. Do not implement a stdlib
-feature by weakening the language model. Potato stdlib code must preserve:
+Read this with `README.md`, [`../docs/language-law.md`](../docs/language-law.md)
+(canonical value-formation grammar), `../docs/language-guide.md`,
+`../docs/design-decisions.md`, and `../codex/AUDITING.md`. Do not
+implement a stdlib feature by weakening the language model.
+Potato stdlib code must preserve:
 
 - explicit ownership (`is now`, `is rep`)
 - no hidden aliases
@@ -53,29 +55,33 @@ Verified current state:
   exist yet.
 - `Arena of T` plus integer handles is now the blessed shared-data pattern
   in both docs and tests.
-- Growable containers now normalize around zero-default construction plus
-  `reserve`; only fixed-cap or semantic-value factories should remain.
+- Growable containers now normalize around zero-value formation
+  plus `reserve`; only fixed-cap or semantic-value factories should
+  remain.
 
 ## Construction and Naming Rules
 
 Verified current behavior:
 
-- Zero-default construction is the primary empty-value path:
+- Zero-value formation is the primary empty-value path. The
+  trailing `()` is required — a bare type expression is never
+  a value (see [`../docs/language-law.md`](../docs/language-law.md)):
   - non-generic structs: `StringBuilder()`, `ByteBuffer()`
-  - generic structs: `List of int`, `Stack of int`, `Queue of String`,
-    `Arena of User`
+  - generic structs: `List of int()`, `Stack of int()`,
+    `Queue of String()`, `Arena of User()`
 - Growable containers preallocate through `reserve`, not through
-  alternate constructor spellings.
-- Generic free-function templates stay bare after import by compiler
-  design. See `compiler/main.c` around the import merge rewrite:
+  alternate value-formation spellings.
+- Enum factory formation uses free functions:
   `some of int (7)`, `none of int ()`, `ok of int, String ("x")`,
-  `err of int, String ("x")`, `ring_with_cap of int (64)`.
+  `err of int, String ("x")`. `RingBuffer` keeps a dedicated
+  capacity factory: `ring_with_cap of int (64)`.
 
 Normalization target:
 
 - Keep the language-level two-form construction model for structs:
-  zero-default and named-arg.
-- Prefer zero-default construction for fresh empty values.
+  zero-value formation `Type()` and named-field formation
+  `Type(field is value, ...)`.
+- Prefer zero-value formation for fresh empty values.
 - Use `reserve` on growable containers when preallocation matters.
 - Keep enum/fallible-value factories bare:
   `some`, `none`, `ok`, `err`.
@@ -84,7 +90,8 @@ Normalization target:
 - Do not add `Type.new(...)` as an additional public convention while
   the language already has struct construction and free factories.
 - Do not normalize toward type-receiver calls like
-  `List of int .with_cap(64)`.
+  `List of int .with_cap(64)` (rejected by the parser per the
+  language-law cleanup).
 
 ## Phase 0: Foundation Types
 
@@ -151,7 +158,7 @@ Purpose: growable contiguous array.
 
 Required API:
 
-- zero-default construction: `xs is List of T`
+- zero-value formation: `xs is List of T()`
 - `List.reserve(self ref List of T, cap int)`
 - `List.len(self List of T) int`
 - `List.cap(self List of T) int`
@@ -201,7 +208,7 @@ Purpose: double-ended queue with O(1) amortized pushes/pops at both ends.
 
 Required API:
 
-- zero-default construction: `d is Deque of T`
+- zero-value formation: `d is Deque of T()`
 - `Deque.reserve(self ref Deque of T, cap int)`
 - `Deque.len(self Deque of T) int`
 - `Deque.cap(self Deque of T) int`
@@ -238,7 +245,7 @@ Purpose: LIFO container. Replace current int-only helper module.
 
 Required API:
 
-- zero-default construction: `s is Stack of T`
+- zero-value formation: `s is Stack of T()`
 - `Stack.reserve(self ref Stack of T, cap int)`
 - `Stack.len(self Stack of T) int`
 - `Stack.empty(self Stack of T) bool`
@@ -269,7 +276,7 @@ helper module.
 
 Required API:
 
-- zero-default construction: `q is Queue of T`
+- zero-value formation: `q is Queue of T()`
 - `Queue.reserve(self ref Queue of T, cap int)`
 - `Queue.len(self Queue of T) int`
 - `Queue.empty(self Queue of T) bool`
@@ -302,7 +309,7 @@ scan and should be replaced or renamed as a tiny map.
 
 Required API:
 
-- zero-default construction: `m is Map of K, V`
+- zero-value formation: `m is Map of K, V()`
 - `Map.reserve(self ref Map of K, V, cap int)`
 - `Map.len(self Map of K, V) int`
 - `Map.cap(self Map of K, V) int`
@@ -345,7 +352,7 @@ Purpose: unique-value collection.
 
 Required API:
 
-- zero-default construction: `s is Set of T`
+- zero-value formation: `s is Set of T()`
 - `Set.reserve(self ref Set of T, cap int)`
 - `Set.len(self Set of T) int`
 - `Set.empty(self Set of T) bool`
@@ -422,7 +429,7 @@ Purpose: efficient repeated string construction.
 
 Required API:
 
-- zero-default construction: `b is StringBuilder()`
+- zero-value formation: `b is StringBuilder()`
 - `StringBuilder.reserve(self ref StringBuilder, cap int)`
 - `StringBuilder.len(self StringBuilder) int`
 - `StringBuilder.empty(self StringBuilder) bool`
@@ -453,7 +460,7 @@ Purpose: raw byte storage for I/O, parsing, and binary protocols.
 
 Required API:
 
-- zero-default construction: `b is ByteBuffer()`
+- zero-value formation: `b is ByteBuffer()`
 - `ByteBuffer.reserve(self ref ByteBuffer, cap int)`
 - `ByteBuffer.len(self ByteBuffer) int`
 - `ByteBuffer.cap(self ByteBuffer) int`
@@ -489,7 +496,7 @@ refcounting, inheritance, or long-lived borrows.
 
 Required API:
 
-- zero-default construction: `a is Arena of T`
+- zero-value formation: `a is Arena of T()`
 - `Arena.reserve(self ref Arena of T, cap int)`
 - `Arena.len(self Arena of T) int`
 - `Arena.add(self ref Arena of T, value T) int`
@@ -519,7 +526,7 @@ Purpose: arena with deletion and slot reuse.
 
 Required API:
 
-- zero-default construction: `p is Pool of T`
+- zero-value formation: `p is Pool of T()`
 - `Pool.reserve(self ref Pool of T, cap int)`
 - `Pool.insert(self ref Pool of T, value T) int`
 - `Pool.remove(self ref Pool of T, id int) bool`
@@ -556,7 +563,7 @@ it.
 
 Required API:
 
-- zero-default construction: `pq is PriorityQueue of T`
+- zero-value formation: `pq is PriorityQueue of T()`
 - `PriorityQueue.reserve(self ref PriorityQueue of T, cap int)`
 - `PriorityQueue.len(self PriorityQueue of T) int`
 - `PriorityQueue.empty(self PriorityQueue of T) bool`
@@ -588,7 +595,7 @@ Purpose: fixed-capacity bounded buffer.
 
 Required API:
 
-- `RingBuffer.with_cap(cap int) RingBuffer of T`
+- `ring_with_cap of T (cap int) RingBuffer of T` (free-function factory)
 - `RingBuffer.len(self RingBuffer of T) int`
 - `RingBuffer.cap(self RingBuffer of T) int`
 - `RingBuffer.empty(self RingBuffer of T) bool`
@@ -621,7 +628,7 @@ tracking once the language has a clear user-facing bitwise story.
 
 Required API:
 
-- `BitSet.with_len(bits int) BitSet`
+- `bitset_with_len(bits int) BitSet` (free-function factory; matches `ring_with_cap` shape)
 - `BitSet.len(self BitSet) int`
 - `BitSet.get(self BitSet, i int) bool`
 - `BitSet.set(self ref BitSet, i int)`
@@ -681,7 +688,7 @@ Purpose: actual I/O. Requires compiler/runtime syscall support.
 
 Required API:
 
-- `File.open(path String, mode String) Result of File, String`
+- `open_file(path String, mode String) Result of File, String` (free-function factory)
 - `File.read_all(self ref File) Result of String, String`
 - `File.read_bytes(self ref File) Result of ByteBuffer, String`
 - `File.write_string(self ref File, s String) Result of int, String`
@@ -708,11 +715,11 @@ Purpose: buffered I/O on top of `File`.
 
 Required API:
 
-- `Reader.new(file File) Reader`
+- `new_reader(file File) Reader` (free-function factory)
 - `Reader.read_byte(self ref Reader) Result of int, String`
 - `Reader.read_line(self ref Reader) Result of String, String`
 - `Reader.read_to_end(self ref Reader) Result of String, String`
-- `Writer.new(file File) Writer`
+- `new_writer(file File) Writer` (free-function factory)
 - `Writer.write(self ref Writer, s String) Result of int, String`
 - `Writer.write_line(self ref Writer, s String) Result of int, String`
 - `Writer.flush(self ref Writer) Result of void, String`
@@ -738,7 +745,7 @@ Purpose: common algorithm/data modeling support using arena + indexes.
 
 Required API:
 
-- zero-default construction: `g is Graph of T`
+- zero-value formation: `g is Graph of T()`
 - `Graph.add_node(self ref Graph of T, value T) int`
 - `Graph.add_edge(self ref Graph of T, from int, to int)`
 - `Graph.node(self Graph of T, id int) T`

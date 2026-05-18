@@ -207,17 +207,21 @@ Keyword + operator tables: [`docs/keywords.md`](docs/keywords.md).
 ## Status
 
 **Implemented.** Integer/bool/byte arithmetic. Strings + interpolation.
-Functions, recursion, type inference. Structs (zero-default +
-named-arg construction; struct-typed fields auto-init).
+Functions, recursion, type inference. Structs (zero-value +
+named-field formation; struct-typed fields auto-init).
 Lists, maps (String- or int-keyed), arrays. Conditionals,
 range/collection/while loops. Move semantics with use-after-move
 detection. **Deep clone via `is rep`.** Plain `q is p` for heap-shaped
 values rejected (must use `now` or `rep` explicitly). `nomut`
 (rebind + field-mut). Methods (with `ref self` for mutation).
-Generics + monomorphization. Enums + `match` with typed bindings.
-Multi-file imports with `potato.toml` project root. Stdlib
-(`std/string`, `std/list`, `std/map`, `std/math`, `std/queue`,
-`std/stack`, `std/basics`) bundled with the compiler binary.
+Generics + monomorphization. Enums + `match` with typed bindings;
+`Option of T` and `Result of T, E` formed via factories
+(`none` / `some` / `ok` / `err`). Multi-file imports with
+`potato.toml` project root. Stdlib (`std/string`, `std/list`,
+`std/map`, `std/option`, `std/result`, `std/stack`,
+`std/queue`, `std/deque`, `std/ring_buffer`, `std/arena`,
+`std/byte_buffer`, `std/string_builder`, `std/math`,
+`std/algo`, `std/basics`) bundled with the compiler binary.
 Built-in test framework. Five-pass IR optimizer (inlining, SRA,
 escape analysis, BCE, LICM). Bounds-checked array/list/map access.
 Helpful import-error messages (suggests `potato.toml`, etc.).
@@ -226,8 +230,8 @@ Helpful import-error messages (suggests `potato.toml`, etc.).
 - Green-thread runtime exists in `compiler/runtime/` but isn't
   wired into compiled output.
 
-**Roadmap.** `Result of T, E`. Caret + source-context error
-messages. File I/O. Default `_<Type>_yell` for debugging.
+**Roadmap.** Hash `Map`. `Set of T`. `Path` / `File` / `Reader` /
+`Writer`. `Pool of T`. Caret + source-context error messages.
 
 **Explicitly NOT on the roadmap** (see design-decisions log):
 operator overloading, traits/interfaces, async, macros,

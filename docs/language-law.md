@@ -1,10 +1,10 @@
 # Language Law: Type Expressions And Value Formation
 
-This document is the source of truth for the grammar cleanup around
-type expressions, value formation, and enum factories.
-
-This is a language-law change. Do not preserve backward compatibility.
-The old mixed grammar is to be removed.
+This document is the source of truth for the value-formation
+grammar — type expressions, value formation, and enum factories.
+The parser, checker, and tests enforce exactly what is written
+here. If code and this document disagree, code wins; update the
+document.
 
 ## Terms
 
@@ -214,6 +214,11 @@ Result of int, String .Err("bad")
   - [x] `README.md`
   - [x] `docs/language-guide.md`
   - [x] stdlib comments/examples that describe old forms
+  - [x] `std/STDLIB_CHECKLIST.md` (target API for unimplemented modules + construction-rules section)
+  - [x] `std/queue.ptt` and `std/list.ptt` doc-comments
+  - [x] historical-log header on `docs/design-decisions.md`;
+        in-block examples that read as live guidance updated to the
+        new grammar
 - [x] Rewrite existing tests/examples/docs to the new grammar only.
 - [x] Remove dual syntax; do not keep compatibility shims.
 - [x] Do not claim completion until `make test` passes.

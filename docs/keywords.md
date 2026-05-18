@@ -27,7 +27,7 @@ name resolved by `use`.
 | `true` / `false` | booleans | `x is true` |
 | `nil` | null pointer | `root eq nil` |
 | `array` | typed-storage primitive (`array of T`, `array of byte`) — **contextual**, see note below | `xs is array of int with cap 8` |
-| `with` / `cap` | array constructor parts — **contextual**, see note below | `array of int with cap 8` |
+| `with` / `cap` | array allocation parts — **contextual**, see note below | `array of int with cap 8` |
 | `of` | generic type connective | `List of int`, `Map of String, int` |
 | `match` | pattern match on enum | `match r { Ok(v) => ... }` |
 | `use` | import module | `use std/math` |
@@ -71,8 +71,12 @@ true reserved words.
 | `//` | single-line comment |
 | `/* */` | multi-line comment |
 
-> Generics use word-style `of` and `to` only — there is **no** `<T>`
-> syntax in any type position. See [`generics-syntax.md`](generics-syntax.md).
+> Generics use word-style `of` only — type arguments are
+> comma-separated. There is **no** `<T>` syntax in any type
+> position, and `to` is not a generic separator (it remains
+> reserved for `through (i from 0 to n by 1)` range loops and
+> `["k" to v]` map literals). See the "Generics" section in
+> [`language-guide.md`](language-guide.md).
 
 > **Note on `task`:** the green-thread runtime in `compiler/runtime/`
 > is exercised by `make test-runtime` (C-level harness) but is not

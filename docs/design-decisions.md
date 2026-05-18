@@ -1,5 +1,15 @@
 # Potato Design Decisions 🥔
 
+> **Historical log — not normative.** This file is an
+> append-only record of language-design discussions. Older
+> entries describe the language *as it stood at the time* of
+> the decision, including syntax that may have been replaced
+> by a later cleanup. For the current grammar, see
+> [`language-law.md`](language-law.md). For the current
+> user-facing reference, see [`language-guide.md`](language-guide.md).
+> Code examples in older entries should be read as
+> archaeological evidence, not as "this still works".
+
 A running log of language-design discussions: what was proposed, what
 was decided, and the first-principles reasoning. Append-only — when
 a decision is revisited, add a new dated entry rather than editing
@@ -308,7 +318,7 @@ copying:
 
 ```
 // The arena owns the data
-images is List of Image
+images is List of Image()
 img_id is images.len()
 images.push(load("foo.png"))
 
@@ -524,7 +534,7 @@ We considered three options:
 | Option | What | Trade |
 |---|---|---|
 | A. Auto-init | `_alloc_<X>` recursively allocates struct-typed fields. | Hidden allocation per construction. Matches user expectation: "every field starts at its type's zero value" extends to "an empty List for List fields, an empty String for String fields, ...". |
-| B. Require explicit init | User must use named-arg form `Store(items is List of Item)` for any struct with struct-typed fields. | No hidden allocation. But makes zero-default useless for any struct that contains a stdlib collection — every Store-like type forces verbose construction. |
+| B. Require explicit init | User must use named-field form `Store(items is List of Item())` for any struct with struct-typed fields. | No hidden allocation. But makes zero-value formation useless for any struct that contains a stdlib collection — every Store-like type forces verbose construction. |
 | C. Runtime null-check | Insert null-deref guards on every method call. | Per-access overhead. Doesn't fix the actual problem, just turns a segfault into a panic. |
 
 Picked A. The principle "no hidden allocations" was meant to
@@ -1032,9 +1042,9 @@ this entry documents the gaps and what tightened them.
    prior owned value. Same for `obj.field be now src`. Stress
    test would show:
 
-       a is List of int; a.push(1)
+       a is List of int(); a.push(1)
        through (i from 0 to 1000 by 1) {
-         fresh is List of int
+         fresh is List of int()
          fresh.push(i)
          a be now fresh   // a's previous List header + array leaks here
        }

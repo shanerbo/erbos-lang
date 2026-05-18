@@ -94,7 +94,24 @@ automatically when `use std/map` is in scope.
 
 Struct and enum names must start with an uppercase letter
 (PascalCase). The grammar uses leading-case to disambiguate
-`Foo()` (constructor) from `foo()` (call) at parse time.
+`Foo()` (zero-value formation) from `foo()` (free-function call)
+at parse time.
+
+## Enums
+
+Enum values are formed only through factory functions; there is
+no `Type.variant(...)` value-form. The stdlib provides:
+
+| Factory | Forms | Used for |
+|---------|-------|----------|
+| `none of T ()` | `Option of T` (None branch) | `std/option` |
+| `some of T (v)` | `Option of T` (Some branch) | `std/option` |
+| `ok of T, E (v)` | `Result of T, E` (Ok branch) | `std/result` |
+| `err of T, E (e)` | `Result of T, E` (Err branch) | `std/result` |
+
+User-defined enums need their own factory function (a free
+function that returns the enum type) to be constructible from
+user code. See [`language-law.md`](language-law.md).
 
 ## Tasks (concurrency placeholder)
 
@@ -126,10 +143,24 @@ use std/basics       // bundle: String + List + Map
 use std/string       // String, String.* methods, int.to_string
 use std/list         // List of T
 use std/map          // Map of K, V (any K, including String)
+use std/option       // Option of T; factories: none, some
+use std/result       // Result of T, E; factories: ok, err
+use std/stack        // Stack of T (push / pop / peek / try_*)
+use std/queue        // Queue of T (push / pop / front / try_*)
+use std/deque        // Deque of T (push_back / push_front / ...)
+use std/ring_buffer  // RingBuffer of T (formed via ring_with_cap)
+use std/arena        // Arena of T (append-only, integer handles)
+use std/byte_buffer  // ByteBuffer (raw growable bytes)
+use std/string_builder  // StringBuilder (efficient repeated build)
 use std/math         // min, max, abs, pow
-use std/queue        // queue.new, push, pop, size, empty
-use std/stack        // stack.new, push, pop, peek, size, empty
+use std/algo         // int sorting / search helpers
 ```
+
+Container types from `std/stack` / `std/queue` / `std/deque` /
+`std/arena` use the language's standard value-formation rules:
+`s is Stack of int()`, `q is Queue of String()`, etc. The full
+target API per type is tracked in
+[`../std/STDLIB_CHECKLIST.md`](../std/STDLIB_CHECKLIST.md).
 
 ## Banned from user code
 

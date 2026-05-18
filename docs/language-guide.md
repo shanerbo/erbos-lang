@@ -171,9 +171,11 @@ Fields can be separated by commas, newlines, or both. Use
 whichever fits — short structs read fine on one line; longer
 ones get the multiline form.
 
-There are two ways to construct a struct value:
+There are two ways to construct a struct value. The grammar
+that distinguishes type expressions from values is documented
+in [`language-law.md`](language-law.md); the short version:
 
-**Zero-default** — every field starts at the type's zero value:
+**Zero-value formation** — every field starts at the type's zero value:
 
 ```
 p is Point()
@@ -181,25 +183,26 @@ p.x be 10
 p.y be 20
 ```
 
-**Named-arg** — atomic init, every declared field set in one go:
+**Named-field formation** — atomic init, every declared field set in one go:
 
 ```
 p is Point(x is 10, y is 20)
 ```
 
-Rules for named-arg construction:
+Rules for named-field formation:
 
 - Every declared field must appear exactly once.
 - Order in the call is free; values land in declared field order.
 - Each value's type must match the field's declared type.
 - Mixing named and positional args (`Point(1, y is 2)`) is a
   compile error.
-- Positional struct constructors (`Point(1, 2)`) are not allowed —
-  they tie call sites to declaration order with no syntactic
-  warning. Use named-arg or define a factory method.
+- Positional formation (`Point(1, 2)`) is not allowed —
+  it ties call sites to declaration order with no syntactic
+  warning. Use named-field formation or define a factory function.
 
-Use whichever form fits. Zero-default is cheaper to write when
-you'll mutate fields anyway. Named-arg is required when you want
+Use whichever form fits. Zero-value formation is cheaper to
+write when you'll mutate fields anyway. Named-field formation
+is required when you want
 the binding to be `nomut` (see below) or when you want refactor-
 safe construction that breaks loudly if a new field is added.
 
@@ -261,13 +264,16 @@ Rules:
   to. `Foo.bar(self Bar) { ... }` is a compile error.
 - Struct and enum names must start with an uppercase letter
   (PascalCase). The grammar uses the leading-case rule to
-  disambiguate `Foo()` (struct constructor) from `foo()`
+  disambiguate `Foo()` (zero-value formation of a struct) from `foo()`
   (function call) at parse time. The checker errors with a
   suggested capitalized form on any lowercase-leading struct
   or enum.
-- Methods on enum types work the same way:
+- Methods on enum types work the same way. The receiver clause
+  carries the enum's full type expression (including type
+  arguments for generic enums):
   ```
-  Result.tag(self Result) int { give 99 }
+  use std/result
+  Result.tag(self Result of int, String) int { give 99 }
   ```
 - Method dispatch is statically resolved. The compiler emits each method as
   `_<Type>_<name>` (for example `_Counter_bump`), so different types can
@@ -350,6 +356,30 @@ Rules:
   `Map of K, V`, `Result of T, E`, `Pair of A, B`.
 - Instantiating an undeclared template is a compile error
   ("cannot instantiate 'Foo<int>' — no generic type named 'Foo' is in scope").
+
+### Why no parens / no `<>`
+
+Zero parens in type position means zero precedence rules to
+memorise. Right-associative `of` chaining reads naturally:
+
+```
+List of Map of int, List of String
+//   parses as:
+List of (Map of int, (List of String))
+```
+
+The parser consumes comma-separated type arguments after `of`
+while the next token still looks like a type argument. There
+is no `<>` form anywhere in the language; word-style is the
+only shape.
+
+### No tuple / pair types
+
+`Map of K, V` stores its entries as parallel `array of K` and
+`array of V` fields, not as an `array of Pair<K, V>`. Users
+who want a 2-tuple define their own named struct. Adding
+language-level tuples is parked — see
+[`design-decisions.md`](design-decisions.md).
 
 ## Lists
 
@@ -645,14 +675,27 @@ Use `as` when two imported files have similar prefixes
 - `std/string` — `String`, `String.*`, `int.to_string`
 - `std/list` — `List of T`
 - `std/map` — `Map of K, V` (K = int, pointer-shaped, or String)
+- `std/option` — `Option of T` and the `none` / `some` factories
+- `std/result` — `Result of T, E` and the `ok` / `err` factories
+- `std/stack` — `Stack of T` (LIFO)
+- `std/queue` — `Queue of T` (FIFO)
+- `std/deque` — `Deque of T` (double-ended)
+- `std/ring_buffer` — `RingBuffer of T` (fixed-capacity, formed
+  with `ring_with_cap of T (cap)`)
+- `std/arena` — `Arena of T` (append-only, integer handles)
+- `std/byte_buffer` — `ByteBuffer` (raw growable bytes)
+- `std/string_builder` — `StringBuilder` (efficient repeated build)
 - `std/math` — `min`, `max`, `abs`, `pow`
-- `std/queue`, `std/stack` — bounded fixed-cap queues / stacks
+- `std/algo` — int sorting and search helpers
 - `std/basics` — bundle (re-exports String + List + Map)
 
 `use std/string` is required whenever your program uses `String`
 in any form (literal `"..."`, type name, method call). The
 auto-load that used to make this implicit is gone — every import
 is now explicit.
+
+The full target API per type is tracked in
+[`../std/STDLIB_CHECKLIST.md`](../std/STDLIB_CHECKLIST.md).
 
 ## Testing
 
