@@ -1263,7 +1263,8 @@ static Node *parse_struct_def(Parser *p) {
     int line = cur(p)->line;
     char *name = eat(p, TOK_IDENT)->value;
 
-    // Optional generic-parameter list: `Map<K, V> is { ... }`.
+    // Optional generic-parameter list: word-style
+    // `Map of K to V is { ... }` (the legacy `<>` form is gone).
     char **type_params = NULL;
     int type_param_count = parse_type_params(p, &type_params);
 
@@ -1511,11 +1512,12 @@ Node *parser_parse(Parser *p) {
             Node *m = parse_func_def(p);
             m->func_def.receiver_type = recv;
             // Extract receiver_type_args from the first param's type
-            // string. parse_type_name emits the legacy <>-bracketed
-            // form for the monomorphizer's benefit; we re-parse it
-            // here to lift the type variable names out.
+            // string. parse_type_name emits the internal <>-bracketed
+            // form for the monomorphizer's benefit (user-facing syntax
+            // is word-style `of T` / `of K to V`); we re-parse the
+            // internal form here to lift the type variable names out.
             //
-            // Examples:
+            // Examples (internal mangled form, NOT source syntax):
             //   first param type = "Box<T>"           -> ["T"]
             //   first param type = "Map<K,V>"         -> ["K", "V"]
             //   first param type = "Counter"          -> []

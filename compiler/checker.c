@@ -1044,12 +1044,13 @@ static Type check_expr(Checker *c, Node *n) {
             // parameter — read it off val_type when available.
             if (obj_t.kind == TYPE_STRUCT && obj_t.val_type)
                 return *obj_t.val_type;
-            // ε3 chained-index support: for stdlib `List__<T>`,
-            // `Map__<K>__<V>`, `StringMap__<V>` structs, infer the
-            // element type from the `data` field of the struct
-            // definition. Without this, `grid[0][0]` on
-            // `List of List of int` types the inner index as
-            // TYPE_UNKNOWN and falls back to legacy header decoding.
+            // ε3 chained-index support: for monomorphised stdlib
+            // structs (`List__int`, `Map__int__int`,
+            // `StringMap__int`, etc.), infer the element type from
+            // the `data` field of the struct definition. Without
+            // this, `grid[0][0]` on `List of List of int` types
+            // the inner index as TYPE_UNKNOWN and falls back to
+            // legacy header decoding.
             if (obj_t.kind == TYPE_STRUCT && obj_t.struct_name) {
                 StructInfo *si = find_struct(c, obj_t.struct_name);
                 if (si) {

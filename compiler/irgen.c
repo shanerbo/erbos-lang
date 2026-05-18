@@ -905,7 +905,7 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
             // (set by the monomorph seed-literals pass when the
             // `List` template is in scope), route through the
             // stdlib `List of T` constructor + per-item push:
-            //   tmp is List of <T>
+            //   tmp is List of <inferred-elem-type>
             //   tmp.push(items[0]); tmp.push(items[1]); ...
             //
             // Otherwise (no `use std/list`), fall through to the

@@ -113,8 +113,9 @@ void iropt_run(IRProgram *ir, IROptLevel level, Node *program) {
 //     a follow-up dead-symbol pass could prune unused ones).
 //
 // Why even the trivial case is valuable: post-monomorphization,
-// every accessor on a generic type (`Box<T>.get`, `Pair<K,V>.key`,
-// etc.) is a single-block function with a load + return. Without
+// every accessor on a generic type (`Box of T` -> `Box.get`,
+// `Pair of K to V` -> `Pair.key`, etc.) is a single-block
+// function with a load + return. Without
 // inlining, every read of `b.value` goes through a `bl _Box_get`
 // with stack-spill overhead; with inlining, it becomes a direct
 // `ldr`. That's the single biggest perf delta on the std/map hot
@@ -294,8 +295,9 @@ static int inline_one_call(IRFunc *caller, IRBlock *block, int call_idx,
 }
 
 // Inline every eligible call in every block of every function.
-// Single-pass: an inlined body might expose new inlinable calls (e.g.
-// after we materialise a Box<T>.get inside Pair<K,V>.get), but the
+// Single-pass: an inlined body might expose new inlinable calls
+// (e.g. after we materialise a `Box of T` get inside a
+// `Pair of K to V` get), but the
 // trivial-leaf criterion guarantees no nested calls in inlined bodies,
 // so a single pass suffices for the current bar. When the inlinability
 // bar widens to allow nested calls, this should be a fixed-point loop.
@@ -336,7 +338,8 @@ static void iropt_inline(IRProgram *ir) {
 // in dedicated stack slots that the regalloc can promote to
 // registers if their lifetime fits.
 //
-// Net effect for the std/map hot path: a Pair<K,V> constructed
+// Net effect for the std/map hot path: a `Pair of K to V`
+// constructed
 // inside a method body and never returned / passed elsewhere stops
 // being a heap allocation entirely, and its key/value field
 // accesses become direct local-slot reads/writes instead of two-

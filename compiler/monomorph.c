@@ -23,22 +23,30 @@
 //
 //   4. Rewrites each parametric type-name string to its mangled form:
 //
-//          Box<int>            ->  Box__int
-//          Map<str, int>       ->  Map__str__int
-//          List<Pair<str,int>> ->  List__Pair__str__int
+//          Box<int>                  ->  Box__int
+//          Map<String, int>          ->  Map__String__int
+//          List<Pair<String,int>>    ->  List__Pair__String__int
+//
+//      The `<>` bracketed form is the *internal* representation used
+//      between parser and monomorphizer. User-facing source syntax is
+//      word-style (`Map of String to int`, `List of Pair of String to
+//      int`); parse_type_name in compiler/parser.c emits the bracketed
+//      form for the monomorphizer's benefit.
 //
 //      Both the queued-instantiation table entries and every type
 //      expression in the program are rewritten in lockstep so that the
-//      checker and codegen see a uniform "no angle brackets" world.
+//      checker and codegen see a uniform "no angle brackets" world
+//      (the `__` mangled form on the right above).
 //
 //   5. Appends the monomorphic clones to the program's struct and
 //      function tables. Discovery of *new* parametric types inside a
 //      clone is iterative: cloning may produce new instantiations
-//      (e.g. List<Pair<str, int>> contains Pair<str, int>), so the
-//      worklist runs to fixpoint.
+//      (e.g. List<Pair<String, int>> contains Pair<String, int>), so
+//      the worklist runs to fixpoint.
 //
 // Discovery of an instantiation whose template is unknown (e.g.
-// `Foo<int>` when no `Foo<T>` is declared) is a compile error.
+// `Foo<int>` when no `Foo of T is { ... }` is declared) is a compile
+// error.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -202,8 +210,12 @@ static char *mangle_type(const char *s) {
 // arrays of length count. The returned string is freshly allocated.
 //
 // Substitution applies to bare identifiers AND to head-of-instantiation
-// names. So if K -> "str" and V -> "int", "Pair<K, V>" becomes
-// "Pair<str, int>", and a bare "K" becomes "str".
+// names. So if K -> "String" and V -> "int", "Pair<K, V>" becomes
+// "Pair<String, int>", and a bare "K" becomes "String".
+//
+// The `<>` notation here is the *internal* mangled form used by
+// monomorphization, NOT user-facing syntax. Source-level Potato
+// uses word-style generics: `Pair of K to V`, not `Pair<K, V>`.
 static char *substitute_type(const char *s, char **params, char **concrete,
                              int count) {
     if (!s) return NULL;
