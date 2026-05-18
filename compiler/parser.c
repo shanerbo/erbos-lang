@@ -862,7 +862,20 @@ static Node *parse_stmt(Parser *p) {
             //     followed by `(` (which would be a constructor call
             //     parsed as a regular expression).
             int explicit_type_consumed = 0;
-            if (at(p, TOK_INT) || at(p, TOK_STR_TYPE) || at(p, TOK_BOOL) ||
+            // Codex P2-16: `x str` variable annotations are also
+            // rejected — same teaching error as type positions
+            // elsewhere. Without this guard the var-decl path would
+            // silently treat `str` as `String`.
+            if (at(p, TOK_STR_TYPE)) {
+                fprintf(stderr,
+                    "error:%d: `str` is no longer a type — use `String` "
+                    "(from `std/string`) instead\n", cur(p)->line);
+                fprintf(stderr,
+                    "  help: replace `str` with `String` and add "
+                    "`use std/string` at the top of the file\n");
+                exit(1);
+            }
+            if (at(p, TOK_INT) || at(p, TOK_BOOL) ||
                 ((at(p, TOK_LIST) || at(p, TOK_MAP) || at(p, TOK_IMAP) || at(p, TOK_TASK)) && peek_at(p, 1)->type != TOK_LPAREN)) {
                 if (at(p, TOK_TASK)) {
                     n->var_decl.type_name = "task";
@@ -1130,7 +1143,23 @@ static Node *parse_enum_def(Parser *p) {
 // "List<List<int>>". This keeps the monomorph + mangling code below
 // unchanged — only the surface syntax differs from the original P3.
 static char *parse_type_name(Parser *p) {
-    if (!at(p, TOK_IDENT) && !at(p, TOK_INT) && !at(p, TOK_STR_TYPE) &&
+    // Codex P2-16: `str` was a transitional alias for the
+    // stdlib `String` struct during the str→String rewrite.
+    // CLAUDE.md and the design docs are explicit that there is
+    // no `str → String` sugar; the lexer still produces
+    // TOK_STR_TYPE so we can surface a teaching error here.
+    // Any code using `str` in a type position must migrate to
+    // `String` and `use std/string`.
+    if (at(p, TOK_STR_TYPE)) {
+        fprintf(stderr,
+            "error:%d: `str` is no longer a type — use `String` "
+            "(from `std/string`) instead\n", cur(p)->line);
+        fprintf(stderr,
+            "  help: replace `str` with `String` and add "
+            "`use std/string` at the top of the file\n");
+        exit(1);
+    }
+    if (!at(p, TOK_IDENT) && !at(p, TOK_INT) &&
         !at(p, TOK_BOOL) && !at(p, TOK_VOID) && !at(p, TOK_LIST) &&
         !at(p, TOK_MAP) && !at(p, TOK_IMAP) && !at(p, TOK_TASK)) {
         // Caller's responsibility to surface a useful error; just take
@@ -1449,18 +1478,32 @@ Node *parser_parse(Parser *p) {
         // type-parameter names from that string after parsing.
         //
         // Methods on primitive types (P3.2): the receiver token is a
-        // primitive type keyword (str / int / bool) instead of an
+        // primitive type keyword (int / bool) instead of an
         // identifier. We accept those and synthesize the receiver_type
-        // string from the keyword spelling. This is what allows
-        // `str.len(self str) int { ... }` to register `_str_len` as a
-        // method that `"hello".len()` dispatches to.
+        // string from the keyword spelling.
+        //
+        // Codex P2-16: `str.foo(self str)` method-def headers are
+        // rejected here for the same reason `str` is rejected as a
+        // type — the canonical text type is the `String` struct in
+        // std/string.ptt. Methods on String are written with
+        // `String.foo(self String)` and live alongside the struct
+        // definition.
         else if ((at(p, TOK_IDENT) || at(p, TOK_STR_TYPE) || at(p, TOK_INT) ||
                   at(p, TOK_BOOL)) &&
                  peek_at(p, 1)->type == TOK_DOT &&
                  peek_at(p, 2)->type == TOK_IDENT && peek_at(p, 3)->type == TOK_LPAREN) {
+            if (at(p, TOK_STR_TYPE)) {
+                fprintf(stderr,
+                    "error:%d: `str` is no longer a type — methods on "
+                    "text values go on `String` (from `std/string`)\n",
+                    cur(p)->line);
+                fprintf(stderr,
+                    "  help: change `str.foo(self str)` to "
+                    "`String.foo(self String)`\n");
+                exit(1);
+            }
             char *recv;
-            if (at(p, TOK_STR_TYPE))      { recv = strdup("str");  p->pos++; }
-            else if (at(p, TOK_INT))      { recv = strdup("int");  p->pos++; }
+            if (at(p, TOK_INT))           { recv = strdup("int");  p->pos++; }
             else if (at(p, TOK_BOOL))     { recv = strdup("bool"); p->pos++; }
             else                          { recv = eat(p, TOK_IDENT)->value; }
             eat(p, TOK_DOT);

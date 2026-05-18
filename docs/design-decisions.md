@@ -1565,3 +1565,47 @@ in this commit because the existing module-call dispatch
 infrastructure (find_func with `<alias>_<func>` symbol names)
 fits the rewrite shape; restructuring the checker is a bigger
 sweep.
+
+## 2026-05-17 — Retire the legacy `str` type (P2-16)
+
+CLAUDE.md, the language guide, and the keywords reference all
+say there is no `str → String` sugar. The lexer still
+recognised `str` as a keyword (TOK_STR_TYPE) and the parser
+silently accepted it in type positions and on method-def
+heads, transparently treating it as `String`. The audit's
+expected direction is removal — the design-consistent
+behaviour is that programs migrate to `String` and add
+`use std/string`.
+
+Implementation:
+
+- `parse_type_name` (parser entry for type positions) errors
+  on TOK_STR_TYPE with a teaching message and `help:` line.
+- The variable-annotation path (`x is str`) errors before
+  consuming the TOK_STR_TYPE.
+- The method-def head (`str.foo(self str)`) errors before
+  recording the receiver type, suggesting the user move the
+  method to `String.foo(self String)`.
+- The lexer keeps producing TOK_STR_TYPE so the parser can
+  surface a single unique error rather than fall back to
+  generic "unknown identifier."
+
+The `TYPE_STR` enum value and the dead-branch comparisons in
+the checker are retained as transitional fossil — nothing in
+the source path produces TYPE_STR anymore, but the existing
+"is this a string?" predicate cells still test it as a
+fallback. A future cleanup can delete those when the
+str-rewrite phase is fully retired in `docs/string-rewrite.md`.
+
+Test: `tests/errors/legacy_str_type.ptt` — a function
+parameter typed `str`, expected to error at the parser with
+the teaching diagnostic.
+
+Lesson: deprecated transitional features should fail loudly,
+not silently. Keeping `str` accepted "for backwards
+compatibility" was a low-grade UX bug — every user reading
+documentation would conclude `str` was retired and write
+`String`, but copy-pasting old examples or older agent output
+would silently work, masking the migration. A clean error
+makes the deprecation visible and surfaces the migration step
+(add `use std/string`) at the right moment.

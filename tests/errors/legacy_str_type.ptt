@@ -1,0 +1,16 @@
+// Codex audit P2-16: the legacy `str` type was a transitional
+// alias for the canonical `String` stdlib struct during the
+// str→String rewrite. CLAUDE.md and the design docs say
+// there is no `str → String` sugar, but the parser silently
+// accepted `str` in type positions and treated it as `String`.
+//
+// Now `str` in any type position errors at the parser with a
+// teaching message: use `String` from `std/string`.
+
+greet(x str) {
+  yell(x)
+}
+
+spark {
+  greet("hello")
+}

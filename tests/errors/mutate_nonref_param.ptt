@@ -1,0 +1,16 @@
+// AUDITING required regression: "Mutation through non-ref heap
+// parameter." The calling convention says non-`ref` parameters are
+// read-only — assigning to a field of one must error at the
+// checker, not silently mutate caller storage.
+
+Box is { v int }
+
+bump(b Box) {
+  b.v be 42  // <-- not allowed: `b` is a non-ref param
+}
+
+spark {
+  bx is Box(v is 7)
+  bump(bx)
+  yell(bx.v)
+}
