@@ -3,7 +3,10 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>        // access(2), realpath()
+#include <spawn.h>         // posix_spawn, posix_spawnp
+#include <errno.h>
 #include <mach-o/dyld.h>   // _NSGetExecutablePath (macOS)
+extern char **environ;
 #include "lexer.h"
 #include "parser.h"
 #include "monomorph.h"
@@ -26,6 +29,77 @@ static char *read_file(const char *path) {
     buf[len] = '\0';
     fclose(f);
     return buf;
+}
+
+// Codex P1-13 round 2: spawn an external command without going
+// through the shell. `system()` runs `/bin/sh -c`, which means
+// every argument has to be quoted/escaped against the shell's
+// rules — and single quotes in a path can't be escaped inside
+// single quotes. `posix_spawn` takes argv directly, so the path
+// text never reaches a shell parser.
+//
+// Returns the wait-status convention used elsewhere:
+//   - WIFEXITED: returns WEXITSTATUS
+//   - WIFSIGNALED: returns 128 + WTERMSIG (shell convention)
+//   - everything else: 1
+//
+// `prog` is looked up via posix_spawnp (PATH search). Pass an
+// absolute path if PATH search is undesirable. argv must be
+// NULL-terminated.
+static int spawn_argv(const char *prog, char *const argv[]) {
+    pid_t pid;
+    int rc = posix_spawnp(&pid, prog, NULL, NULL, argv, environ);
+    if (rc != 0) {
+        fprintf(stderr, "error: failed to spawn '%s': %s\n", prog, strerror(rc));
+        return 1;
+    }
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) {
+        fprintf(stderr, "error: waitpid failed for '%s'\n", prog);
+        return 1;
+    }
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+    return 1;
+}
+
+// Capture stdout from a command. Used to read `xcrun --show-sdk-path`
+// once at link time. Returns 1 on success; writes the trimmed output
+// into `out`. The captured output's trailing newline is stripped.
+static int capture_stdout(const char *prog, char *const argv[],
+                          char *out, size_t out_size) {
+    int pipefd[2];
+    if (pipe(pipefd) != 0) return 0;
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addclose(&fa, pipefd[0]);
+    posix_spawn_file_actions_adddup2(&fa, pipefd[1], STDOUT_FILENO);
+    posix_spawn_file_actions_addclose(&fa, pipefd[1]);
+    pid_t pid;
+    int rc = posix_spawnp(&pid, prog, &fa, NULL, argv, environ);
+    posix_spawn_file_actions_destroy(&fa);
+    close(pipefd[1]);
+    if (rc != 0) {
+        close(pipefd[0]);
+        return 0;
+    }
+    size_t n = 0;
+    while (n + 1 < out_size) {
+        ssize_t r = read(pipefd[0], out + n, out_size - 1 - n);
+        if (r <= 0) break;
+        n += (size_t)r;
+    }
+    out[n] = '\0';
+    close(pipefd[0]);
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) return 0;
+    // Trim trailing newline / whitespace.
+    while (n > 0 && (out[n - 1] == '\n' || out[n - 1] == '\r' ||
+                     out[n - 1] == ' ' || out[n - 1] == '\t')) {
+        out[--n] = '\0';
+    }
+    return n > 0;
 }
 
 // Locate the directory containing this compiler binary. On macOS,
@@ -1480,50 +1554,93 @@ int main(int argc, char **argv) {
     EMIT_IR_TO_FILE(asm_path);
     if (!run_mode) printf("generated %s\n", asm_path);
 
-    // Assemble + link.
-    // Codex P1-13 (partial): paths with spaces now build because
-    // every path argument is wrapped in single quotes. Paths
-    // containing a literal `'` still break — single quotes don't
-    // escape themselves in shell. Full fix is posix_spawn with
-    // argv (no shell at all), tracked as follow-up. The
-    // common case (paths with spaces) works; pathological
-    // characters in paths still don't.
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "as -o '%s.o' '%s'", out_name, asm_path);
-    if (system(cmd) != 0) { fprintf(stderr, "error: assembly failed\n"); return 1; }
+    // Assemble + link via posix_spawn — no shell, so paths with
+    // spaces, apostrophes, or any other shell-special characters
+    // pass straight through to the assembler/linker as argv
+    // strings. Codex P1-13 round 2.
+    char obj_path[1024];
+    snprintf(obj_path, sizeof(obj_path), "%s.o", out_name);
 
-    snprintf(cmd, sizeof(cmd), "ld -o '%s' '%s.o' -lSystem -syslibroot $(xcrun --show-sdk-path) -e _start", out_name, out_name);
-    if (system(cmd) != 0) { fprintf(stderr, "error: linking failed\n"); return 1; }
+    {
+        char *as_argv[] = {
+            "as", "-o", obj_path, asm_path, NULL
+        };
+        if (spawn_argv("as", as_argv) != 0) {
+            fprintf(stderr, "error: assembly failed\n");
+            return 1;
+        }
+    }
 
-    // Cleanup
-    snprintf(cmd, sizeof(cmd), "rm -f '%s.o' '%s.s'", out_name, out_name);
-    system(cmd);
+    // Capture the SDK path once. `xcrun --show-sdk-path` was
+    // previously embedded as `$(xcrun ...)` in a shell command;
+    // now we run xcrun ourselves and pass the output as an
+    // explicit `-syslibroot <path>` argv pair.
+    char sdk_path[1024] = {0};
+    {
+        char *xcrun_argv[] = { "xcrun", "--show-sdk-path", NULL };
+        if (!capture_stdout("xcrun", xcrun_argv,
+                            sdk_path, sizeof(sdk_path))) {
+            fprintf(stderr, "error: failed to query SDK path "
+                            "(`xcrun --show-sdk-path`)\n");
+            return 1;
+        }
+    }
+
+    {
+        char *ld_argv[] = {
+            "ld", "-o", out_name, obj_path,
+            "-lSystem", "-syslibroot", sdk_path,
+            "-e", "_start", NULL
+        };
+        if (spawn_argv("ld", ld_argv) != 0) {
+            fprintf(stderr, "error: linking failed\n");
+            return 1;
+        }
+    }
+
+    // Cleanup intermediate artifacts. unlink() takes a path
+    // string directly; no shell layer to misparse it.
+    unlink(obj_path);
+    unlink(asm_path);
 
     if (run_mode) {
-        // Run the binary. If `out_name` is a bare basename (no `/`),
-        // prepend `./` so the shell finds it via the cwd rather than
-        // searching $PATH — otherwise an unrelated binary with the
-        // same name on $PATH gets executed (or, more commonly, the
-        // shell errors with "command not found" because the basename
-        // isn't on $PATH at all).
-        char run_cmd[1024];
+        // Run the binary by absolute or cwd-relative path. We
+        // construct one argv element to match the existing
+        // semantics: a basename (no `/`) gets `./` prepended so
+        // the cwd binary runs rather than a same-named file on
+        // PATH; an absolute or cwd-rooted path runs as-is.
+        char run_path[1024];
         if (strchr(out_name, '/'))
-            snprintf(run_cmd, sizeof(run_cmd), "'%s'", out_name);
+            snprintf(run_path, sizeof(run_path), "%s", out_name);
         else
-            snprintf(run_cmd, sizeof(run_cmd), "./'%s'", out_name);
-        int ret = system(run_cmd);
-        // Delete binary after running
-        snprintf(cmd, sizeof(cmd), "rm -f '%s'", out_name);
-        system(cmd);
+            snprintf(run_path, sizeof(run_path), "./%s", out_name);
+        char *run_argv[] = { run_path, NULL };
+        // Use posix_spawn (not posix_spawnp) so the explicit
+        // `./<name>` resolves against cwd, not PATH.
+        pid_t pid;
+        int rc = posix_spawn(&pid, run_path, NULL, NULL, run_argv, environ);
+        int ret;
+        if (rc != 0) {
+            fprintf(stderr, "error: failed to spawn '%s': %s\n",
+                run_path, strerror(rc));
+            ret = 1;
+        } else {
+            int status = 0;
+            waitpid(pid, &status, 0);
+            // Codex P1-10: propagate signals as 128+signum so the
+            // shell convention surfaces them. WEXITSTATUS is
+            // undefined for signal-terminated children — pre-fix,
+            // a SIGSEGV in the user's program reported as exit 0
+            // from `erbos run`, hiding crashes from CI / shell-
+            // script callers.
+            if (WIFEXITED(status)) ret = WEXITSTATUS(status);
+            else if (WIFSIGNALED(status)) ret = 128 + WTERMSIG(status);
+            else ret = 1;
+        }
+        // Delete binary after running.
+        unlink(out_name);
         free(src);
-        // Codex P1-10: propagate signals as 128+signum so the
-        // shell convention surfaces them. WEXITSTATUS is undefined
-        // for signal-terminated children — pre-fix, a SIGSEGV in
-        // the user's program reported as exit 0 from `erbos run`,
-        // hiding crashes from CI / shell-script callers.
-        if (WIFEXITED(ret)) return WEXITSTATUS(ret);
-        if (WIFSIGNALED(ret)) return 128 + WTERMSIG(ret);
-        return 1;
+        return ret;
     }
 
     printf("built %s\n", out_name);

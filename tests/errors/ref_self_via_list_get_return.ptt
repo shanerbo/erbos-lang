@@ -1,0 +1,32 @@
+// Codex audit hardening for task #142.
+//
+// A non-ref `List of Counter` parameter is read-only by the language
+// model. `List.get` returns an alias to backing storage for heap-shaped
+// elements, so calling a `ref self` method on that return value would
+// mutate the caller's list without a visible `ref` at the call site.
+//
+// This file must stay a compile-fail test. A conservative checker may
+// reject it directly; a more precise checker may reject it after
+// consulting method return-alias metadata.
+
+use std/string
+use std/list
+
+Counter is {
+  value int
+}
+
+Counter.bump(self ref Counter) {
+  self.value be self.value + 1
+}
+
+touch(xs List of Counter) {
+  xs.get(0).bump()
+}
+
+spark {
+  xs is List of Counter
+  xs.push(Counter(value is 0))
+  touch(xs)
+  yell(xs.get(0).value)
+}

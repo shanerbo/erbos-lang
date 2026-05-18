@@ -4,6 +4,7 @@
 // method calls through field/index chains.
 
 use std/string
+use std/list
 
 Counter is { value int }
 Holder is { counter Counter }
@@ -36,4 +37,21 @@ test "bare ref-self call on local works (control)" {
   c is Counter()
   c.bump()
   assert(c.value eq 1)
+}
+
+// Task #142 positive: when `xs` is a `ref` parameter, the
+// receiver walker traces through `xs.get(0)` (an alias-returning
+// method) and finds the ref param, allowing the call.
+bump_first(xs ref List of Counter) {
+  xs.get(0).bump()
+}
+
+test "ref param allows ref-self call through xs.get(i)" {
+  xs is List of Counter
+  c is Counter()
+  c.value be 5
+  xs.push(c)
+  bump_first(ref xs)
+  bump_first(ref xs)
+  assert(xs.get(0).value eq 7)
 }

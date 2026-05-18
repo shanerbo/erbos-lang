@@ -1609,3 +1609,125 @@ documentation would conclude `str` was retired and write
 would silently work, masking the migration. A clean error
 makes the deprecation visible and surfaces the migration step
 (add `use std/string`) at the right moment.
+
+## 2026-05-17 — Posix-spawn for assembler/linker/run (P1-13 round 2)
+
+The earlier P1-13 fix wrapped every shell argument in single
+quotes. That handles the common case (paths with spaces) but
+still breaks on paths containing a literal `'` because single
+quotes don't escape themselves inside single-quoted strings.
+The proper fix — flagged at the time as a follow-up — is to
+stop using `system()` entirely; pass argv directly to
+`posix_spawn` so no shell parses the path text.
+
+Codex's regression suite extended `make test` with a
+`test-paths` recipe that creates `/tmp/potato path ' quote/`
+and runs `erbos run` on a file inside it. Pre-fix that recipe
+fails with the assembler complaining about three split-up
+"file"s (`/tmp/potato`, `path`, ` quote/main.s`). Post-fix it
+runs cleanly.
+
+Implementation:
+
+- `spawn_argv(prog, argv)` helper wraps `posix_spawnp` +
+  `waitpid`. Returns the WIFEXITED / WIFSIGNALED-aware
+  status convention (signals → 128+signum) shared with the
+  P1-10 run-mode propagation.
+- `capture_stdout(prog, argv, out, n)` runs a child that
+  writes to a pipe; used to capture
+  `xcrun --show-sdk-path` once at link time. The captured
+  path is then passed as an explicit `-syslibroot <path>`
+  argv pair to `ld`, replacing the previous embedded shell
+  expansion.
+- Cleanup of intermediate `.o` / `.s` artifacts and the run-
+  mode binary uses `unlink()` directly — no shell layer that
+  could misparse paths with metacharacters.
+
+Run mode uses `posix_spawn` (not `posix_spawnp`) so an
+explicit `./<binary>` resolves against cwd rather than PATH —
+matching the previous shell behaviour where the user's
+binary in cwd shadowed any same-named executable on PATH.
+
+Test: `tests/fixtures/path_quote_main.ptt` plus the
+`test-paths` recipe driving it through a directory whose name
+contains both ` ` and `'`.
+
+What this teaches: shell-string command construction is a
+solved problem in two ways — escape every argument
+exhaustively, or skip the shell entirely. The former always
+loses to a corner case eventually; the latter is what
+production toolchains do. The earlier round-1 fix's note
+("single quotes in the path itself would still break") was
+correct triage, just not implemented in that commit. Round 2
+finishes the job.
+
+## 2026-05-17 — Conservative escape analysis for ref-self via List/Map/StringMap.get (task #142)
+
+The receiver walker for `ref self` enforcement (P0-2) traced
+through `NODE_FIELD_ACCESS` and `NODE_INDEX` to a root
+`NODE_IDENT`, but treated every `NODE_METHOD_CALL` as a
+transient. That correctly admits `make_counter().bump()`
+(where `make_counter` returns a fresh struct), but
+incorrectly admits `xs.get(0).bump()` where `xs.get(i)`
+returns a *view* into the receiver's element storage. A
+non-ref `xs` parameter would still be mutated through the
+returned alias.
+
+Codex empirically verified the bug: `touch(xs List of
+Counter)` could mutate `xs[0].v` from 5 to 6 with the
+non-ref signature.
+
+Fix (conservative, narrow): the walker now treats a
+`NODE_METHOD_CALL` whose method name is `get` as a "view
+through the receiver" — recursing into the inner method's
+receiver and re-running the same root analysis. Concretely:
+
+    xs.get(0).bump()
+    └── method bump's `self ref`?  yes
+        └── walk receiver `xs.get(0)`:
+              method "get" → recurse into `xs`
+              `xs` is a non-ref param → reject
+
+Why "method name == get" rather than a real per-method
+attribute: stdlib `List.get`, `Map.get`, and `StringMap.get`
+are the three known accessors that return aliased element
+storage. They all use the same name. A user-defined `Foo.get`
+that returns a fresh value would be falsely rejected — but
+the trade-off favours soundness over the rare false positive.
+A future escape-analysis pass or a `@returns_alias` attribute
+can replace the hardcoded list cleanly.
+
+Why not extend the walker to every method-call: that would
+reject legitimate transient cases like `make_counter().bump()`
+where the method is a free constructor. The walker
+distinguishes:
+
+- `NODE_CALL` (free function): always transient, no walk.
+- `NODE_METHOD_CALL` with method != "get": transient (today).
+- `NODE_METHOD_CALL` with method == "get": walk into receiver.
+
+This is a proper extension — the walker now traces deeper
+when the syntactic shape signals aliasing — and stops at
+free-function calls (which never alias caller storage by
+construction).
+
+Tests:
+
+- `tests/errors/ref_self_via_method_get.ptt` — depth-1
+  reject (`xs.get(0).bump()` on non-ref `xs`).
+- `tests/errors/ref_self_via_method_get_field.ptt` — depth-2
+  reject (`xs.get(0).inner.bump()`, mixed method-call and
+  field-access in the chain).
+- `tests/test_ref_self_walk.ptt` extended with a positive
+  case: ref-param `xs` allows `xs.get(0).bump()`.
+
+What this teaches: escape analysis is a real language
+feature, but a surface-level pattern match on the stdlib's
+own naming convention captures the practical 90% of cases
+without restructuring the type system. The discipline is to
+document why the heuristic is sound for the known cases
+(only stdlib methods named `get` return aliased element
+storage; the convention is intentional) and acknowledge the
+false-positive risk for user types that adopt the same name
+without the same semantics. When the false-positive case
+shows up, that's the signal to upgrade to a real attribute.

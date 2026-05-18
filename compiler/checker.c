@@ -755,14 +755,38 @@ static Type check_expr(Checker *c, Node *n) {
                     int self_is_ref = user_method->param_is_ref
                         ? user_method->param_is_ref[0] : 0;
                     if (self_is_ref) {
+                        // Walk the receiver expression to its
+                        // root identifier. Known accessor methods
+                        // that return *aliased* caller storage
+                        // (List.get, Map.get) are walked through
+                        // the same way as field/index access —
+                        // their result is a view into the
+                        // receiver, so a `ref self` mutation on
+                        // the result mutates the receiver's
+                        // storage too. (Codex task #142.)
+                        //
+                        // Future-proofing: a real escape-analysis
+                        // pass or a per-method "returns aliased
+                        // storage" attribute would replace the
+                        // hardcoded list. For today's stdlib the
+                        // set is small and explicit; the gap was
+                        // empirically demonstrated for `List.get`.
                         Node *root = n->method_call.object;
                         while (root && root->type != NODE_IDENT) {
                             if (root->type == NODE_FIELD_ACCESS) {
                                 root = root->field_access.object;
                             } else if (root->type == NODE_INDEX) {
                                 root = root->index_access.object;
+                            } else if (root->type == NODE_METHOD_CALL &&
+                                       root->method_call.method &&
+                                       (!strcmp(root->method_call.method, "get"))) {
+                                // List.get / Map.get / StringMap.get
+                                // return a view into the receiver;
+                                // continue walking through the
+                                // receiver of `get`.
+                                root = root->method_call.object;
                             } else {
-                                root = NULL;   // transient
+                                root = NULL;   // transient — fresh value, no alias
                             }
                         }
                         if (root && root->type == NODE_IDENT) {

@@ -1,0 +1,25 @@
+// Codex audit leak regression.
+//
+// Named-arg construction must not leak the auto-init'd empty `String`
+// when the same field is overwritten by a string literal. `make test`
+// runs this binary under macOS `leaks --atExit`.
+
+use std/string
+
+Holder is {
+  name String
+  count int
+}
+
+make_holder(i int) Holder {
+  give Holder(name is "literal-name", count is i)
+}
+
+spark {
+  through (i from 0 to 200 by 1) {
+    h is make_holder(i)
+    h.name.len() eq 12 ?{
+      yell(h.count)
+    }
+  }
+}

@@ -20,8 +20,9 @@ $(OUT): $(COMPILER_SRC) compiler/*.h
 clean:
 	rm -f $(OUT) *.o *.s examples/*.s examples/*.o tests/ir/*.s tests/ir/*.o
 	rm -f $(addprefix tests/ir/,$(notdir $(basename $(wildcard tests/ir/*.ptt))))
+	rm -f tests/leaks/*.s tests/leaks/*.o tests/leaks/named_arg_string_literal
 
-test: $(OUT) test-pass test-fail test-runtime test-framework test-ir
+test: $(OUT) test-pass test-fail test-runtime test-framework test-ir test-paths test-leaks
 	@echo ""
 	@echo "All tests passed."
 
@@ -80,7 +81,7 @@ test-fail: $(OUT)
 	done; \
 	[ $$fail -eq 0 ] || (echo "Some failure tests did not error"; exit 1)
 
-.PHONY: all clean test test-pass test-fail test-runtime test-framework test-ir
+.PHONY: all clean test test-pass test-fail test-runtime test-framework test-ir test-paths test-leaks
 
 # Run every tests/ir/*.ptt through the framework runner
 # (`erbos test`) at each optimization level. Each test file uses
@@ -134,3 +135,34 @@ test-framework: $(OUT)
 		fi; \
 	done; \
 	[ $$fail -eq 0 ] || (echo "Some framework tests failed"; exit 1)
+
+test-paths: $(OUT)
+	@echo "=== Path handling regressions ==="
+	@fail=0; \
+	tmp="/tmp/potato path ' quote"; \
+	rm -rf "$$tmp"; \
+	mkdir -p "$$tmp"; \
+	cp tests/fixtures/path_quote_main.ptt "$$tmp/main.ptt"; \
+	if ./$(OUT) run "$$tmp/main.ptt" > /dev/null 2>&1; then \
+		echo "  OK:   source path with space and apostrophe"; \
+	else \
+		echo "  FAIL: source path with space and apostrophe"; fail=1; \
+	fi; \
+	rm -rf "$$tmp"; \
+	[ $$fail -eq 0 ] || (echo "Some path handling tests failed"; exit 1)
+
+test-leaks: $(OUT)
+	@echo "=== Leak regressions ==="
+	@fail=0; \
+	src=tests/leaks/named_arg_string_literal.ptt; \
+	asm=named_arg_string_literal.s; \
+	rm -f "$$asm" named_arg_string_literal named_arg_string_literal.o; \
+	if ! ./$(OUT) ir "$$src" > /dev/null 2>&1; then \
+		echo "  FAIL: $$src did not lower to IR"; fail=1; \
+	elif awk '/^_make_holder:/{inside=1; next} inside && /^_/{inside=0} inside && /bl _alloc_String/{bad=1} END{exit bad ? 1 : 0}' "$$asm"; then \
+		echo "  OK:   named-arg String literal constructor avoids leaked auto-init"; \
+	else \
+		echo "  FAIL: named-arg String literal constructor leaks auto-init"; fail=1; \
+	fi; \
+	rm -f "$$asm" named_arg_string_literal named_arg_string_literal.o; \
+	[ $$fail -eq 0 ] || (echo "Some leak tests failed"; exit 1)

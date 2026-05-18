@@ -1,0 +1,25 @@
+// Codex task #142, depth-2 case: walker traces field-access
+// through method-call. `xs.get(0)` returns alias; `.inner` is
+// a field read on that alias; `.bump()` is the `ref self`
+// method that mutates caller storage.
+
+use std/list
+
+Inner is { v int }
+Outer is { inner Inner }
+
+Inner.bump(self ref Inner) {
+  self.v be self.v + 1
+}
+
+touch(xs List of Outer) {
+  xs.get(0).inner.bump()
+}
+
+spark {
+  xs is List of Outer
+  o is Outer()
+  o.inner.v be 5
+  xs.push(o)
+  touch(xs)
+}
