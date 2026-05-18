@@ -1504,6 +1504,16 @@ static void check_stmt(Checker *c, Node *n) {
                 }
                 mark_moved_sym(c, src);
             }
+            // F-002: `local is now arr[i]` extracts the slot's pointer
+            // and nulls the slot in one step. Stash the element struct
+            // name into type_name so irgen heap-tracks the new local
+            // with the correct `_drop_<X>` symbol. The slot-null write
+            // is emitted by irgen.
+            if (n->var_decl.is_move &&
+                n->var_decl.value->type == NODE_INDEX &&
+                t.kind == TYPE_STRUCT && t.struct_name) {
+                n->var_decl.type_name = (char *)t.struct_name;
+            }
             // `b is rep a` deep-clones the source. Stash the source's
             // struct name (when known) into type_name so irgen can
             // emit `bl _clone_<StructName>`. Without this, irgen has
@@ -1596,6 +1606,16 @@ static void check_stmt(Checker *c, Node *n) {
                     exit(1);
                 }
                 mark_moved_sym(c, src);
+            }
+            // F-002: `q be now arr[i]` extracts the slot's pointer
+            // and nulls the slot. Stash the element struct name so
+            // irgen tags the destination's heap-tracking with the
+            // correct `_drop_<X>` symbol when re-marking after the
+            // move. (Source slot has no symbol-level liveness state.)
+            if (n->assign.is_move &&
+                n->assign.value->type == NODE_INDEX &&
+                new_t.kind == TYPE_STRUCT && new_t.struct_name) {
+                n->assign.src_struct_name = (char *)new_t.struct_name;
             }
             // `q be rep p` stashes source struct name for irgen's
             // `_clone_<X>` dispatch.

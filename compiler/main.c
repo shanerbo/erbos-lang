@@ -642,6 +642,178 @@ static int resolve_use_path(const char *use_path,
     return 0;
 }
 
+// Returns 1 iff `name` matches the name of a struct declared in
+// the program. Used to decide whether a field type spelling
+// (e.g. an `array__<elem>` element type) resolves to a heap-
+// shaped struct that needs per-element drop / clone, rather than
+// a primitive that can be byte-copied / freed in bulk.
+static int struct_in_program(Node *program, const char *name) {
+    if (!name) return 0;
+    for (int sj = 0; sj < program->program.structs.count; sj++) {
+        if (!strcmp(program->program.structs.items[sj]->struct_def.name,
+                    name)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Emit `_drop_array_<E>(arr_hdr_ptr)` — frees an `array of E`
+// where E is a heap-shaped struct, using the cap-bounded null-
+// guarded iteration convention. Iterates the data buffer and
+// calls `_drop_<E>` on each non-null slot before freeing the
+// data buffer (cap*8 bytes) and the 16-byte header.
+//
+// Convention: a slot is "owned by the array" iff its pointer is
+// non-null. Heap_alloc zero-fills both the bump and free-list-
+// reuse paths, so freshly allocated capacity is null. The Set /
+// Map containers preserve this invariant: every state-byte
+// transition that releases a slot first releases the data
+// pointer (or is OK with cap-bounded drop because Set.remove
+// leaves the cloned value in the slot for parent-drop to free).
+//
+// List does NOT use this helper because List.pop and
+// List.remove leave the popped value's pointer in the slot;
+// cap-bounded drop would re-drop a value the caller now owns.
+// `_drop_<List__T>` emits a count-bounded inline loop instead.
+//
+// Frame: 48 bytes — x29/x30 + x19/x20 + x21/(slot for i).
+// x21 = arr_hdr (preserved across the loop's bl _drop_<E>).
+// i lives in [sp, #40] because there's no extra callee-save
+// register pair to spill it into.
+static void emit_drop_array_helper(FILE *ir_out, const char *elem) {
+    fprintf(ir_out, ".globl _drop_array_%s\n.p2align 2\n_drop_array_%s:\n",
+            elem, elem);
+    fprintf(ir_out, "    cbz x0, _drop_array_%s_done\n", elem);
+    fprintf(ir_out, "    stp x29, x30, [sp, #-48]!\n");
+    fprintf(ir_out, "    stp x19, x20, [sp, #16]\n");
+    fprintf(ir_out, "    str x21, [sp, #32]\n");
+    fprintf(ir_out, "    mov x29, sp\n");
+    fprintf(ir_out, "    mov x21, x0\n");
+    // x19 = cap, x20 = data_ptr.
+    fprintf(ir_out, "    ldr x19, [x21, #0]\n");
+    fprintf(ir_out, "    ldr x20, [x21, #8]\n");
+    fprintf(ir_out, "    cbz x20, _drop_array_%s_freehdr\n", elem);
+    // i (loop counter) lives at sp+40.
+    fprintf(ir_out, "    str xzr, [sp, #40]\n");
+    fprintf(ir_out, "_drop_array_%s_loop:\n", elem);
+    fprintf(ir_out, "    ldr x9, [sp, #40]\n");
+    fprintf(ir_out, "    cmp x9, x19\n");
+    fprintf(ir_out, "    b.ge _drop_array_%s_freebuf\n", elem);
+    fprintf(ir_out, "    ldr x0, [x20, x9, lsl #3]\n");
+    fprintf(ir_out, "    cbz x0, _drop_array_%s_inc\n", elem);
+    fprintf(ir_out, "    bl _drop_%s\n", elem);
+    fprintf(ir_out, "_drop_array_%s_inc:\n", elem);
+    fprintf(ir_out, "    ldr x9, [sp, #40]\n");
+    fprintf(ir_out, "    add x9, x9, #1\n");
+    fprintf(ir_out, "    str x9, [sp, #40]\n");
+    fprintf(ir_out, "    b _drop_array_%s_loop\n", elem);
+    // Free data buffer (cap * 8 bytes).
+    fprintf(ir_out, "_drop_array_%s_freebuf:\n", elem);
+    fprintf(ir_out, "    mov x0, x20\n");
+    fprintf(ir_out, "    lsl x1, x19, #3\n");
+    fprintf(ir_out, "    bl _heap_free\n");
+    // Free the 16-byte header.
+    fprintf(ir_out, "_drop_array_%s_freehdr:\n", elem);
+    fprintf(ir_out, "    mov x0, x21\n");
+    fprintf(ir_out, "    mov x1, #16\n");
+    fprintf(ir_out, "    bl _heap_free\n");
+    fprintf(ir_out, "    ldr x21, [sp, #32]\n");
+    fprintf(ir_out, "    ldp x19, x20, [sp, #16]\n");
+    fprintf(ir_out, "    ldp x29, x30, [sp], #48\n");
+    fprintf(ir_out, "_drop_array_%s_done:\n", elem);
+    fprintf(ir_out, "    ret\n\n");
+}
+
+// Emit `_clone_array_<E>(src_arr_hdr) -> new_arr_hdr` — deep-
+// clones an `array of E` where E is a heap-shaped struct. Allocates
+// a fresh 16-byte header + fresh data buffer, then per-slot calls
+// `_clone_<E>` on each non-null source pointer (or stores null when
+// the source slot is null). Returns the new header pointer in x0.
+//
+// Frame: 64 bytes — x29/x30 + x19/x20 + x21/x22 + x23/x24.
+//   x19 = src arr hdr, x20 = new arr hdr, x21 = cap,
+//   x22 = src data ptr, x23 = new data ptr, x24 = loop i.
+static void emit_clone_array_helper(FILE *ir_out, const char *elem) {
+    fprintf(ir_out, ".globl _clone_array_%s\n.p2align 2\n_clone_array_%s:\n",
+            elem, elem);
+    // null source -> return null (caller's null-guard skips the call,
+    // but be conservative so nothing relies on the caller's check).
+    fprintf(ir_out, "    cbnz x0, _clone_array_%s_body\n", elem);
+    fprintf(ir_out, "    ret\n");
+    fprintf(ir_out, "_clone_array_%s_body:\n", elem);
+    fprintf(ir_out, "    stp x29, x30, [sp, #-64]!\n");
+    fprintf(ir_out, "    stp x19, x20, [sp, #16]\n");
+    fprintf(ir_out, "    stp x21, x22, [sp, #32]\n");
+    fprintf(ir_out, "    stp x23, x24, [sp, #48]\n");
+    fprintf(ir_out, "    mov x29, sp\n");
+    fprintf(ir_out, "    mov x19, x0\n");
+    fprintf(ir_out, "    ldr x21, [x19, #0]\n");
+    fprintf(ir_out, "    ldr x22, [x19, #8]\n");
+    fprintf(ir_out, "    mov x0, #16\n");
+    fprintf(ir_out, "    bl _heap_alloc\n");
+    fprintf(ir_out, "    mov x20, x0\n");
+    fprintf(ir_out, "    str x21, [x20, #0]\n");
+    fprintf(ir_out, "    lsl x0, x21, #3\n");
+    fprintf(ir_out, "    bl _heap_alloc\n");
+    fprintf(ir_out, "    mov x23, x0\n");
+    fprintf(ir_out, "    str x23, [x20, #8]\n");
+    fprintf(ir_out, "    cbz x22, _clone_array_%s_done\n", elem);
+    fprintf(ir_out, "    mov x24, #0\n");
+    fprintf(ir_out, "_clone_array_%s_loop:\n", elem);
+    fprintf(ir_out, "    cmp x24, x21\n");
+    fprintf(ir_out, "    b.ge _clone_array_%s_done\n", elem);
+    fprintf(ir_out, "    ldr x0, [x22, x24, lsl #3]\n");
+    fprintf(ir_out, "    cbnz x0, _clone_array_%s_clone\n", elem);
+    fprintf(ir_out, "    str xzr, [x23, x24, lsl #3]\n");
+    fprintf(ir_out, "    b _clone_array_%s_inc\n", elem);
+    fprintf(ir_out, "_clone_array_%s_clone:\n", elem);
+    fprintf(ir_out, "    bl _clone_%s\n", elem);
+    fprintf(ir_out, "    str x0, [x23, x24, lsl #3]\n");
+    fprintf(ir_out, "_clone_array_%s_inc:\n", elem);
+    fprintf(ir_out, "    add x24, x24, #1\n");
+    fprintf(ir_out, "    b _clone_array_%s_loop\n", elem);
+    fprintf(ir_out, "_clone_array_%s_done:\n", elem);
+    fprintf(ir_out, "    mov x0, x20\n");
+    fprintf(ir_out, "    ldp x23, x24, [sp, #48]\n");
+    fprintf(ir_out, "    ldp x21, x22, [sp, #32]\n");
+    fprintf(ir_out, "    ldp x19, x20, [sp, #16]\n");
+    fprintf(ir_out, "    ldp x29, x30, [sp], #64\n");
+    fprintf(ir_out, "    ret\n\n");
+}
+
+// Collect every distinct heap-shaped element struct E that
+// appears in some struct field as `array__E`. Result is a malloc'd
+// deduplicated array of strdup'd names. Caller frees each entry
+// and the array.
+static char **collect_heap_array_elems(Node *program, int *count_out) {
+    int cap = 0, n = 0;
+    char **names = NULL;
+    for (int si = 0; si < program->program.structs.count; si++) {
+        Node *s = program->program.structs.items[si];
+        for (int fi = 0; fi < s->struct_def.field_count; fi++) {
+            const char *ft = s->struct_def.field_types[fi];
+            if (!ft || strncmp(ft, "array__", 7) != 0) continue;
+            const char *elem = ft + 7;
+            if (!strcmp(elem, "byte") || !strcmp(elem, "int") ||
+                !strcmp(elem, "bool")) continue;
+            if (!struct_in_program(program, elem)) continue;
+            int dup = 0;
+            for (int k = 0; k < n; k++) {
+                if (!strcmp(names[k], elem)) { dup = 1; break; }
+            }
+            if (dup) continue;
+            if (n >= cap) {
+                cap = cap ? cap * 2 : 8;
+                names = realloc(names, cap * sizeof(char *));
+            }
+            names[n++] = strdup(elem);
+        }
+    }
+    *count_out = n;
+    return names;
+}
+
 int main(int argc, char **argv) {
     // Recognize a --help-style ask before anything else. Without
     // this, `erbos --help` falls into the .ptt-input path and dies
@@ -1186,6 +1358,25 @@ int main(int argc, char **argv) {
         fprintf(ir_out, ".global _start\n.align 2\n");                          \
         fprintf(ir_out, ".section __TEXT,__text\n\n");                          \
         runtime_emit_builtins(ir_out);                                          \
+        /* Emit one `_drop_array_<E>` and `_clone_array_<E>` helper           \
+         * per heap-shaped element struct E referenced as                     \
+         * `array of E` in some struct field. Set/Map/Pool delegate           \
+         * to these via cap-bounded null-guarded iteration; List              \
+         * has a different invariant (pop/remove leave the slot               \
+         * non-null but transferred-out) and uses an inline                   \
+         * count-bounded loop in `_drop_<List__T>` / `_clone_<List__T>`       \
+         * instead. Primitive- and byte-element arrays still use the          \
+         * existing inline cleanup. */                                        \
+        {                                                                       \
+            int hae_count = 0;                                                  \
+            char **hae = collect_heap_array_elems(program, &hae_count);         \
+            for (int hi = 0; hi < hae_count; hi++) {                            \
+                emit_drop_array_helper(ir_out, hae[hi]);                        \
+                emit_clone_array_helper(ir_out, hae[hi]);                       \
+            }                                                                   \
+            for (int hi = 0; hi < hae_count; hi++) free(hae[hi]);               \
+            free(hae);                                                          \
+        }                                                                       \
         for (int si = 0; si < program->program.structs.count; si++) {           \
             Node *s = program->program.structs.items[si];                       \
             int size = s->struct_def.field_count * 8;                           \
@@ -1362,57 +1553,81 @@ int main(int argc, char **argv) {
                     fprintf(ir_out, "_clone_%s_skip%d:\n",                      \
                         s->struct_def.name, fi);                                \
                 } else if (is_array_field) {                                    \
-                    /* Inline copy of the array: 16-byte header (cap@0,         \
-                     * data@8) + cap*esz data bytes. Skip on null source.       \
-                     * Layout assumptions match emit_scope_cleanup's array      \
-                     * cleanup path in compiler/irgen.c. */                     \
+                    /* Two array-field clone shapes:                            \
+                     *   1) heap-shaped element (struct in this program):       \
+                     *      cap-bounded null-guarded element-wise clone via     \
+                     *      the per-elem `_clone_array_<E>` helper.             \
+                     *   2) primitive / byte element: original byte-memcpy.     \
+                     *                                                          \
+                     * F-002: the C-003 List-shape count-bounded path was       \
+                     * removed. The new uniform invariant is "non-null          \
+                     * slot in [0..cap) is owned by the parent". List.pop /    \
+                     * try_pop / remove explicitly null vacated slots when     \
+                     * transferring ownership out, so cap-bounded iteration    \
+                     * never re-drops a transferred-out pointer.                \
+                     */                                                         \
                     int esz = is_byte_array ? 1 : 8;                            \
-                    fprintf(ir_out, "    ldr x21, [x19, #%d]\n", off);          \
-                    fprintf(ir_out, "    cbz x21, _clone_%s_skip%d\n",          \
-                        s->struct_def.name, fi);                                \
-                    /* Alloc new 16-byte header. x21 = src array ptr,           \
-                     * stays alive across bl in callee-save x21. */             \
-                    fprintf(ir_out, "    mov x0, #16\n    bl _heap_alloc\n");   \
-                    fprintf(ir_out, "    mov x22, x0\n");                       \
-                    /* cap := src_arr.cap; new_arr.cap := cap. */               \
-                    fprintf(ir_out, "    ldr x9, [x21, #0]\n");                 \
-                    fprintf(ir_out, "    str x9, [x22, #0]\n");                 \
-                    /* Allocate cap*esz bytes for the new data buffer. */       \
-                    if (esz == 1) {                                             \
-                        fprintf(ir_out, "    mov x0, x9\n");                    \
+                    const char *elem_name = ft + 7;                             \
+                    int elem_is_struct = struct_in_program(program,             \
+                                                           elem_name);          \
+                    if (elem_is_struct) {                                       \
+                        /* Cap-bounded null-guarded clone via helper.           \
+                         * Helper accepts null-source and short-circuits;       \
+                         * we still null-guard here so dst stays 0 when         \
+                         * src is null. */                                      \
+                        fprintf(ir_out, "    ldr x0, [x19, #%d]\n", off);       \
+                        fprintf(ir_out, "    cbz x0, _clone_%s_skip%d\n",       \
+                            s->struct_def.name, fi);                            \
+                        fprintf(ir_out, "    bl _clone_array_%s\n",             \
+                            elem_name);                                         \
+                        fprintf(ir_out, "    str x0, [x20, #%d]\n", off);       \
+                        fprintf(ir_out, "_clone_%s_skip%d:\n",                  \
+                            s->struct_def.name, fi);                            \
                     } else {                                                    \
-                        fprintf(ir_out, "    lsl x0, x9, #3\n");                \
+                        /* Primitive / byte element. Inline copy of the         \
+                         * array: 16-byte header (cap@0, data@8) +              \
+                         * cap*esz data bytes. Skip on null source.             \
+                         * Layout assumptions match emit_scope_cleanup's        \
+                         * array cleanup path in compiler/irgen.c. */           \
+                        fprintf(ir_out, "    ldr x21, [x19, #%d]\n", off);      \
+                        fprintf(ir_out, "    cbz x21, _clone_%s_skip%d\n",      \
+                            s->struct_def.name, fi);                            \
+                        fprintf(ir_out, "    mov x0, #16\n    bl _heap_alloc\n"); \
+                        fprintf(ir_out, "    mov x22, x0\n");                   \
+                        fprintf(ir_out, "    ldr x9, [x21, #0]\n");             \
+                        fprintf(ir_out, "    str x9, [x22, #0]\n");             \
+                        if (esz == 1) {                                         \
+                            fprintf(ir_out, "    mov x0, x9\n");                \
+                        } else {                                                \
+                            fprintf(ir_out, "    lsl x0, x9, #3\n");            \
+                        }                                                       \
+                        fprintf(ir_out, "    bl _heap_alloc\n");                \
+                        fprintf(ir_out, "    mov x10, x0\n");                   \
+                        fprintf(ir_out, "    str x10, [x22, #8]\n");            \
+                        fprintf(ir_out, "    ldr x11, [x21, #8]\n");            \
+                        fprintf(ir_out, "    ldr x12, [x21, #0]\n");            \
+                        if (esz == 1) {                                         \
+                            fprintf(ir_out, "    mov x13, x12\n");              \
+                        } else {                                                \
+                            fprintf(ir_out, "    lsl x13, x12, #3\n");          \
+                        }                                                       \
+                        fprintf(ir_out, "    cbz x13, _clone_%s_done%d\n",      \
+                            s->struct_def.name, fi);                            \
+                        fprintf(ir_out, "    mov x14, #0\n");                   \
+                        fprintf(ir_out, "_clone_%s_loop%d:\n",                  \
+                            s->struct_def.name, fi);                            \
+                        fprintf(ir_out, "    ldrb w15, [x11, x14]\n");          \
+                        fprintf(ir_out, "    strb w15, [x10, x14]\n");          \
+                        fprintf(ir_out, "    add x14, x14, #1\n");              \
+                        fprintf(ir_out, "    cmp x14, x13\n");                  \
+                        fprintf(ir_out, "    b.lt _clone_%s_loop%d\n",          \
+                            s->struct_def.name, fi);                            \
+                        fprintf(ir_out, "_clone_%s_done%d:\n",                  \
+                            s->struct_def.name, fi);                            \
+                        fprintf(ir_out, "    str x22, [x20, #%d]\n", off);      \
+                        fprintf(ir_out, "_clone_%s_skip%d:\n",                  \
+                            s->struct_def.name, fi);                            \
                     }                                                           \
-                    fprintf(ir_out, "    bl _heap_alloc\n");                    \
-                    fprintf(ir_out, "    mov x10, x0\n");                       \
-                    /* Store new data ptr in new header. */                     \
-                    fprintf(ir_out, "    str x10, [x22, #8]\n");                \
-                    /* Memcpy data bytes: src = src_arr.data, dst = new data,   \
-                     * len = cap*esz. */                                         \
-                    fprintf(ir_out, "    ldr x11, [x21, #8]\n");                \
-                    fprintf(ir_out, "    ldr x12, [x21, #0]\n");                \
-                    if (esz == 1) {                                             \
-                        fprintf(ir_out, "    mov x13, x12\n");                  \
-                    } else {                                                    \
-                        fprintf(ir_out, "    lsl x13, x12, #3\n");              \
-                    }                                                           \
-                    fprintf(ir_out, "    cbz x13, _clone_%s_done%d\n",          \
-                        s->struct_def.name, fi);                                \
-                    fprintf(ir_out, "    mov x14, #0\n");                       \
-                    fprintf(ir_out, "_clone_%s_loop%d:\n",                      \
-                        s->struct_def.name, fi);                                \
-                    fprintf(ir_out, "    ldrb w15, [x11, x14]\n");              \
-                    fprintf(ir_out, "    strb w15, [x10, x14]\n");              \
-                    fprintf(ir_out, "    add x14, x14, #1\n");                  \
-                    fprintf(ir_out, "    cmp x14, x13\n");                      \
-                    fprintf(ir_out, "    b.lt _clone_%s_loop%d\n",              \
-                        s->struct_def.name, fi);                                \
-                    fprintf(ir_out, "_clone_%s_done%d:\n",                      \
-                        s->struct_def.name, fi);                                \
-                    /* Store new header ptr in dst field. */                    \
-                    fprintf(ir_out, "    str x22, [x20, #%d]\n", off);          \
-                    fprintf(ir_out, "_clone_%s_skip%d:\n",                      \
-                        s->struct_def.name, fi);                                \
                 } else {                                                        \
                     /* Primitive (int/bool/byte/etc.). Plain 8-byte copy. */    \
                     fprintf(ir_out, "    ldr x9, [x19, #%d]\n", off);           \
@@ -1501,32 +1716,56 @@ int main(int argc, char **argv) {
                         s->struct_def.name, fi);                                \
                 } else if (is_array_field) {                                    \
                     int esz = is_byte_array ? 1 : 8;                            \
-                    fprintf(ir_out, "    ldr x9, [x19, #%d]\n", off);           \
-                    fprintf(ir_out, "    cbz x9, _drop_%s_skip%d\n",            \
-                        s->struct_def.name, fi);                                \
-                    /* Array layout: [cap @ 0, data @ 8]. Free data first       \
-                     * (size = cap*esz), then the 16-byte header. Mirrors       \
-                     * the array RAII path in compiler/irgen.c                  \
-                     * emit_scope_cleanup. */                                   \
-                    fprintf(ir_out, "    ldr x10, [x9, #0]\n");                 \
-                    fprintf(ir_out, "    ldr x11, [x9, #8]\n");                 \
-                    /* x9=array_hdr, x10=cap, x11=data_ptr */                   \
-                    fprintf(ir_out, "    cbz x11, _drop_%s_hdr%d\n",            \
-                        s->struct_def.name, fi);                                \
-                    if (esz == 1) {                                             \
-                        fprintf(ir_out, "    mov x1, x10\n");                   \
+                    const char *elem_name = ft + 7;                             \
+                    int elem_is_struct = struct_in_program(program,             \
+                                                           elem_name);          \
+                    if (elem_is_struct) {                                       \
+                        /* F-002: any heap-shaped element array goes            \
+                         * through the cap-bounded null-guarded helper,         \
+                         * regardless of the parent's shape. The List           \
+                         * stdlib ownership invariant is now uniform:           \
+                         * a non-null slot in [0..cap) is owned by the          \
+                         * list, period. List.pop / List.try_pop /              \
+                         * List.remove vacate slots via                         \
+                         * `is now self.data[i]` (which extracts the            \
+                         * pointer and writes xzr to the slot), so post-        \
+                         * count slots are guaranteed null when the             \
+                         * caller takes ownership of the popped value.          \
+                         * That removes the C-003 motivation for a              \
+                         * count-bounded specialisation that was                \
+                         * incomplete (List.clear leaked, push-after-pop        \
+                         * double-freed). The helper accepts null-              \
+                         * receiver and short-circuits.                         \
+                         */                                                     \
+                        fprintf(ir_out, "    ldr x0, [x19, #%d]\n", off);       \
+                        fprintf(ir_out, "    bl _drop_array_%s\n", elem_name);  \
                     } else {                                                    \
-                        fprintf(ir_out, "    lsl x1, x10, #3\n");               \
+                        fprintf(ir_out, "    ldr x9, [x19, #%d]\n", off);       \
+                        fprintf(ir_out, "    cbz x9, _drop_%s_skip%d\n",        \
+                            s->struct_def.name, fi);                            \
+                        /* Array layout: [cap @ 0, data @ 8]. Free data         \
+                         * first (size = cap*esz), then the 16-byte             \
+                         * header. Mirrors the array RAII path in               \
+                         * compiler/irgen.c emit_scope_cleanup. */              \
+                        fprintf(ir_out, "    ldr x10, [x9, #0]\n");             \
+                        fprintf(ir_out, "    ldr x11, [x9, #8]\n");             \
+                        fprintf(ir_out, "    cbz x11, _drop_%s_hdr%d\n",        \
+                            s->struct_def.name, fi);                            \
+                        if (esz == 1) {                                         \
+                            fprintf(ir_out, "    mov x1, x10\n");               \
+                        } else {                                                \
+                            fprintf(ir_out, "    lsl x1, x10, #3\n");           \
+                        }                                                       \
+                        fprintf(ir_out, "    mov x0, x11\n");                   \
+                        fprintf(ir_out, "    bl _heap_free\n");                 \
+                        fprintf(ir_out, "_drop_%s_hdr%d:\n",                    \
+                            s->struct_def.name, fi);                            \
+                        fprintf(ir_out, "    ldr x0, [x19, #%d]\n", off);       \
+                        fprintf(ir_out, "    mov x1, #16\n");                   \
+                        fprintf(ir_out, "    bl _heap_free\n");                 \
+                        fprintf(ir_out, "_drop_%s_skip%d:\n",                   \
+                            s->struct_def.name, fi);                            \
                     }                                                           \
-                    fprintf(ir_out, "    mov x0, x11\n");                       \
-                    fprintf(ir_out, "    bl _heap_free\n");                     \
-                    fprintf(ir_out, "_drop_%s_hdr%d:\n",                        \
-                        s->struct_def.name, fi);                                \
-                    fprintf(ir_out, "    ldr x0, [x19, #%d]\n", off);           \
-                    fprintf(ir_out, "    mov x1, #16\n");                       \
-                    fprintf(ir_out, "    bl _heap_free\n");                     \
-                    fprintf(ir_out, "_drop_%s_skip%d:\n",                       \
-                        s->struct_def.name, fi);                                \
                 }                                                               \
                 /* Primitive fields require no drop. */                         \
             }                                                                   \

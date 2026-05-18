@@ -332,6 +332,13 @@ static void switch_block(IRGenCtx *c, IRBlock *b) { c->block = b; }
 static VReg gen_expr(IRGenCtx *c, Node *n);
 static void gen_stmt(IRGenCtx *c, Node *n);
 static void gen_block(IRGenCtx *c, Node *block);
+// F-002: extract pointer at arr[i], null the slot, return loaded
+// value. Same bounds-checked load shape as the read-only NODE_INDEX
+// path; the only delta is the xzr store at the end. Used by the
+// var-decl / assign `is now arr[i]` lowerings to vacate a slot in
+// one step. Caller is responsible for heap-tracking the returned
+// value as the new owner.
+static VReg gen_index_take(IRGenCtx *c, Node *index_node);
 
 static VReg gen_expr(IRGenCtx *c, Node *n) {
     if (!n) return -1;
@@ -1111,6 +1118,97 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
     }
 }
 
+// F-002: arr[i] read + slot null-out, used by `is now arr[i]` /
+// `be now arr[i]`. Mirrors the NODE_INDEX read path exactly: same
+// negative-index check, same upper-bound check, same layout
+// decoding for `array of T` (cap@0, data@8) vs the legacy list
+// header. The stdlib container method dispatch path (`.method_struct`
+// set) is NOT reachable here — this lowering only fires for raw
+// `array of T` accesses inside stdlib bodies, where the receiver is
+// `self.data`-shape, not a stdlib container itself. After the load,
+// store xzr to the same address so the slot becomes null and the
+// caller's RAII won't double-free against the next push's drop-
+// before-overwrite or against the parent's cap-bounded null-guarded
+// drop. Byte-element arrays are not heap-shaped (byte is primitive),
+// so the storage is `strb wzr` to clear a single byte.
+static VReg gen_index_take(IRGenCtx *c, Node *n) {
+    VReg obj = gen_expr(c, n->index_access.object);
+    VReg idx = gen_expr(c, n->index_access.index);
+
+    int is_arr = n->index_access.is_array;
+    int bound_off = is_arr ? 0 : 8;
+    int data_off  = is_arr ? 8 : 16;
+    VReg count = new_vreg(c);
+    emit(c, (IRInst){.op = IR_LOAD, .dst = count, .a = obj, .imm = bound_off});
+    VReg zero = new_vreg(c);
+    emit(c, (IRInst){.op = IR_CONST, .dst = zero, .imm = 0});
+    VReg is_neg = new_vreg(c);
+    emit(c, (IRInst){.op = IR_CMP_LT, .dst = is_neg, .a = idx, .b = zero});
+    int neg_panic_lbl = new_label(c);
+    int neg_ok_lbl = new_label(c);
+    emit(c, (IRInst){.op = IR_BR_COND, .a = is_neg,
+                     .label = neg_panic_lbl, .label2 = neg_ok_lbl});
+    IRBlock *neg_panic_b = new_block(c);
+    neg_panic_b->label = neg_panic_lbl;
+    switch_block(c, neg_panic_b);
+    VReg ignored1 = new_vreg(c);
+    emit(c, (IRInst){.op = IR_CALL, .dst = ignored1, .str = "panic_oob",
+                     .args = NULL, .arg_count = 0});
+    emit(c, (IRInst){.op = IR_BR, .label = neg_ok_lbl});
+    IRBlock *neg_ok_b = new_block(c);
+    neg_ok_b->label = neg_ok_lbl;
+    switch_block(c, neg_ok_b);
+
+    VReg is_oob = new_vreg(c);
+    emit(c, (IRInst){.op = IR_CMP_GE, .dst = is_oob, .a = idx, .b = count});
+    int oob_panic_lbl = new_label(c);
+    int oob_ok_lbl = new_label(c);
+    emit(c, (IRInst){.op = IR_BR_COND, .a = is_oob,
+                     .label = oob_panic_lbl, .label2 = oob_ok_lbl});
+    IRBlock *oob_panic_b = new_block(c);
+    oob_panic_b->label = oob_panic_lbl;
+    switch_block(c, oob_panic_b);
+    VReg ignored2 = new_vreg(c);
+    emit(c, (IRInst){.op = IR_CALL, .dst = ignored2, .str = "panic_oob",
+                     .args = NULL, .arg_count = 0});
+    emit(c, (IRInst){.op = IR_BR, .label = oob_ok_lbl});
+    IRBlock *oob_ok_b = new_block(c);
+    oob_ok_b->label = oob_ok_lbl;
+    switch_block(c, oob_ok_b);
+
+    int is_byte_elem = n->index_access.is_byte;
+    int elem_sz = is_byte_elem ? 1 : 8;
+    VReg data_ptr = new_vreg(c);
+    emit(c, (IRInst){.op = IR_LOAD, .dst = data_ptr, .a = obj, .imm = data_off});
+    VReg byte_off;
+    if (elem_sz == 1) {
+        byte_off = idx;
+    } else {
+        VReg esz = new_vreg(c);
+        emit(c, (IRInst){.op = IR_CONST, .dst = esz, .imm = elem_sz});
+        byte_off = new_vreg(c);
+        emit(c, (IRInst){.op = IR_MUL, .dst = byte_off, .a = idx, .b = esz});
+    }
+    VReg addr = new_vreg(c);
+    emit(c, (IRInst){.op = IR_ADD, .dst = addr, .a = data_ptr, .b = byte_off});
+    // Load the pointer the slot holds, then store zero to vacate it.
+    // The two operations share the computed addr — irgen can't reload
+    // because intervening calls (heap_alloc / panic_oob, etc.) above
+    // are confined to off-path blocks, so addr is still valid here.
+    VReg dst = new_vreg(c);
+    emit(c, (IRInst){
+        .op = is_byte_elem ? IR_LOAD_BYTE : IR_LOAD,
+        .dst = dst, .a = addr, .imm = 0
+    });
+    VReg z = new_vreg(c);
+    emit(c, (IRInst){.op = IR_CONST, .dst = z, .imm = 0});
+    emit(c, (IRInst){
+        .op = is_byte_elem ? IR_STORE_BYTE : IR_STORE,
+        .a = addr, .b = z, .imm = 0
+    });
+    return dst;
+}
+
 static void gen_block(IRGenCtx *c, Node *block) {
     for (int i = 0; i < block->block.stmts.count; i++)
         gen_stmt(c, block->block.stmts.items[i]);
@@ -1145,6 +1243,10 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
                 emit(c, (IRInst){.op = IR_CALL, .dst = v,
                                  .str = strdup(clone_sym),
                                  .args = args, .arg_count = 1});
+            } else if (n->var_decl.is_move &&
+                       n->var_decl.value->type == NODE_INDEX) {
+                // F-002: extract pointer at slot, null the slot.
+                v = gen_index_take(c, n->var_decl.value);
             } else {
                 v = gen_expr(c, n->var_decl.value);
             }
@@ -1158,20 +1260,33 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
             if (n->var_decl.is_move) {
                 if (n->var_decl.value->type == NODE_IDENT)
                     mark_moved_local(c, n->var_decl.value->ident.name);
-                mark_heap_size(c, n->var_decl.name, 0); // size unknown — use default 16
-                // P0-8: carry the struct name through `is now` so
-                // the new owner gets recursive drop. Source's struct
-                // name was stashed by checker for is_rep; for is_now
-                // it's not stashed but we can read it from the
-                // moved-from local.
-                if (n->var_decl.value->type == NODE_IDENT) {
-                    for (int i = c->local_count - 1; i >= 0; i--) {
-                        if (!strcmp(c->local_names[i],
-                                    n->var_decl.value->ident.name) &&
-                            c->local_struct_names[i]) {
-                            mark_struct_local(c, n->var_decl.name,
-                                c->local_struct_names[i]);
-                            break;
+                // F-002: `local is now arr[i]` — checker stashes the
+                // element struct name in type_name when the slot's
+                // type is heap-shaped. Skip the heap-tracking entirely
+                // for primitive-element slots so RAII at scope end
+                // doesn't mistreat the int as a pointer.
+                if (n->var_decl.value->type == NODE_INDEX) {
+                    if (n->var_decl.type_name) {
+                        mark_heap_size(c, n->var_decl.name, 0);
+                        mark_struct_local(c, n->var_decl.name,
+                            n->var_decl.type_name);
+                    }
+                } else {
+                    mark_heap_size(c, n->var_decl.name, 0); // size unknown — use default 16
+                    // P0-8: carry the struct name through `is now` so
+                    // the new owner gets recursive drop. Source's struct
+                    // name was stashed by checker for is_rep; for is_now
+                    // it's not stashed but we can read it from the
+                    // moved-from local.
+                    if (n->var_decl.value->type == NODE_IDENT) {
+                        for (int i = c->local_count - 1; i >= 0; i--) {
+                            if (!strcmp(c->local_names[i],
+                                        n->var_decl.value->ident.name) &&
+                                c->local_struct_names[i]) {
+                                mark_struct_local(c, n->var_decl.name,
+                                    c->local_struct_names[i]);
+                                break;
+                            }
                         }
                     }
                 }
@@ -1280,6 +1395,10 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
                 emit(c, (IRInst){.op = IR_CALL, .dst = v,
                                  .str = strdup(clone_sym),
                                  .args = args, .arg_count = 1});
+            } else if (n->assign.is_move &&
+                       n->assign.value->type == NODE_INDEX) {
+                // F-002: `q be now arr[i]` extract + slot-null.
+                v = gen_index_take(c, n->assign.value);
             } else {
                 if (n->assign.is_move &&
                     n->assign.value->type == NODE_IDENT) {

@@ -1,0 +1,41 @@
+// F-002 IR-level regression: container-aware drop / clone for
+// arrays of heap-shaped struct elements must delegate to the
+// per-elem cap-bounded null-guarded helpers.
+//
+// `_drop_<List__String>`, `_drop_<Set__String>`, and
+// `_drop_<Map__String__String>` (twice — keys + vals) must each
+// call `bl _drop_array_String`. The helper iterates [0..cap),
+// null-guards each slot, calls `_drop_String` on every non-null
+// pointer, then frees the data buffer + 16-byte header. List's
+// pop / try_pop / remove maintain the post-count invariant
+// "non-null = unique-owner" by nulling vacated slots via
+// `is now self.data[k]`, so the cap-bounded iteration never
+// re-drops a transferred-out pointer.
+//
+// `_clone_<List__String>` etc. must delegate to
+// `bl _clone_array_String` for the same reason — each element
+// gets an independent deep clone, regardless of where the slot
+// sits in [0..cap).
+
+use std/list
+use std/set
+use std/map
+use std/string
+
+spark {
+  // Force monomorphization of List__String, Set__String,
+  // Map__String__String and their `_drop_<X>` / `_clone_<X>`
+  // emission. Operations are minimal because we only inspect
+  // the lowered code shape, not runtime behavior.
+  xs is List of String()
+  xs.push("a")
+  xs2 is rep xs
+
+  s is Set of String()
+  s.add("a")
+  s2 is rep s
+
+  m is Map of String, String()
+  m.set("k", "v")
+  m2 is rep m
+}

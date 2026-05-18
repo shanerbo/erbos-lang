@@ -1,0 +1,618 @@
+// F-002 regression: post-count ownership invariant for List of
+// heap-shaped T. The audited C-003 batch shipped a count-bounded
+// parent-drop specialisation that assumed slots in [count..cap)
+// were either null or held pointers the caller owned. But the
+// stdlib's `pop` / `try_pop` / `remove` / `clear` did not enforce
+// either of those — pop returned the slot's pointer without
+// nulling, remove's left-shift left a tail duplicate, and clear
+// just zeroed count. The next push reused slot[count] through
+// the F-001 drop-before-overwrite path, freeing a pointer the
+// caller still held (use-after-free) or aliasing a still-live
+// neighbour (double-free at parent-drop).
+//
+// Fix is two-part:
+//
+//   (1) Compiler: revert the C-003 List-shape count-bounded
+//       specialisation in `_drop_<X>` / `_clone_<X>`. All
+//       heap-shaped element arrays now delegate to the uniform
+//       cap-bounded null-guarded `_drop_array_<E>` /
+//       `_clone_array_<E>` helpers. The new invariant is "any
+//       non-null slot in [0..cap) is owned by the parent and
+//       must be dropped on parent-drop", and the helpers honour
+//       it regardless of where the slot sits.
+//
+//   (2) Compiler + stdlib: extend `is now` / `be now` to accept
+//       array-slot expressions as the source. `local is now
+//       arr[i]` extracts the slot's pointer and writes 0 to
+//       the slot in one step; `local` is heap-tracked with the
+//       element struct name. List.pop / try_pop / remove use
+//       this primitive to vacate slots when transferring
+//       ownership out — guaranteeing post-count slots are
+//       null whenever the caller holds the popped pointer.
+//       List.clear stays as `count = 0`; the cap-bounded
+//       parent-drop reaps every still-owned slot.
+//
+// Tests validate three orthogonal axes:
+//   (a) drop correctness — mass push + drop must not crash and
+//       must not leave stale state for subsequent allocations
+//   (b) clone correctness — `is rep` produces independent
+//       containers; mutating one doesn't affect the other
+//   (c) list-method ownership — pop / try_pop / remove / clear
+//       maintain the "non-null = unique-owner" invariant under
+//       reuse, including across primitive and nested heap-shaped
+//       element types
+
+use std/list
+use std/set
+use std/map
+use std/pool
+use std/string
+use std/option
+
+// ---------------------------------------------------------------
+// Drop correctness — no crash, no double-free
+// ---------------------------------------------------------------
+
+test "List of String drops elements at scope end" {
+  // Mass push then let the List drop. Pre-fix this leaked one
+  // String header + payload per push and accumulated across the
+  // 200 inner iterations. Post-fix the count-bounded drop
+  // iterates [0..count) and frees each element. Outer loop
+  // forces the inner List to allocate, populate, and drop 100
+  // times so the free-list-reuse path also gets exercised.
+  total is 0
+  through (round from 0 to 100 by 1) {
+    xs is List of String()
+    through (i from 0 to 200 by 1) {
+      xs.push("element-payload-string")
+    }
+    total be total + xs.len()
+  }
+  assert(total eq 100 * 200)
+}
+
+test "Set of String drops elements at scope end" {
+  // Repeated allocation + drop of a Set holding heap-shaped T.
+  // The cap-bounded null-guarded helper iterates every state
+  // and drops non-null pointers. Set.add deep-clones, so each
+  // slot uniquely owns its stored String.
+  total is 0
+  through (round from 0 to 100 by 1) {
+    s is Set of String()
+    through (i from 0 to 50 by 1) {
+      s.add("k_alpha")
+      s.add("k_beta")
+      s.add("k_gamma")
+    }
+    total be total + s.len()
+  }
+  assert(total eq 100 * 3)
+}
+
+test "Map of String, String drops keys and values" {
+  // Both arrays (keys + vals) carry heap-shaped Strings; the
+  // `_drop_array_String` helper is invoked for each.
+  total is 0
+  through (round from 0 to 100 by 1) {
+    m is Map of String, String()
+    through (i from 0 to 30 by 1) {
+      m.set("a", "1")
+      m.set("b", "2")
+      m.set("c", "3")
+    }
+    total be total + m.len()
+  }
+  assert(total eq 100 * 3)
+}
+
+test "Pool of String drops every live + freed slot at end" {
+  // Pool holds an internal `List of T` for items. After remove,
+  // the slot remains in the items list (count unchanged) but
+  // tracked as freed. Drop must walk all live slots in
+  // `_drop_<List__String>`'s count-bounded loop.
+  total is 0
+  through (round from 0 to 50 by 1) {
+    p is Pool of String()
+    ids is List of int()
+    through (i from 0 to 30 by 1) {
+      id is p.insert("payload")
+      ids.push(id)
+    }
+    // Remove every other one. Slots become reusable; freed
+    // slots' Strings are NOT iterated by the count-bounded drop
+    // because `Pool.remove` leaves them in place but flags
+    // alive[id]=false. They'll be overwritten by the next
+    // insert via the F-001 drop-before-overwrite path. Drop
+    // the Pool directly — the inner List's count-bounded drop
+    // iterates [0..items.count); freed-but-not-reused slots
+    // still hold their pointers, which DO get dropped because
+    // those slots are within count. Confirmed correct because
+    // the freed slot's value is still uniquely owned (no caller
+    // grabbed it; remove just flagged dead).
+    through (i from 0 to ids.len() by 1) {
+      i mod 2 eq 0 ?{
+        p.remove(ids.get(i))
+      }
+    }
+    total be total + p.slot_count()
+  }
+  assert(total eq 50 * 30)
+}
+
+// ---------------------------------------------------------------
+// Caller alias safety — pre-existing call sites in user code
+// ---------------------------------------------------------------
+
+test "List.push deep-clones owned String parameter" {
+  // `s` is a heap-shaped local that auto-drops at scope end.
+  // Without push's deep-clone, the slot would alias `s` and the
+  // count-bounded parent drop would re-drop the same pointer.
+  xs is List of String()
+  s is "owned-from-caller"
+  xs.push(s)
+  // s still alive; xs owns an independent clone.
+  assert(s eq "owned-from-caller")
+  assert(xs.get(0) eq "owned-from-caller")
+}
+
+test "List.push of List of String preserves both" {
+  // Pre-fix kitchen_sink crash: `inner is List of int(); inner.push(1); grid.push(inner)`
+  // aliased inner into grid's slot. Both auto-dropped at scope
+  // end → double-free. Post-fix push deep-clones inner via
+  // `_clone_List__int`, so grid's slot is independent.
+  grid is List of List of int()
+  inner1 is List of int()
+  inner1.push(1)
+  inner1.push(2)
+  inner1.push(3)
+  grid.push(inner1)
+  inner2 is List of int()
+  inner2.push(10)
+  inner2.push(20)
+  inner2.push(30)
+  grid.push(inner2)
+  // Both inner lists alive; grid has independent clones.
+  assert(inner1.len() eq 3)
+  assert(inner2.len() eq 3)
+  assert(grid.len() eq 2)
+  assert(grid.get(0).get(0) eq 1)
+  assert(grid.get(1).get(2) eq 30)
+}
+
+test "List.insert deep-clones and bubbles v down without aliasing" {
+  // Fresh heap-shaped values pushed via insert at various
+  // positions. Each insert deep-clones; the swap-bubble keeps
+  // every slot's pointer unique.
+  xs is List of String()
+  xs.push("a")
+  xs.push("b")
+  xs.push("c")
+  xs.insert(0, "first")
+  xs.insert(2, "middle")
+  xs.insert(xs.len(), "last")
+  assert(xs.len() eq 6)
+  assert(xs.get(0) eq "first")
+  assert(xs.get(1) eq "a")
+  assert(xs.get(2) eq "middle")
+  assert(xs.get(3) eq "b")
+  assert(xs.get(4) eq "c")
+  assert(xs.get(5) eq "last")
+}
+
+// ---------------------------------------------------------------
+// Pop / remove with heap-shaped T
+// ---------------------------------------------------------------
+
+test "List.pop on heap-shaped T survives subsequent ops" {
+  // F-002 fix verifies: pop's `is now self.data[count]` extracts
+  // the slot's pointer AND nulls the slot. The popped value is
+  // owned by `v`. Subsequent push reuses slot[count]; with the
+  // slot null'd, drop-before-overwrite skips, and the new push
+  // proceeds without invalidating `v`. This was the precise
+  // failure mode F-002 captured (push-after-pop produced a
+  // use-after-free against the still-live `v`).
+  xs is List of String()
+  xs.push("a")
+  xs.push("b")
+  xs.push("c")
+  v is xs.pop()
+  assert(v eq "c")
+  assert(xs.len() eq 2)
+  xs.push("d")
+  assert(xs.get(2) eq "d")
+  // `v` still holds "c"; the slot was vacated cleanly so
+  // re-reading the popped binding is safe.
+  assert(v eq "c")
+}
+
+test "List.remove on heap-shaped T leaves no double-free" {
+  // remove's shift loop and final count decrement must keep
+  // the count-bounded invariant intact.
+  xs is List of String()
+  xs.push("alpha")
+  xs.push("beta")
+  xs.push("gamma")
+  xs.push("delta")
+  removed is xs.remove(1)
+  assert(removed eq "beta")
+  assert(xs.len() eq 3)
+  assert(xs.get(0) eq "alpha")
+  assert(xs.get(1) eq "gamma")
+  assert(xs.get(2) eq "delta")
+}
+
+// ---------------------------------------------------------------
+// Deep clone correctness via `is rep`
+// ---------------------------------------------------------------
+
+test "List.clone produces independent String elements" {
+  // `is rep` invokes `_clone_<List__String>` which uses the
+  // count-bounded element-clone path. Mutating the original
+  // after the clone must not alter the clone.
+  original is List of String()
+  original.push("one")
+  original.push("two")
+  original.push("three")
+  copy is rep original
+  original.set(0, "ZERO")
+  assert(original.get(0) eq "ZERO")
+  assert(copy.get(0) eq "one")
+  assert(copy.get(1) eq "two")
+  assert(copy.get(2) eq "three")
+  assert(copy.len() eq 3)
+}
+
+test "Set clone is independent under mutation" {
+  s is Set of String()
+  s.add("a")
+  s.add("b")
+  s.add("c")
+  copy is rep s
+  s.remove("a")
+  assert(not s.has("a"))
+  assert(copy.has("a"))
+  assert(copy.has("b"))
+  assert(copy.has("c"))
+}
+
+test "Map clone is independent under mutation" {
+  m is Map of String, String()
+  m.set("k1", "v1")
+  m.set("k2", "v2")
+  copy is rep m
+  m.set("k1", "MUTATED")
+  m.remove("k2")
+  assert(m.get("k1") eq "MUTATED")
+  assert(copy.get("k1") eq "v1")
+  assert(copy.get("k2") eq "v2")
+}
+
+// ---------------------------------------------------------------
+// Stress: heap-recycle correctness
+// ---------------------------------------------------------------
+
+test "Repeated build-and-drop of List of String stays bounded" {
+  // Without the parent-drop fix, every iteration leaks 50 String
+  // headers + payloads. Over thousands of iterations the bump
+  // pointer grows unboundedly. With the fix, the free list
+  // satisfies subsequent allocations.
+  through (round from 0 to 1000 by 1) {
+    xs is List of String()
+    through (i from 0 to 50 by 1) {
+      xs.push("recycled-payload")
+    }
+    assert(xs.len() eq 50)
+  }
+  // If we got here without OOM or crash, free-list reuse is
+  // working.
+  yell("recycle stress survived")
+}
+
+test "Nested List of List of String drops everything" {
+  outer is List of List of String()
+  through (i from 0 to 20 by 1) {
+    inner is List of String()
+    inner.push("a")
+    inner.push("b")
+    inner.push("c")
+    outer.push(inner)
+  }
+  assert(outer.len() eq 20)
+  assert(outer.get(0).get(0) eq "a")
+  assert(outer.get(19).get(2) eq "c")
+}
+
+// ---------------------------------------------------------------
+// Primitive-T fast paths still work
+// ---------------------------------------------------------------
+
+test "List of int parent-drop frees the data buffer alone" {
+  // No _drop_int symbol exists; the array field's element type is
+  // primitive, so parent-drop falls through to the byte-bulk free
+  // (no element iteration, no per-slot drop). This test guards
+  // against any future regression where primitive-T list drops
+  // accidentally route through the heap-shaped helper.
+  xs is List of int()
+  through (i from 0 to 1000 by 1) {
+    xs.push(i)
+  }
+  assert(xs.len() eq 1000)
+  assert(xs.get(999) eq 999)
+}
+
+test "Map of int, int unaffected by parent-drop fix" {
+  m is Map of int, int()
+  through (i from 0 to 100 by 1) {
+    m.set(i, i * i)
+  }
+  assert(m.get(50) eq 2500)
+}
+
+// ---------------------------------------------------------------
+// F-002 specific: post-count ownership invariant
+// ---------------------------------------------------------------
+//
+// After pop / try_pop / remove / clear the cap-bounded null-guarded
+// parent drop must not re-drop a pointer the caller now owns. The
+// stdlib enforces this by nulling vacated slots via `is now`.
+
+test "List.pop + push reuses popped slot without UAF" {
+  // Pre-fix repro: pop transferred slot[count]'s pointer to the
+  // caller without nulling the slot, so the next push at
+  // self.data[count] hit drop-before-overwrite on a non-null
+  // pointer that the caller still held. SIGSEGV on the next read
+  // of either binding. Post-fix: pop's `is now` extracts and
+  // nulls; push reuses cleanly; both bindings stay live.
+  xs is List of String()
+  xs.push("a")
+  xs.push("b")
+  xs.push("c")
+  v is xs.pop()
+  xs.push("d")
+  assert(v eq "c")
+  assert(xs.get(0) eq "a")
+  assert(xs.get(1) eq "b")
+  assert(xs.get(2) eq "d")
+  assert(xs.len() eq 3)
+}
+
+test "List.try_pop + push reuses popped slot without UAF" {
+  // Same shape as pop+push, through the Option-returning path.
+  xs is List of String()
+  xs.push("alpha")
+  xs.push("beta")
+  xs.push("gamma")
+  opt is xs.try_pop()
+  v is opt.unwrap()
+  xs.push("delta")
+  assert(v eq "gamma")
+  assert(xs.get(0) eq "alpha")
+  assert(xs.get(1) eq "beta")
+  assert(xs.get(2) eq "delta")
+  assert(xs.len() eq 3)
+}
+
+test "List.try_pop on empty list returns None" {
+  // Sanity: try_pop's empty path must not touch the data array.
+  // Pre-existing behavior is preserved through the F-002 rewrite.
+  xs is List of String()
+  opt is xs.try_pop()
+  assert(opt.is_none())
+}
+
+test "List.try_pop + insert reuses correctly" {
+  // try_pop followed by insert at an arbitrary position. The
+  // popped slot must be null when insert's bubble-down lands;
+  // insert's own swap-bubble path then keeps the invariant.
+  xs is List of String()
+  xs.push("a")
+  xs.push("b")
+  xs.push("c")
+  opt is xs.try_pop()
+  v is opt.unwrap()
+  xs.insert(0, "front")
+  xs.insert(2, "middle")
+  assert(v eq "c")
+  assert(xs.len() eq 4)
+  assert(xs.get(0) eq "front")
+  assert(xs.get(1) eq "a")
+  assert(xs.get(2) eq "middle")
+  assert(xs.get(3) eq "b")
+}
+
+test "List.remove + push leaves no stale tail-duplicate" {
+  // Pre-fix bug: remove's left-shift left slot[count-1] aliasing
+  // its pre-shift value, so post-shift slot[count-1] held a
+  // pointer also at slot[count-2]. The next push reused
+  // slot[count] (which post-decrement is the old count-1) —
+  // drop-before-overwrite freed the pointer that slot[count-2]
+  // also held. Post-fix: bubble-null pattern leaves slot[count-1]
+  // null; push reuses cleanly.
+  xs is List of String()
+  xs.push("a")
+  xs.push("b")
+  xs.push("c")
+  xs.push("d")
+  removed is xs.remove(1)
+  xs.push("e")
+  assert(removed eq "b")
+  assert(xs.get(0) eq "a")
+  assert(xs.get(1) eq "c")
+  assert(xs.get(2) eq "d")
+  assert(xs.get(3) eq "e")
+  assert(xs.len() eq 4)
+}
+
+test "List.remove from middle, multiple times, then push" {
+  // Stress the bubble-null pattern across repeated removes that
+  // each touch a different position. Every remove must leave
+  // slot[count-1] null; every subsequent push must reuse cleanly.
+  xs is List of String()
+  through (i from 0 to 10 by 1) {
+    xs.push("payload")
+  }
+  // Remove at varying positions.
+  r1 is xs.remove(5)
+  r2 is xs.remove(2)
+  r3 is xs.remove(0)
+  // Push to reuse vacated capacity.
+  xs.push("new-1")
+  xs.push("new-2")
+  xs.push("new-3")
+  assert(r1 eq "payload")
+  assert(r2 eq "payload")
+  assert(r3 eq "payload")
+  assert(xs.len() eq 10)
+  assert(xs.get(7) eq "new-1")
+  assert(xs.get(8) eq "new-2")
+  assert(xs.get(9) eq "new-3")
+}
+
+test "List.clear + scope-end drop releases every element" {
+  // Pre-fix (count-bounded drop) clear+drop leaked because
+  // count=0 told the parent-drop iteration to skip every slot.
+  // Post-fix (cap-bounded null-guarded drop) clear is just
+  // count=0; the parent's drop iterates the cap and frees every
+  // non-null slot. Loop many times to expose any leak through
+  // free-list reuse pressure.
+  through (round from 0 to 200 by 1) {
+    xs is List of String()
+    through (i from 0 to 30 by 1) {
+      xs.push("payload")
+    }
+    xs.clear()
+    assert(xs.len() eq 0)
+  }
+  // If we got here without OOM, the parent-drop reaped every
+  // post-clear slot.
+  yell("clear-drop survived")
+}
+
+test "List.clear + reuse before drop" {
+  // After clear, the slots in [0..cap) still hold their pre-clear
+  // owners. Subsequent push at slot[0] hits drop-before-overwrite
+  // on a non-null prior pointer; the F-001 fix drops it cleanly
+  // before storing the new one. Verify across many fill/clear/
+  // refill cycles.
+  xs is List of String()
+  through (round from 0 to 50 by 1) {
+    through (i from 0 to 20 by 1) {
+      xs.push("first-payload")
+    }
+    xs.clear()
+    through (i from 0 to 20 by 1) {
+      xs.push("second-payload")
+    }
+    assert(xs.len() eq 20)
+    assert(xs.get(0) eq "second-payload")
+    assert(xs.get(19) eq "second-payload")
+    xs.clear()
+  }
+  yell("clear-reuse survived")
+}
+
+test "Nested List of List of int: pop + push reuses correctly" {
+  // The popped value is an owned List of int; F-002 must keep its
+  // ownership transfer crisp across container boundaries. The
+  // outer slot is nulled by pop; the next push deep-clones into
+  // it via the F-001 push path.
+  outer is List of List of int()
+  inner1 is List of int()
+  inner1.push(1)
+  inner1.push(2)
+  outer.push(inner1)
+  inner2 is List of int()
+  inner2.push(10)
+  inner2.push(20)
+  outer.push(inner2)
+  // Pop the second inner list; outer should now hold only inner1.
+  popped is outer.pop()
+  assert(popped.get(0) eq 10)
+  assert(popped.get(1) eq 20)
+  assert(outer.len() eq 1)
+  // Push a fresh inner; outer's slot[1] (null after pop) takes it.
+  inner3 is List of int()
+  inner3.push(100)
+  outer.push(inner3)
+  assert(outer.len() eq 2)
+  assert(outer.get(1).get(0) eq 100)
+}
+
+test "Nested List of List of String: remove + push reuses correctly" {
+  // String element list keeps the harder ownership story honest:
+  // each inner list has its own heap-shaped element drop chain.
+  outer is List of List of String()
+  through (i from 0 to 5 by 1) {
+    inner is List of String()
+    inner.push("a")
+    inner.push("b")
+    outer.push(inner)
+  }
+  removed is outer.remove(2)
+  assert(removed.get(0) eq "a")
+  assert(removed.get(1) eq "b")
+  assert(outer.len() eq 4)
+  // Push fresh inner; outer's tail slot was bubble-nulled.
+  fresh is List of String()
+  fresh.push("X")
+  fresh.push("Y")
+  outer.push(fresh)
+  assert(outer.len() eq 5)
+  assert(outer.get(4).get(0) eq "X")
+  assert(outer.get(4).get(1) eq "Y")
+}
+
+test "List of int: pop+push round-trip stays correct" {
+  // Primitive-T fast path. `is now self.data[k]` collapses to a
+  // value load + slot-zero write; for int the zero is just an int
+  // 0 in the slot, which is harmless because subsequent push's
+  // drop-before-overwrite is heap-shaped only.
+  xs is List of int()
+  through (i from 0 to 10 by 1) {
+    xs.push(i)
+  }
+  v is xs.pop()
+  assert(v eq 9)
+  xs.push(99)
+  assert(xs.get(9) eq 99)
+  assert(xs.len() eq 10)
+}
+
+test "List of int: remove + push stays correct" {
+  // Same primitive-T path through remove's bubble-null. The
+  // bubbled-in zeros never appear at user-visible indexes
+  // because count is decremented before any read.
+  xs is List of int()
+  through (i from 0 to 8 by 1) {
+    xs.push(i * 10)
+  }
+  removed is xs.remove(3)
+  assert(removed eq 30)
+  assert(xs.len() eq 7)
+  // Verify shifted state: 0,10,20,40,50,60,70.
+  assert(xs.get(0) eq 0)
+  assert(xs.get(2) eq 20)
+  assert(xs.get(3) eq 40)
+  assert(xs.get(6) eq 70)
+  xs.push(999)
+  assert(xs.get(7) eq 999)
+}
+
+test "List.pop + drop without further ops releases popped value" {
+  // After pop, slot is null and popped value is owned by `v`.
+  // At scope end:
+  //   - parent-drop iterates cap-bounded; slot[count..cap) all
+  //     null after pop, slot[0..count-1) drops their owners.
+  //   - `v` drops its own pointer ("c") via local RAII.
+  // Neither path touches the other's pointer; no double-free.
+  // Loop many times so any double-free or leak triggers visibly.
+  through (round from 0 to 200 by 1) {
+    xs is List of String()
+    xs.push("a")
+    xs.push("b")
+    xs.push("c")
+    v is xs.pop()
+    assert(v eq "c")
+  }
+  yell("pop-drop-no-op survived")
+}

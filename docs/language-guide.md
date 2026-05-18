@@ -501,6 +501,15 @@ c is rep b
 out.items be now ctx.items   // transfer ctx's list into out
 out.config be rep cfg        // independent copy of cfg
 
+// `is now arr[i]` extracts the slot's pointer AND nulls the slot
+// in one step. Used by stdlib container internals (List.pop,
+// List.remove, ...) to vacate a slot when transferring ownership
+// to the caller. Symmetric with `is now ident`: the new local is
+// the unique owner, the source position holds null. For
+// primitive-element arrays it collapses to a value-load + slot-zero
+// write — same shape, cheap, harmless.
+v is now arr[3]              // arr[3] -> 0; v owns the prior pointer
+
 // Ref params (mutable borrow)
 reset(p ref Point) { p.x be 0 }
 reset(ref pt)                 // caller acknowledges

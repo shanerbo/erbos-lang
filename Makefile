@@ -24,6 +24,7 @@ clean:
 	rm -f named_arg_string_literal.s named_arg_string_literal named_arg_string_literal.o
 	rm -f named_arg_nested_string_literal.s named_arg_nested_string_literal named_arg_nested_string_literal.o
 	rm -f heap_slot_drop_emits_drop.s heap_slot_drop_emits_drop heap_slot_drop_emits_drop.o
+	rm -f heap_parent_drop_emits.s heap_parent_drop_emits heap_parent_drop_emits.o
 
 test: $(OUT) test-pass test-fail test-runtime test-framework test-ir test-paths test-leaks
 	@echo ""
@@ -204,4 +205,42 @@ test-leaks: $(OUT)
 		done; \
 	fi; \
 	rm -f "$$asm" heap_slot_drop_emits_drop heap_slot_drop_emits_drop.o; \
+	src=tests/leaks/heap_parent_drop_emits.ptt; \
+	asm=heap_parent_drop_emits.s; \
+	rm -f "$$asm" heap_parent_drop_emits heap_parent_drop_emits.o; \
+	if ! ./$(OUT) ir "$$src" > /dev/null 2>&1; then \
+		echo "  FAIL: $$src did not lower to IR"; fail=1; \
+	else \
+		if awk '/^_drop_array_String:/{found=1} END{exit found ? 0 : 1}' "$$asm"; then \
+			echo "  OK:   _drop_array_String helper emitted"; \
+		else \
+			echo "  FAIL: _drop_array_String helper missing (F-002)"; fail=1; \
+		fi; \
+		if awk '/^_clone_array_String:/{found=1} END{exit found ? 0 : 1}' "$$asm"; then \
+			echo "  OK:   _clone_array_String helper emitted"; \
+		else \
+			echo "  FAIL: _clone_array_String helper missing (F-002)"; fail=1; \
+		fi; \
+		if awk '/^_drop_List__String:/{inside=1; next} inside && /^\.globl/{inside=0} inside && /bl _drop_array_String/{found=1} END{exit found ? 0 : 1}' "$$asm"; then \
+			echo "  OK:   _drop_List__String delegates to _drop_array_String (cap-bounded)"; \
+		else \
+			echo "  FAIL: _drop_List__String missing _drop_array_String call (F-002)"; fail=1; \
+		fi; \
+		if awk '/^_drop_Set__String:/{inside=1; next} inside && /^\.globl/{inside=0} inside && /bl _drop_array_String/{found=1} END{exit found ? 0 : 1}' "$$asm"; then \
+			echo "  OK:   _drop_Set__String delegates to _drop_array_String"; \
+		else \
+			echo "  FAIL: _drop_Set__String missing _drop_array_String call (F-002)"; fail=1; \
+		fi; \
+		if awk '/^_drop_Map__String__String:/{inside=1; next} inside && /^\.globl/{inside=0} inside && /bl _drop_array_String/{c++} END{exit c >= 2 ? 0 : 1}' "$$asm"; then \
+			echo "  OK:   _drop_Map__String__String delegates twice (keys + vals)"; \
+		else \
+			echo "  FAIL: _drop_Map__String__String missing dual _drop_array_String calls (F-002)"; fail=1; \
+		fi; \
+		if awk '/^_clone_List__String:/{inside=1; next} inside && /^\.globl/{inside=0} inside && /bl _clone_array_String/{found=1} END{exit found ? 0 : 1}' "$$asm"; then \
+			echo "  OK:   _clone_List__String delegates to _clone_array_String"; \
+		else \
+			echo "  FAIL: _clone_List__String missing _clone_array_String call (F-002)"; fail=1; \
+		fi; \
+	fi; \
+	rm -f "$$asm" heap_parent_drop_emits heap_parent_drop_emits.o; \
 	[ $$fail -eq 0 ] || (echo "Some leak tests failed"; exit 1)

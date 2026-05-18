@@ -391,6 +391,62 @@ Compiler/runtime root-cause fixes that landed alongside Map:
    now correctly drop tombstoned and updated slots' previous
    occupants because of the new compiler-side drop.
 
+6. F-002 fix: parent-drop and `is rep` for structs with
+   `array of <heap-shaped E>` fields. The audited C-003 batch
+   used a List-shape count-bounded specialisation; that
+   specialisation was found incomplete (List.clear leaked,
+   pop/remove + push double-freed because the post-count slots
+   still held the transferred-out pointers). Codex opened F-002
+   for the live-tail ownership hole and the C-003 batch was
+   rejected.
+
+   The replacement (this entry) has two parts:
+
+   **Compiler — uniform cap-bounded null-guarded drop/clone.**
+   `compiler/main.c`'s `EMIT_IR_TO_FILE` now treats every
+   heap-shaped element array the same way: `_drop_<X>` and
+   `_clone_<X>` delegate to the per-elem helpers
+   `_drop_array_<E>` / `_clone_array_<E>` (defined in the same
+   file). Each helper iterates `[0..cap)`, null-guards every
+   slot, calls `_drop_<E>` / `_clone_<E>` on non-null pointers,
+   then frees the data buffer + 16-byte header. The helpers
+   accept a null receiver and short-circuit. The C-003 List-shape
+   count-bounded path and the `is_list_shape` shape detector
+   were removed — the new invariant is "any non-null slot in
+   `[0..cap)` is owned by the parent and must be dropped on
+   parent-drop", regardless of which struct shape wraps the
+   array.
+
+   **Compiler — `is now arr[i]` / `be now arr[i]` extraction.**
+   `compiler/checker.c` and `compiler/irgen.c` extend the
+   existing `is now` / `be now` ownership-transfer surface to
+   accept array-slot expressions as the source. `local is now
+   arr[i]` does a bounds-checked load at the slot AND writes 0
+   to the slot in one step; the new local is heap-tracked with
+   the element's struct name (so RAII at scope end calls the
+   correct `_drop_<E>`). For primitive-element arrays it
+   collapses to a value-load + slot-zero pair — same shape,
+   harmless.
+
+   **Stdlib — `std/list.ptt`.** `List.pop`, `List.try_pop`, and
+   `List.remove` use the new `is now self.data[k]` primitive to
+   vacate slots when transferring ownership out. `List.remove`
+   was rewritten as a bubble-null pattern: pull `saved` out via
+   `is now` (slot[i] becomes null), then loop `next is now
+   self.data[k+1]; self.data[k] be now next` so the null hole
+   moves rightward without ever leaving an aliased slot.
+   `List.clear` stays as `count = 0` — the cap-bounded
+   parent-drop reaps every still-owned slot at scope end.
+   `List.push` and `List.insert` are unchanged from C-003 (the
+   deep-clone-on-push and bubble-down-on-insert remain correct
+   under the uniform invariant).
+
+   The overall effect: a non-null slot in `[0..cap)` is a
+   uniquely-owned pointer, period. Pop/try_pop/remove vacate
+   slots when the caller takes ownership; push/insert/set
+   honour drop-before-overwrite via the F-001 path. Cap-bounded
+   parent-drop never re-drops a transferred-out pointer.
+
 Tests in place:
 
 - happy-path set/get/has/try_get/remove/clear/reserve/keys/values

@@ -77,6 +77,19 @@ List.empty(self List of T) bool {
 // Subsequent grows allocate fresh, copy, then `be now`-replace
 // the field — `be now` drops the prior backing array, so no
 // leak across grows (see tests/test_replace_drops_old.ptt).
+//
+// Heap-shaped T: deep-clone v into the appended slot via
+// `is rep` + `be now`, matching the convention in `List.set`,
+// `Map.set`, and `Set.add`. The clone gives the slot
+// independent ownership so:
+//   - the caller's v (e.g. a List local) can RAII-drop at scope
+//     end without the List's parent-drop iterating the same
+//     pointer (which would double-free under the new
+//     count-bounded `_drop_<List__T>` logic);
+//   - aliasing patterns like `xs.push(xs.get(0))` don't yield
+//     a use-after-free in the slot.
+// For primitive T, `is rep` collapses to a value copy and
+// `be now` collapses to a plain store.
 List.push(self ref List of T, v T) {
   self.data eq 0 ?{
     self.data be array of T with cap 8
@@ -89,7 +102,8 @@ List.push(self ref List of T, v T) {
     }
     self.data be now fresh
   }
-  self.data[self.count] be v
+  v_clone is rep v
+  self.data[self.count] be now v_clone
   self.count be self.count + 1
 }
 
@@ -99,19 +113,35 @@ List.push(self ref List of T, v T) {
 // its data buffer yet (lazy-init in push). Use assert(false)
 // for a deterministic non-zero exit; once a `panic` builtin
 // lands this can switch.
+//
+// F-002: extract the popped pointer via `is now self.data[k]`
+// so the slot is left null and the caller becomes the unique
+// owner. Without this, the parent's cap-bounded null-guarded
+// drop would re-drop the same pointer at end of scope, and a
+// subsequent `push` reusing slot[count] would invoke the
+// drop-before-overwrite path on a non-null slot still aliased
+// by the caller's local — producing a use-after-free.
+//
+// For primitive T, `is now self.data[k]` collapses to a value
+// load and a slot-zero write; both are cheap and harmless.
 List.pop(self ref List of T) T {
   self.count le 0 ?{
     assert(false)
   }
   self.count be self.count - 1
-  give self.data[self.count]
+  v is now self.data[self.count]
+  give v
 }
 
 // Remove and return the last element, or None on empty.
+//
+// Same `is now` ownership-transfer as `pop` — slot is nulled,
+// caller owns the popped value via the returned `some`.
 List.try_pop(self ref List of T) Option of T {
   self.count le 0 ?{ give none of T () }
   self.count be self.count - 1
-  give some of T (self.data[self.count])
+  v is now self.data[self.count]
+  give some of T (v)
 }
 
 // Read element at `i`. Bounds-checked against `count` (not cap):
@@ -171,6 +201,22 @@ List.set(self ref List of T, i int, v T) {
 
 // Insert `v` at position `i`, shifting later elements right.
 // `i` may equal `count` (append). Panics on i < 0 or i > count.
+//
+// Same alias-safety rationale as `push`: deep-clone v into a
+// freshly-empty tail slot, then bubble it down to position i
+// via two-pointer swaps. The swap-bubble pattern keeps the
+// invariant "every slot owns its current pointer uniquely or
+// holds null" at every step, which the count-bounded
+// `_drop_<List__T>` relies on.
+//
+// Why not the simpler tail-walking shift? The naive shift writes
+// `slot[j] = slot[j-1]` (alias copy) and ends with slot[i+1]
+// aliasing slot[i]'s original value, then overwrites slot[i]
+// with v. With heap-shaped T, the final overwrite via `be now`
+// would drop slot[i]'s prior pointer — which is also held by
+// slot[i+1] post-shift — leaving slot[i+1] dangling. The
+// swap-bubble exchanges contents at each step, never aliasing
+// across slots after the step completes.
 List.insert(self ref List of T, i int, v T) {
   i lt 0 or i gt self.count ?{
     assert(false)
@@ -182,33 +228,66 @@ List.insert(self ref List of T, i int, v T) {
   self.count ge self.data.cap ?{
     new_cap is self.data.cap * 2
     fresh is array of T with cap new_cap
-    through (k from 0 to self.count by 1) {
-      fresh[k] be self.data[k]
+    through (m from 0 to self.count by 1) {
+      fresh[m] be self.data[m]
     }
     self.data be now fresh
   }
-  // Shift right [i .. count) -> [i+1 .. count+1). Walk from the
-  // tail so we don't overwrite unread slots.
-  j is self.count
-  infi (j gt i) {
-    self.data[j] be self.data[j - 1]
-    j be j - 1
+  // Park v in the (currently empty) tail slot at index `count`.
+  // The compiler's drop-before-overwrite null-guards the slot's
+  // prior pointer; freshly grown / never-pushed-into capacity is
+  // null, so the guarded drop is a no-op and the clone lands
+  // cleanly. v_clone is marked moved by `be now`, so RAII at
+  // function exit skips it.
+  v_clone is rep v
+  self.data[self.count] be now v_clone
+  // Bubble v from slot[count] down to slot[i] via plain
+  // exchanges. After each step, slots [k-1] and [k] swap
+  // contents — no slot holds a pointer that any other slot
+  // also holds.
+  k is self.count
+  infi (k gt i) {
+    tmp_left is self.data[k - 1]
+    self.data[k - 1] be self.data[k]
+    self.data[k] be tmp_left
+    k be k - 1
   }
-  self.data[i] be v
   self.count be self.count + 1
 }
 
 // Remove and return the element at `i`, shifting later elements
 // left. Panics on out-of-range.
+//
+// F-002: bubble a null hole from slot[i] up to slot[count-1]. At
+// each step the hole is filled by transferring slot[k+1]'s pointer
+// into slot[k], leaving slot[k+1] null for the next step. After
+// the loop slot[count-1] holds null, so the cap-bounded parent
+// drop will not re-drop the value the caller now owns. For
+// primitive T this collapses to a value-load + slot-zero pair
+// per step — same shape as the heap-shaped path.
+//
+// The naive shift `slot[j] be slot[j+1]` was alias-shuffle and
+// left slot[count-1] aliasing slot[count-2], which violated the
+// "non-null slot in [0..cap) is unique-owner" invariant. The
+// bubble-null pattern preserves it at every step.
 List.remove(self ref List of T, i int) T {
   i lt 0 or i ge self.count ?{
     assert(false)
   }
-  saved is self.data[i]
-  // Shift left [i+1 .. count) -> [i .. count-1).
-  through (j from i to self.count - 1 by 1) {
-    self.data[j] be self.data[j + 1]
+  // Pull saved out via `is now`: slot[i] becomes null; `saved`
+  // owns the popped pointer (or holds the value, for primitive T).
+  saved is now self.data[i]
+  // Bubble the null hole rightward by transferring each successive
+  // right-neighbor's pointer into the current null slot. After
+  // each iteration: slot[k] is the original slot[k+1]'s pointer,
+  // slot[k+1] is null (precondition for the next iteration).
+  k is i
+  infi (k lt self.count - 1) {
+    next is now self.data[k + 1]
+    self.data[k] be now next
+    k be k + 1
   }
+  // slot[count-1] is now null. Decrement the count and return.
   self.count be self.count - 1
   give saved
 }
