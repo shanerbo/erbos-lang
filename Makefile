@@ -149,6 +149,16 @@ test-paths: $(OUT)
 		echo "  FAIL: source path with space and apostrophe"; fail=1; \
 	fi; \
 	rm -rf "$$tmp"; \
+	mkdir -p "$$tmp/lib"; \
+	cp tests/fixtures/path_project_main.ptt "$$tmp/main.ptt"; \
+	cp tests/fixtures/path_project_helper.ptt "$$tmp/lib/helper.ptt"; \
+	touch "$$tmp/potato.toml"; \
+	if ./$(OUT) run "$$tmp/main.ptt" > /dev/null 2>&1; then \
+		echo "  OK:   project import path with spaces and apostrophe"; \
+	else \
+		echo "  FAIL: project import path with spaces and apostrophe"; fail=1; \
+	fi; \
+	rm -rf "$$tmp"; \
 	[ $$fail -eq 0 ] || (echo "Some path handling tests failed"; exit 1)
 
 test-leaks: $(OUT)
@@ -165,4 +175,15 @@ test-leaks: $(OUT)
 		echo "  FAIL: named-arg String literal constructor leaks auto-init"; fail=1; \
 	fi; \
 	rm -f "$$asm" named_arg_string_literal named_arg_string_literal.o; \
+	src=tests/leaks/named_arg_nested_string_literal.ptt; \
+	asm=named_arg_nested_string_literal.s; \
+	rm -f "$$asm" named_arg_nested_string_literal named_arg_nested_string_literal.o; \
+	if ! ./$(OUT) ir "$$src" > /dev/null 2>&1; then \
+		echo "  FAIL: $$src did not lower to IR"; fail=1; \
+	elif awk '/^_make_pair:/{inside=1; next} inside && /^_/{inside=0} inside && /bl _alloc_String/{bad=1} END{exit bad ? 1 : 0}' "$$asm"; then \
+		echo "  OK:   nested named-arg String literals avoid leaked auto-init"; \
+	else \
+		echo "  FAIL: nested named-arg String literals leak auto-init"; fail=1; \
+	fi; \
+	rm -f "$$asm" named_arg_nested_string_literal named_arg_nested_string_literal.o; \
 	[ $$fail -eq 0 ] || (echo "Some leak tests failed"; exit 1)

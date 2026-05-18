@@ -1,0 +1,34 @@
+// Deeper named-arg String literal leak regression.
+//
+// The constructor lowering must not auto-init String fields that are
+// explicitly initialized by named args, even when the fields sit inside
+// nested named-arg struct construction.
+
+use std/string
+
+Holder is {
+  name String
+  count int
+}
+
+Pair is {
+  left Holder
+  right Holder
+}
+
+make_pair(i int) Pair {
+  give Pair(
+    left is Holder(name is "left-name", count is i),
+    right is Holder(name is "right-name", count is i + 1)
+  )
+}
+
+spark {
+  p is make_pair(10)
+  p.left.name.len() eq 9 ?{
+    yell(p.left.count)
+  }
+  p.right.name.len() eq 10 ?{
+    yell(p.right.count)
+  }
+}

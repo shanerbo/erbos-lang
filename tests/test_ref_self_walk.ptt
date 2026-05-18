@@ -5,6 +5,7 @@
 
 use std/string
 use std/list
+use std/map
 
 Counter is { value int }
 Holder is { counter Counter }
@@ -54,4 +55,39 @@ test "ref param allows ref-self call through xs.get(i)" {
   bump_first(ref xs)
   bump_first(ref xs)
   assert(xs.get(0).value eq 7)
+}
+
+test "local List root allows ref-self call through xs.get(i)" {
+  xs is List of Counter
+  xs.push(Counter(value is 1))
+  xs.get(0).bump()
+  xs.get(0).bump()
+  assert(xs.get(0).value eq 3)
+}
+
+HolderMap is {
+  items Map of String to Counter
+}
+
+bump_named(m ref Map of String to Counter) {
+  m.get("main").bump()
+}
+
+bump_map_field(h ref HolderMap) {
+  h.items.get("main").bump()
+}
+
+test "ref map param allows ref-self call through m.get(k)" {
+  m is Map of String to Counter
+  m.set("main", Counter(value is 10))
+  bump_named(ref m)
+  bump_named(ref m)
+  assert(m.get("main").value eq 12)
+}
+
+test "ref field map root allows ref-self call through h.items.get(k)" {
+  h is HolderMap()
+  h.items.set("main", Counter(value is 20))
+  bump_map_field(ref h)
+  assert(h.items.get("main").value eq 21)
 }

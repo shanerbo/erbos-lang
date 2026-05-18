@@ -1,0 +1,29 @@
+// Codex audit hardening for task #142 beyond List.get.
+//
+// Map.get returns the value stored inside the map. If that value is a
+// heap-shaped struct, calling a `ref self` method on the return value
+// would mutate caller-owned map storage through a non-ref parameter.
+// This must stay a compile-fail test unless a future alias-effect system
+// proves the return is fresh.
+
+use std/string
+use std/map
+
+Counter is {
+  value int
+}
+
+Counter.bump(self ref Counter) {
+  self.value be self.value + 1
+}
+
+touch(m Map of String to Counter) {
+  m.get("main").bump()
+}
+
+spark {
+  m is Map of String to Counter
+  m.set("main", Counter(value is 0))
+  touch(m)
+  yell(m.get("main").value)
+}

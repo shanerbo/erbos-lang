@@ -1,0 +1,30 @@
+// Codex audit hardening for task #142 with Map.get plus field access.
+//
+// The receiver walker must not only reject `m.get(k).bump()`;
+// it also has to walk through fields read from the aliased map value.
+
+use std/string
+use std/map
+
+Counter is {
+  value int
+}
+
+Holder is {
+  counter Counter
+}
+
+Counter.bump(self ref Counter) {
+  self.value be self.value + 1
+}
+
+touch(m Map of String to Holder) {
+  m.get("main").counter.bump()
+}
+
+spark {
+  m is Map of String to Holder
+  m.set("main", Holder())
+  touch(m)
+  yell(m.get("main").counter.value)
+}
