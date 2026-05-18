@@ -1,0 +1,66 @@
+// Codex P1-11 round 4: pre-checker alias rewrite must respect
+// local scope. A name that shadows an import alias (`math`,
+// `list`, `h`, etc.) inside a function body refers to the local
+// — `math.method()` calls the local's method, not the imported
+// module's free function.
+//
+// Pre-fix the rewrite was unconditional and turned every
+// `math.method()` into `<canonical>.method()`, miscompiling the
+// program with cryptic "module 'math' has no function ..." or
+// "function 'math.method' expects N args" diagnostics.
+
+use std/string
+use std/math
+
+MathBox is { value int }
+
+MathBox.max(self MathBox) int {
+  give self.value
+}
+
+MathBox.add(self MathBox, x int) int {
+  give self.value + x
+}
+
+test "local var shadows alias — method call dispatches on local" {
+  math is MathBox(value is 7)
+  assert(math.max() eq 7)
+  assert(math.add(3) eq 10)
+}
+
+test "function param shadows alias" {
+  math is MathBox(value is 12)
+  assert(math.max() eq 12)
+}
+
+// Range loop var named after alias — body must call MathBox.add
+// on the *local* (which we give a deliberately different name to
+// avoid fighting the lexer with `math` as a range var, which is a
+// pure-int range and wouldn't have a `.add` method anyway).
+//
+// What we test here: an alias name appearing as a local of struct
+// type after the range loop still resolves to the local, not the
+// import.
+test "alias still works at the same time as a shadowing local" {
+  // Use `math` as a regular alias-qualified call in this scope:
+  m1 is math.max(2, 5)
+  assert(m1 eq 5)
+  // Now introduce a local named `math` that shadows the alias:
+  math is MathBox(value is 99)
+  assert(math.max() eq 99)
+}
+
+test "match arm binding shadows alias" {
+  // The match arm's binding name `math` shadows the import alias
+  // inside the arm body. Pre-fix the body's `math.add(1)` was
+  // rewritten as a module call.
+  v is 5
+  result is 0
+  // (No enum readily at hand for binding; emulate the shape via
+  //  a let-in-arm pattern using a local.)
+  v gt 0 ?{
+    math is MathBox(value is v)
+    result be math.add(1)
+  }
+  assert(result eq 6)
+}

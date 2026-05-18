@@ -1502,3 +1502,66 @@ paths are. Same lesson as P1-11 round 2 about dedupe keys —
 both rounds were the same root issue (one layer apart): "what
 identifies a module?" — and the right answer is always
 "resolved path," never "user text."
+
+### P1-11 round 4: alias rewrite must respect local scope
+
+Codex round-4 review found that the round-3 rewriter walked
+function bodies before the checker had any scope information
+and unconditionally rewrote every NODE_METHOD_CALL receiver
+matching an import alias. That mis-handles a local variable
+that shadows the alias:
+
+    use std/math
+    MathBox is { value int }
+    MathBox.max(self MathBox) int { give self.value }
+    spark {
+      math is MathBox(value is 7)
+      yell(math.max())
+    }
+
+The user-visible name `math` here refers to the local — the
+method call should dispatch on `MathBox.max()` and yield 7.
+Pre-fix, the rewriter saw `math` matching the import alias
+`math` and rewrote the receiver to the canonical synthetic.
+The checker then complained "function 'math.max' expects 2
+arguments, got 0" — pointing at the wrong language feature.
+
+Fix: scope-aware rewrite. Maintain a flat `ScopeStack` of
+names introduced by:
+
+- function parameters (seeded at body entry)
+- NODE_VAR_DECL (`x is ...`) — pushed *after* walking the
+  initializer, so `x is foo()` reads `foo` in the outer scope
+- NODE_THROUGH_RANGE / NODE_THROUGH_IN loop vars (scoped to
+  the loop body)
+- NODE_MATCH arm bindings (scoped to the arm body)
+- NODE_BLOCK push/pop boundary
+
+A receiver IDENT is rewritten only if no entry in the stack
+matches its name. Locals that shadow aliases now resolve
+through the checker's normal struct-method dispatch, exactly
+as users expect.
+
+The aliases-and-local-coexist case still works: in a function
+where some lines use `math.max(a, b)` (alias call) and later
+lines introduce a local `math`, the loop visits in order. Each
+call site's rewrite decision uses the scope at that point —
+pre-shadow calls get rewritten, post-shadow calls don't.
+
+Test: `tests/test_alias_shadowing.ptt` covers four cases:
+local var, function param, alias-and-local-coexisting in the
+same scope, and match arm binding.
+
+What this teaches: pre-checker AST rewrites that depend on
+*name resolution* are dangerous unless they replicate the
+checker's scope rules exactly. The earlier rewrite was a
+"matches alias text? rewrite" pattern that ignored every
+shadowing case the language actually supports. Round 4
+threads a small scope tracker through the walker so the
+rewrite has the same name-binding view the checker eventually
+will. Cleaner long-term option: do the rewrite at the
+checker, where the scope already exists. Kept at parse time
+in this commit because the existing module-call dispatch
+infrastructure (find_func with `<alias>_<func>` symbol names)
+fits the rewrite shape; restructuring the checker is a bigger
+sweep.

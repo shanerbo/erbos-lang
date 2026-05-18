@@ -267,124 +267,218 @@ static const char *canonical_alias_for(const char *resolved_path) {
 }
 
 // Walk a function body and rewrite any NODE_METHOD_CALL whose
-// receiver is a bare NODE_IDENT matching one of `local_aliases[i]`,
+// receiver is a bare NODE_IDENT matching one of `aliases[i]`,
 // replacing the IDENT name with `canonical_aliases[i]`. This is
 // alias-rewriting for module-qualified calls (`h.foo()` →
 // `<canon>.foo()`).
 //
-// The walker mirrors `rewrite_calls_with_prefix`'s structure but
-// only changes the IDENT receivers, not call names.
-static void rewrite_alias_idents(Node *n,
-                                 char **local_aliases,
-                                 char **canonical_aliases,
-                                 int alias_count) {
+// Codex P1-11 round 4: scope-aware. The walker tracks names
+// introduced by NODE_VAR_DECL, function parameters, range/iter
+// loop vars, and match arm bindings. If a local with the same
+// name is in scope at the call site, the IDENT receiver refers
+// to that local (and the method call must dispatch on its
+// runtime type), not to the import alias — so do not rewrite.
+//
+// The scope is a flat name list with push/pop. Block scopes save
+// the count on entry and restore on exit, mirroring the checker's
+// scope handling.
+typedef struct {
+    char **names;
+    int count;
+    int cap;
+} ScopeStack;
+
+static void scope_push(ScopeStack *s, const char *name) {
+    if (!name) return;
+    if (s->count >= s->cap) {
+        s->cap = s->cap ? s->cap * 2 : 8;
+        s->names = realloc(s->names, s->cap * sizeof(char *));
+    }
+    s->names[s->count++] = strdup(name);
+}
+
+static void scope_truncate(ScopeStack *s, int new_count) {
+    while (s->count > new_count) {
+        s->count--;
+        free(s->names[s->count]);
+    }
+}
+
+static int scope_contains(const ScopeStack *s, const char *name) {
+    if (!name) return 0;
+    for (int i = s->count - 1; i >= 0; i--) {
+        if (!strcmp(s->names[i], name)) return 1;
+    }
+    return 0;
+}
+
+static void rewrite_alias_idents_walk(Node *n,
+                                      char **aliases,
+                                      char **canonicals,
+                                      int alias_count,
+                                      ScopeStack *scope);
+
+static void rewrite_alias_idents_walk(Node *n,
+                                      char **aliases,
+                                      char **canonicals,
+                                      int alias_count,
+                                      ScopeStack *scope) {
     if (!n) return;
     switch (n->type) {
         case NODE_METHOD_CALL: {
-            // Rewrite the receiver if it's an alias IDENT. Stash the
-            // user-written alias in `method_call.alias_display` so
-            // checker diagnostics report the user's name rather than
-            // the canonical `m<N>` synthetic.
+            // Rewrite the receiver if it's a bare alias IDENT and
+            // no in-scope local shadows it. Stash the user-written
+            // alias in `method_call.alias_display` so checker
+            // diagnostics report the user's name rather than the
+            // canonical `m<N>` synthetic.
             Node *obj = n->method_call.object;
-            if (obj && obj->type == NODE_IDENT && obj->ident.name) {
+            if (obj && obj->type == NODE_IDENT && obj->ident.name &&
+                !scope_contains(scope, obj->ident.name)) {
                 for (int i = 0; i < alias_count; i++) {
-                    if (!strcmp(obj->ident.name, local_aliases[i])) {
+                    if (!strcmp(obj->ident.name, aliases[i])) {
                         if (!n->method_call.alias_display) {
-                            n->method_call.alias_display = strdup(local_aliases[i]);
+                            n->method_call.alias_display = strdup(aliases[i]);
                         }
-                        obj->ident.name = strdup(canonical_aliases[i]);
+                        obj->ident.name = strdup(canonicals[i]);
                         break;
                     }
                 }
             }
-            // Recurse into args (and the receiver, in case of nested chains).
-            rewrite_alias_idents(n->method_call.object, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents_walk(obj, aliases, canonicals, alias_count, scope);
             for (int i = 0; i < n->method_call.arg_count; i++)
-                rewrite_alias_idents(n->method_call.args[i], local_aliases, canonical_aliases, alias_count);
+                rewrite_alias_idents_walk(n->method_call.args[i], aliases, canonicals, alias_count, scope);
             break;
         }
         case NODE_CALL:
             for (int i = 0; i < n->call.arg_count; i++)
-                rewrite_alias_idents(n->call.args[i], local_aliases, canonical_aliases, alias_count);
+                rewrite_alias_idents_walk(n->call.args[i], aliases, canonicals, alias_count, scope);
             break;
-        case NODE_BLOCK:
+        case NODE_BLOCK: {
+            int saved = scope->count;
             for (int i = 0; i < n->block.stmts.count; i++)
-                rewrite_alias_idents(n->block.stmts.items[i], local_aliases, canonical_aliases, alias_count);
+                rewrite_alias_idents_walk(n->block.stmts.items[i], aliases, canonicals, alias_count, scope);
+            scope_truncate(scope, saved);
             break;
+        }
         case NODE_VAR_DECL:
-            rewrite_alias_idents(n->var_decl.value, local_aliases, canonical_aliases, alias_count);
+            // Walk the initializer in the *outer* scope (the new
+            // name isn't in scope yet) — `x is some.expr()` reads
+            // `some` before `x` exists. Then introduce the name
+            // for any subsequent statements in the enclosing block.
+            rewrite_alias_idents_walk(n->var_decl.value, aliases, canonicals, alias_count, scope);
+            scope_push(scope, n->var_decl.name);
             break;
         case NODE_ASSIGN:
-            rewrite_alias_idents(n->assign.value, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents_walk(n->assign.value, aliases, canonicals, alias_count, scope);
             break;
         case NODE_FIELD_ASSIGN:
-            rewrite_alias_idents(n->field_assign.object, local_aliases, canonical_aliases, alias_count);
-            rewrite_alias_idents(n->field_assign.value, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents_walk(n->field_assign.object, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->field_assign.value, aliases, canonicals, alias_count, scope);
             break;
         case NODE_FIELD_ACCESS:
-            rewrite_alias_idents(n->field_access.object, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents_walk(n->field_access.object, aliases, canonicals, alias_count, scope);
             break;
         case NODE_BINARY:
-            rewrite_alias_idents(n->binary.left, local_aliases, canonical_aliases, alias_count);
-            rewrite_alias_idents(n->binary.right, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents_walk(n->binary.left, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->binary.right, aliases, canonicals, alias_count, scope);
             break;
         case NODE_UNARY:
-            rewrite_alias_idents(n->unary.operand, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents_walk(n->unary.operand, aliases, canonicals, alias_count, scope);
             break;
         case NODE_INDEX:
-            rewrite_alias_idents(n->index_access.object, local_aliases, canonical_aliases, alias_count);
-            rewrite_alias_idents(n->index_access.index, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents_walk(n->index_access.object, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->index_access.index, aliases, canonicals, alias_count, scope);
             break;
         case NODE_INDEX_ASSIGN:
-            rewrite_alias_idents(n->index_assign.object, local_aliases, canonical_aliases, alias_count);
-            rewrite_alias_idents(n->index_assign.index, local_aliases, canonical_aliases, alias_count);
-            rewrite_alias_idents(n->index_assign.value, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents_walk(n->index_assign.object, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->index_assign.index, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->index_assign.value, aliases, canonicals, alias_count, scope);
             break;
         case NODE_IF:
             for (int i = 0; i < n->if_stmt.branch_count; i++) {
-                rewrite_alias_idents(n->if_stmt.conds[i], local_aliases, canonical_aliases, alias_count);
-                rewrite_alias_idents(n->if_stmt.bodies[i], local_aliases, canonical_aliases, alias_count);
+                rewrite_alias_idents_walk(n->if_stmt.conds[i], aliases, canonicals, alias_count, scope);
+                rewrite_alias_idents_walk(n->if_stmt.bodies[i], aliases, canonicals, alias_count, scope);
             }
-            rewrite_alias_idents(n->if_stmt.nah_body, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents_walk(n->if_stmt.nah_body, aliases, canonicals, alias_count, scope);
             break;
-        case NODE_THROUGH_RANGE:
-            rewrite_alias_idents(n->through_range.from, local_aliases, canonical_aliases, alias_count);
-            rewrite_alias_idents(n->through_range.to, local_aliases, canonical_aliases, alias_count);
-            rewrite_alias_idents(n->through_range.by, local_aliases, canonical_aliases, alias_count);
-            rewrite_alias_idents(n->through_range.body, local_aliases, canonical_aliases, alias_count);
+        case NODE_THROUGH_RANGE: {
+            // Range expressions (from/to/by) are evaluated before
+            // the loop var enters scope. Body sees the loop var.
+            rewrite_alias_idents_walk(n->through_range.from, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->through_range.to,   aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->through_range.by,   aliases, canonicals, alias_count, scope);
+            int saved = scope->count;
+            scope_push(scope, n->through_range.var_name);
+            rewrite_alias_idents_walk(n->through_range.body, aliases, canonicals, alias_count, scope);
+            scope_truncate(scope, saved);
             break;
-        case NODE_THROUGH_IN:
-            rewrite_alias_idents(n->through_in.collection, local_aliases, canonical_aliases, alias_count);
-            rewrite_alias_idents(n->through_in.body, local_aliases, canonical_aliases, alias_count);
+        }
+        case NODE_THROUGH_IN: {
+            rewrite_alias_idents_walk(n->through_in.collection, aliases, canonicals, alias_count, scope);
+            int saved = scope->count;
+            scope_push(scope, n->through_in.var_name);
+            rewrite_alias_idents_walk(n->through_in.body, aliases, canonicals, alias_count, scope);
+            scope_truncate(scope, saved);
             break;
+        }
         case NODE_INFI:
-            rewrite_alias_idents(n->infi.cond, local_aliases, canonical_aliases, alias_count);
-            rewrite_alias_idents(n->infi.body, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents_walk(n->infi.cond, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->infi.body, aliases, canonicals, alias_count, scope);
             break;
         case NODE_GIVE:
-            rewrite_alias_idents(n->give.value, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents_walk(n->give.value, aliases, canonicals, alias_count, scope);
             break;
-        case NODE_MATCH:
-            rewrite_alias_idents(n->match_expr.expr, local_aliases, canonical_aliases, alias_count);
-            for (int i = 0; i < n->match_expr.arm_count; i++)
-                rewrite_alias_idents(n->match_expr.arm_bodies[i], local_aliases, canonical_aliases, alias_count);
+        case NODE_MATCH: {
+            rewrite_alias_idents_walk(n->match_expr.expr, aliases, canonicals, alias_count, scope);
+            for (int i = 0; i < n->match_expr.arm_count; i++) {
+                int saved = scope->count;
+                int bcount = n->match_expr.arm_binding_counts ? n->match_expr.arm_binding_counts[i] : 0;
+                if (n->match_expr.arm_bindings && n->match_expr.arm_bindings[i]) {
+                    for (int b = 0; b < bcount; b++) {
+                        scope_push(scope, n->match_expr.arm_bindings[i][b]);
+                    }
+                }
+                rewrite_alias_idents_walk(n->match_expr.arm_bodies[i], aliases, canonicals, alias_count, scope);
+                scope_truncate(scope, saved);
+            }
             break;
+        }
         case NODE_LIST_LIT:
             for (int i = 0; i < n->list_lit.count; i++)
-                rewrite_alias_idents(n->list_lit.items[i], local_aliases, canonical_aliases, alias_count);
+                rewrite_alias_idents_walk(n->list_lit.items[i], aliases, canonicals, alias_count, scope);
             break;
         case NODE_MAP_LIT:
             for (int i = 0; i < n->map_lit.count; i++) {
-                rewrite_alias_idents(n->map_lit.keys[i], local_aliases, canonical_aliases, alias_count);
-                rewrite_alias_idents(n->map_lit.values[i], local_aliases, canonical_aliases, alias_count);
+                rewrite_alias_idents_walk(n->map_lit.keys[i], aliases, canonicals, alias_count, scope);
+                rewrite_alias_idents_walk(n->map_lit.values[i], aliases, canonicals, alias_count, scope);
             }
             break;
         case NODE_ASSERT:
-            rewrite_alias_idents(n->assert_stmt.condition, local_aliases, canonical_aliases, alias_count);
+            rewrite_alias_idents_walk(n->assert_stmt.condition, aliases, canonicals, alias_count, scope);
             break;
         default:
             break;
     }
+}
+
+// Rewrite a function body, seeding the scope with parameter names
+// so a function with `(math int)` doesn't have its `math.foo()`
+// rewritten as a module call. Aliases that match nothing in scope
+// or in the file's import list are left alone (the checker will
+// surface "undefined variable" for genuinely unknown receivers).
+static void rewrite_alias_idents_in_body(Node *body,
+                                         char **param_names, int param_count,
+                                         char **aliases,
+                                         char **canonicals,
+                                         int alias_count) {
+    if (!body) return;
+    ScopeStack scope = {0};
+    for (int i = 0; i < param_count; i++) {
+        scope_push(&scope, param_names[i]);
+    }
+    rewrite_alias_idents_walk(body, aliases, canonicals, alias_count, &scope);
+    scope_truncate(&scope, 0);
+    free(scope.names);
 }
 
 // Resolve a `use <use_path>` against the three-tier search order
@@ -659,16 +753,20 @@ int main(int argc, char **argv) {
             for (int fi = 0; fi < program->program.funcs.count; fi++) {
                 Node *f = program->program.funcs.items[fi];
                 if (f->func_def.body) {
-                    rewrite_alias_idents(f->func_def.body,
-                                         user_aliases, canon_aliases, valid);
+                    rewrite_alias_idents_in_body(f->func_def.body,
+                                                 f->func_def.param_names,
+                                                 f->func_def.param_count,
+                                                 user_aliases, canon_aliases, valid);
                 }
             }
-            // Also rewrite test bodies (test "name" { ... }).
+            // Also rewrite test bodies (test "name" { ... }). Tests
+            // have no parameters, so the seed scope is empty.
             for (int ti = 0; ti < program->program.tests.count; ti++) {
                 Node *t = program->program.tests.items[ti];
                 if (t && t->test_def.body) {
-                    rewrite_alias_idents(t->test_def.body,
-                                         user_aliases, canon_aliases, valid);
+                    rewrite_alias_idents_in_body(t->test_def.body,
+                                                 NULL, 0,
+                                                 user_aliases, canon_aliases, valid);
                 }
             }
             for (int i = 0; i < valid; i++) {
@@ -807,8 +905,10 @@ int main(int argc, char **argv) {
             for (int fi = 0; fi < imp_prog->program.funcs.count; fi++) {
                 Node *f = imp_prog->program.funcs.items[fi];
                 if (f->func_def.body) {
-                    rewrite_alias_idents(f->func_def.body,
-                                         user_aliases, canon_aliases, valid);
+                    rewrite_alias_idents_in_body(f->func_def.body,
+                                                 f->func_def.param_names,
+                                                 f->func_def.param_count,
+                                                 user_aliases, canon_aliases, valid);
                 }
             }
             for (int i = 0; i < valid; i++) {
