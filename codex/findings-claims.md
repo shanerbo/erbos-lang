@@ -64,14 +64,15 @@ If another implementation batch starts before audit:
 ## Header
 
 - `State`: IDLE
-- `Claim ID`: (none — C-004 was consumed and accepted for F-002;
-  batch remains on HOLD because F-003 / F-004 were opened against
-  Queue / Deque heap-shaped ownership)
-- `Against findings revision`: 8
-- `Target commit`: 5fa4ab5 + working tree
-- `Claimed fixed`: (none pending; next claim will target
-  F-003 + F-004 as one cluster)
-- `Last updated`: 2026-05-18T22:41:24+00:00
+- `Claim ID`: (none — C-005 was consumed by Codex against findings
+  revision 9 and accepted with `Conclusion: ALL_CLEAR` /
+  `Release action: COMMIT_AND_PUSH`; the audited batch (C-004 +
+  C-005) is being landed as two commits in dependency order:
+  C-004 in 9a1ffad, C-005 in this commit)
+- `Against findings revision`: 9
+- `Target commit`: 9a1ffad + this commit
+- `Claimed fixed`: (none pending)
+- `Last updated`: 2026-05-18T23:15:00+00:00
 
 ## Claim C-001
 - State: READY_FOR_AUDIT
@@ -559,6 +560,142 @@ If another implementation batch starts before audit:
   - `tests/test_heap_slot_drop.ptt` (F-001 regressions, 18
     cases) still passes at all three -O levels.
 
+## Claim C-005
+- State: READY_FOR_AUDIT
+- Against findings revision: 8
+- Target commit: 5fa4ab5 + working tree (uncommitted; Codex can
+  verify against `git diff` for the listed files)
+- Claimed fixed: F-003, F-004
+- Last updated: 2026-05-18T22:48:00+00:00
+- Bug class (recap from findings.md F-003 / F-004):
+  `Queue of T` and `Deque of T` were not migrated to the new
+  heap-shaped ownership model that F-002 established. Both used
+  raw `self.data[idx] be v` stores on push and raw
+  `v is self.data[idx]` reads on pop, plus alias-shifts in the
+  `reserve` / push-grow path. With cap-bounded null-guarded
+  `_drop_array_<E>` (which Queue.data / Deque.data already
+  routed through, since neither matches the F-002 List shape):
+  caller-owned heap-shaped pointers ended up aliased into queue
+  slots, popped pointers were never cleared from their physical
+  slots, and grow's plain alias-shift left old buffer slots
+  pointing at the same heap blocks the fresh array now held —
+  with `self.data be now fresh` then dropping the old buffer
+  and freeing pointers `fresh` still owned. The two findings
+  are one inseparable root cause (circular-buffer ownership
+  transitions) and ship as a single claim.
+- Root-cause fix:
+  Pure stdlib change. The compiler routing of Queue.data /
+  Deque.data through the uniform cap-bounded null-guarded
+  `_drop_array_<E>` / `_clone_array_<E>` helpers is correct
+  under the F-002 invariant ("any non-null slot in `[0..cap)` is
+  owned by the parent and must be dropped on parent-drop"). All
+  the work is teaching Queue and Deque to maintain that
+  invariant.
+  - `std/queue.ptt::Queue.push`: deep-clone v into the slot
+    via `is rep` + `be now`, mirroring `List.push`. Without
+    the clone, callers passing heap-shaped locals would alias
+    them into queue slots and the parent drop would re-drop
+    them at scope end. The push-time grow path was rewritten
+    to transfer ownership of each logical slot via `is now`
+    + `be now` instead of plain alias-copy, so the old
+    buffer's slots are all null when `self.data be now fresh`
+    drops it.
+  - `std/queue.ptt::Queue.pop` / `try_pop`: switched to
+    `v is now self.data[self.head]` to extract the head's
+    pointer and null the slot in one step. Subsequent pushes
+    that reuse the same physical slot find null and skip the
+    F-001 drop-before-overwrite; the caller is the unique
+    owner of the popped value.
+  - `std/queue.ptt::Queue.reserve`: same `is now` + `be now`
+    transfer pattern as the push-time grow path.
+  - `std/queue.ptt::Queue.clear`: unchanged — `head = 0;
+    count = 0`. The cap-bounded null-guarded parent drop
+    reaps every still-non-null slot at scope end. Subsequent
+    push reuses slot[head=0..] via the F-001 drop-before-
+    overwrite path, which drops any pre-clear pointer at
+    that physical slot before storing the new clone.
+  - `std/deque.ptt::Deque.push_back` / `push_front`: same
+    deep-clone + `be now` pattern as `Queue.push`. Both
+    push_back and push_front must clone independently
+    because either may be the only push path for a given
+    application.
+  - `std/deque.ptt::Deque.pop_front` / `pop_back` /
+    `try_pop_front` / `try_pop_back`: all four use
+    `v is now self.data[idx]` to vacate the slot when
+    transferring ownership to the caller. `pop_back` and
+    `try_pop_back` compute `idx` from
+    `(head + count - 1) mod cap`; `pop_front` and
+    `try_pop_front` use `head` directly.
+  - `std/deque.ptt::Deque.reserve` / push-time grow paths:
+    same `is now` + `be now` transfer as Queue's grow path.
+  - `std/deque.ptt::Deque.clear`: unchanged — `head = 0;
+    count = 0`. Same reasoning as Queue.clear.
+  - **No compiler change required.** The F-002 fix already
+    introduced `is now arr[i]` and the uniform cap-bounded
+    `_drop_array_<E>` / `_clone_array_<E>` helpers; Queue
+    and Deque are now teaching the stdlib to use them.
+- Files changed:
+  - `std/queue.ptt` (push, pop, try_pop, reserve;
+    clear unchanged)
+  - `std/deque.ptt` (push_back, push_front, pop_front,
+    pop_back, try_pop_front, try_pop_back, reserve;
+    clear / front / back / get / len / cap / empty
+    unchanged)
+  - `tests/test_heap_circular_ownership.ptt` (new, 25
+    framework cases)
+- Tests added (`tests/test_heap_circular_ownership.ptt`, all
+  pass at `-O0`/`-O1`/`-O2`):
+  - **Queue scope-end drop with heap-shaped T** (2):
+    `Queue of String` with concat-allocated payloads + literals;
+    `Queue of List of int` (nested heap-shaped element).
+  - **Queue pop / try_pop ownership transfer** (3):
+    `Queue.pop transfers ownership; reuse via push is sound`,
+    `Queue.try_pop on heap-shaped T survives further use`,
+    `Queue.try_pop on empty returns None and stays sound`.
+  - **Queue wraparound / growth** (3): `Queue of String
+    wraparound: push/pop/push pattern`,
+    `Queue of String growth across multiple capacity
+    doublings`, `Queue of String growth after wraparound
+    preserves order`.
+  - **Queue clear + reuse** (2): `Queue.clear releases payloads
+    at scope end` (100-round stress), `Queue.clear + reuse
+    before drop` (30 fill/clear/refill cycles).
+  - **Deque scope-end drop with heap-shaped T** (2):
+    `Deque of String` with concat + literals;
+    `Deque of List of int` from both ends.
+  - **Deque pop_front / pop_back / try_pop_*** (5):
+    `pop_front transfers ownership`, `pop_back transfers
+    ownership`, `try_pop_front survives further use`,
+    `try_pop_back survives further use`,
+    `try_pop_front / back on empty returns None`.
+  - **Deque wraparound / growth from both ends** (4):
+    `wraparound from front: push_front then pop_back`,
+    `growth from push_back across multiple doublings`,
+    `growth from push_front across multiple doublings`,
+    `interleaved heap-shaped pushes from both ends`.
+  - **Deque clear + reuse** (2): `Deque.clear releases payloads
+    at scope end` (100-round stress), `Deque.clear + reuse
+    before drop` (30 cycles, mixing push_back / push_front).
+  - **Primitive-T fast paths** (2): `Queue of int` 1000-element
+    drain in FIFO order; `Deque of int` 150-element mixed-end
+    push then logical drain.
+- Verification context:
+  - `make clean && make test` ends with `All tests passed.`
+    from a cold rebuild on the working tree.
+  - `tests/test_heap_circular_ownership.ptt` (25 cases)
+    passes at `-O0`, `-O1`, `-O2`.
+  - Codex's failing repros now exit 0:
+    - `/private/tmp/potato_queue_heap_alias.ptt`: prints `17`,
+      exit 0.
+    - `/private/tmp/potato_deque_heap_alias.ptt`: prints `1`,
+      exit 0.
+  - Pre-existing `tests/test_queue.ptt` (5 cases) and
+    `tests/test_deque.ptt` (5 cases) still pass.
+  - Pre-existing `tests/test_heap_parent_drop.ptt` (29 cases,
+    F-002 regressions) and `tests/test_heap_slot_drop.ptt`
+    (18 cases, F-001 regressions) still pass at all three
+    -O levels.
+
 ## Claim Template
 
 ```md
@@ -616,3 +753,25 @@ If another implementation batch starts before audit:
   sweep opened F-003 (Queue) and F-004 (Deque) for the same
   heap-shaped circular-buffer ownership class — those need their
   own claim before the batch can land. Header reset to `IDLE`.
+- Claim C-005 submitted: F-003 + F-004 root-cause fix in stdlib.
+  Pure stdlib change — the F-002 compiler primitives
+  (`is now arr[i]`, uniform cap-bounded null-guarded drop) are
+  reused as-is. Queue.push / Deque.push_back / push_front
+  deep-clone via `is rep` + `be now`; pop / try_pop / pop_back /
+  try_pop_back vacate slots via `is now self.data[idx]`;
+  reserve / push-grow paths transfer ownership of each logical
+  slot via `is now` + `be now` so the old buffer drops as all
+  null. clear stays as `head=0; count=0`. 25 new framework
+  tests cover Codex's required-tests list (heap-shaped T = String
+  and List of int, push/pop/try_pop, wraparound, growth, clear,
+  primitive-T fast paths). Cold-rebuild `make test` green at
+  default plus all three -O levels for the new file.
+- Claim C-005 consumed by Codex against findings revision 9 and
+  accepted with `Conclusion: ALL_CLEAR` /
+  `Release action: COMMIT_AND_PUSH`. The audited batch covers
+  both C-004 (F-002, accepted earlier but held pending F-003 /
+  F-004) and C-005 (F-003 + F-004). Landing as two separate
+  commits in dependency order: C-004 first (F-002 compiler +
+  List stdlib changes that C-005 builds on), then C-005
+  (Queue / Deque stdlib changes plus their tests). Header reset
+  to `IDLE`.

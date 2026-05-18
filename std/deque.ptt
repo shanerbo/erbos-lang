@@ -16,6 +16,10 @@ Deque of T is {
   data  array of T
 }
 
+// F-004: heap-shaped T requires ownership transfer (not alias)
+// from each old physical slot into the fresh logical slot. See
+// `Queue.reserve` for the matching invariant; Deque uses the
+// same circular layout (head + count, wraparound by mod cap).
 Deque.reserve(self ref Deque of T, cap int) {
   cap le 0 ?{ give }
   self.data eq 0 ?{
@@ -26,7 +30,8 @@ Deque.reserve(self ref Deque of T, cap int) {
   fresh is array of T with cap cap
   through (i from 0 to self.count by 1) {
     src is (self.head + i) mod self.data.cap
-    fresh[i] be self.data[src]
+    v is now self.data[src]
+    fresh[i] be now v
   }
   self.data be now fresh
   self.head be 0
@@ -45,6 +50,11 @@ Deque.empty(self Deque of T) bool {
   give self.count eq 0
 }
 
+// F-004: deep-clone v into the appended slot (mirrors
+// `List.push` and `Queue.push`). The drop-before-overwrite
+// path handles slot reuse after pop/clear cycles. For
+// primitive T, `is rep` collapses to a value copy and
+// `be now` to a plain store.
 Deque.push_back(self ref Deque of T, v T) {
   self.data eq 0 ?{
     self.data be array of T with cap 8
@@ -54,16 +64,21 @@ Deque.push_back(self ref Deque of T, v T) {
     fresh is array of T with cap new_cap
     through (i from 0 to self.count by 1) {
       src is (self.head + i) mod self.data.cap
-      fresh[i] be self.data[src]
+      moved is now self.data[src]
+      fresh[i] be now moved
     }
     self.data be now fresh
     self.head be 0
   }
   tail is (self.head + self.count) mod self.data.cap
-  self.data[tail] be v
+  v_clone is rep v
+  self.data[tail] be now v_clone
   self.count be self.count + 1
 }
 
+// Same heap-shaped ownership story as `push_back`, except we
+// step `head` left by one (with mod-cap wraparound) before
+// the slot store.
 Deque.push_front(self ref Deque of T, v T) {
   self.data eq 0 ?{
     self.data be array of T with cap 8
@@ -73,7 +88,8 @@ Deque.push_front(self ref Deque of T, v T) {
     fresh is array of T with cap new_cap
     through (i from 0 to self.count by 1) {
       src is (self.head + i) mod self.data.cap
-      fresh[i] be self.data[src]
+      moved is now self.data[src]
+      fresh[i] be now moved
     }
     self.data be now fresh
     self.head be 0
@@ -83,10 +99,12 @@ Deque.push_front(self ref Deque of T, v T) {
     self.head be cap_now
   }
   self.head be self.head - 1
-  self.data[self.head] be v
+  v_clone is rep v
+  self.data[self.head] be now v_clone
   self.count be self.count + 1
 }
 
+// F-004: extract via `is now`, vacating the head slot.
 Deque.pop_front(self ref Deque of T) T {
   self.count le 0 ?{
     assert(false)
@@ -94,12 +112,14 @@ Deque.pop_front(self ref Deque of T) T {
   self.data eq 0 ?{
     assert(false)
   }
-  v is self.data[self.head]
+  v is now self.data[self.head]
   self.head be (self.head + 1) mod self.data.cap
   self.count be self.count - 1
   give v
 }
 
+// Same shape from the back: extract the tail slot via
+// `is now`, leaving it null.
 Deque.pop_back(self ref Deque of T) T {
   self.count le 0 ?{
     assert(false)
@@ -108,7 +128,7 @@ Deque.pop_back(self ref Deque of T) T {
     assert(false)
   }
   idx is (self.head + self.count - 1) mod self.data.cap
-  v is self.data[idx]
+  v is now self.data[idx]
   self.count be self.count - 1
   give v
 }
@@ -116,7 +136,7 @@ Deque.pop_back(self ref Deque of T) T {
 Deque.try_pop_front(self ref Deque of T) Option of T {
   self.count le 0 ?{ give none of T () }
   self.data eq 0 ?{ give none of T () }
-  v is self.data[self.head]
+  v is now self.data[self.head]
   self.head be (self.head + 1) mod self.data.cap
   self.count be self.count - 1
   give some of T (v)
@@ -126,7 +146,7 @@ Deque.try_pop_back(self ref Deque of T) Option of T {
   self.count le 0 ?{ give none of T () }
   self.data eq 0 ?{ give none of T () }
   idx is (self.head + self.count - 1) mod self.data.cap
-  v is self.data[idx]
+  v is now self.data[idx]
   self.count be self.count - 1
   give some of T (v)
 }

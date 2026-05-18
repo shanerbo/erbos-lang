@@ -36,6 +36,16 @@ Queue of T is {
 // empty-value path; `reserve` is the explicit preallocation hook.
 // If the new cap is smaller than the current one or non-positive,
 // this is a no-op.
+//
+// F-003: heap-shaped T must transfer ownership from the old
+// physical slot into the fresh logical slot, not alias-copy.
+// `v is now self.data[src]` extracts the pointer and nulls the
+// old slot; `fresh[i] be now v` transfers it into the fresh
+// array. After the loop every old slot is null, so the
+// `self.data be now fresh` drop reaps an all-null buffer (no
+// double-free against the live elements now in `fresh`). For
+// primitive T this collapses to value-load + slot-zero +
+// plain store — a no-op shape difference from the alias path.
 Queue.reserve(self ref Queue of T, cap int) {
   cap le 0 ?{ give }
   self.data eq 0 ?{
@@ -47,9 +57,13 @@ Queue.reserve(self ref Queue of T, cap int) {
   // Walk in logical order and rebase to physical index 0.
   through (i from 0 to self.count by 1) {
     src is (self.head + i) mod self.data.cap
-    fresh[i] be self.data[src]
+    v is now self.data[src]
+    fresh[i] be now v
   }
-  // `be now` drops the prior backing array.
+  // `be now` drops the prior backing array. After the transfer
+  // loop above every old slot is null, so the cap-bounded
+  // null-guarded drop reaps zero elements before freeing the
+  // buffer.
   self.data be now fresh
   self.head be 0
 }
@@ -74,9 +88,24 @@ Queue.empty(self Queue of T) bool {
 
 // Append `v` at the tail. Doubles `data.cap` when full.
 //
-// The growth path produces a fresh array whose head is 0,
-// so subsequent `push` writes hit the trailing physical
-// slot directly.
+// F-003: deep-clone v into the appended slot via `is rep`
+// + `be now`, mirroring `List.push` and `Map.set`. Without the
+// clone, callers like `q.push(my_local)` for heap-shaped T
+// would alias the caller's pointer into the slot, and the
+// cap-bounded null-guarded parent drop would free the same
+// pointer the caller's RAII later frees. For primitive T,
+// `is rep` collapses to a value copy and `be now` to a plain
+// store. The slot is guaranteed null because pop / try_pop
+// vacate slots when transferring ownership out, clear is just
+// `count = 0` (slots in [head..head+count) are still owned and
+// will be reused via the F-001 drop-before-overwrite path),
+// and grow allocates a fresh zero-filled buffer.
+//
+// Growth path: walk in logical order, transfer each live slot
+// into the fresh buffer via `is now` + `be now`, then `be now`
+// the fresh buffer in. After transfer the old buffer's slots
+// are all null, so its cap-bounded null-guarded drop is a no-op
+// before the buffer free.
 Queue.push(self ref Queue of T, v T) {
   self.data eq 0 ?{
     self.data be array of T with cap 8
@@ -86,17 +115,26 @@ Queue.push(self ref Queue of T, v T) {
     fresh is array of T with cap new_cap
     through (i from 0 to self.count by 1) {
       src is (self.head + i) mod self.data.cap
-      fresh[i] be self.data[src]
+      moved is now self.data[src]
+      fresh[i] be now moved
     }
     self.data be now fresh
     self.head be 0
   }
   tail is (self.head + self.count) mod self.data.cap
-  self.data[tail] be v
+  v_clone is rep v
+  self.data[tail] be now v_clone
   self.count be self.count + 1
 }
 
 // Remove and return the head element. Panics on empty.
+//
+// F-003: `is now self.data[self.head]` extracts the pointer
+// and nulls the slot in one step. The caller becomes the
+// unique owner; subsequent `push` reuses the head's old
+// physical slot and the F-001 drop-before-overwrite path
+// finds null + skips. For primitive T this collapses to a
+// value-load + slot-zero pair.
 Queue.pop(self ref Queue of T) T {
   self.count le 0 ?{
     assert(false)
@@ -104,17 +142,21 @@ Queue.pop(self ref Queue of T) T {
   self.data eq 0 ?{
     assert(false)
   }
-  v is self.data[self.head]
+  v is now self.data[self.head]
   self.head be (self.head + 1) mod self.data.cap
   self.count be self.count - 1
   give v
 }
 
 // Remove and return the head, or None on empty.
+//
+// Same `is now` ownership transfer as `pop` — the slot is
+// nulled, the caller owns the popped value via the returned
+// `some`.
 Queue.try_pop(self ref Queue of T) Option of T {
   self.count le 0 ?{ give none of T () }
   self.data eq 0 ?{ give none of T () }
-  v is self.data[self.head]
+  v is now self.data[self.head]
   self.head be (self.head + 1) mod self.data.cap
   self.count be self.count - 1
   give some of T (v)

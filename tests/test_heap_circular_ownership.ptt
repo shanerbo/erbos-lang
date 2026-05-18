@@ -1,0 +1,471 @@
+// F-003 / F-004 regression: heap-shaped ownership invariant for
+// circular-buffer containers (`Queue of T`, `Deque of T`).
+//
+// Pre-fix, both used raw `self.data[idx] be v` stores on push and
+// raw `v is self.data[idx]` reads on pop, so for heap-shaped T:
+//   - push aliased the caller's pointer into a slot. The
+//     cap-bounded null-guarded parent drop (introduced by F-002)
+//     would re-drop that pointer at scope end.
+//   - pop returned an aliased pointer without nulling the slot,
+//     so the caller and the queue both held it. Either side's
+//     drop double-frees the other.
+//   - the `reserve` / push-grow path moved each logical slot
+//     into the fresh array via plain `be`, leaving the old slots
+//     still aliasing the same pointers; `self.data be now fresh`
+//     would then drop the old buffer and free those pointers
+//     while `fresh` continued to hold them.
+//
+// Fix lives entirely in stdlib: push deep-clones (`is rep` +
+// `be now`), pop / try_pop use `is now self.data[idx]` to extract
+// + null in one step, growth uses `is now` + `be now` per slot
+// to transfer ownership to the fresh array, and `clear` stays as
+// `head = 0; count = 0` because the cap-bounded parent drop reaps
+// remaining slots at scope end.
+//
+// Tests cover heap-shaped `T = String` (with both literal and
+// concat-allocated payloads) and `T = List of int` (a nested
+// heap-shaped element). Wraparound, growth, and clear-then-reuse
+// paths all in scope per Codex's required-tests list.
+
+use std/queue
+use std/deque
+use std/list
+use std/string
+use std/option
+
+// ---------------------------------------------------------------
+// Queue: scope-end drop with heap-shaped elements
+// ---------------------------------------------------------------
+
+test "Queue of String drops heap payloads cleanly at scope end" {
+  // Repeatedly build + drop a Queue of String holding owned
+  // (concat-built) heap strings. Pre-fix: push aliased the
+  // caller's pointer, scope-end parent-drop double-freed.
+  // Post-fix: push deep-clones, queue owns its own copies,
+  // free-list reuse handles the recycled allocations.
+  total is 0
+  through (round from 0 to 50 by 1) {
+    q is Queue of String()
+    a is "alpha"
+    b is a.concat("-tail")
+    q.push(a)
+    q.push(b)
+    q.push("literal")
+    total be total + q.len()
+  }
+  assert(total eq 50 * 3)
+}
+
+test "Queue of List of int: push + scope-end drop" {
+  // Nested heap-shaped element type. Each push must deep-clone
+  // the caller's List so it owns an independent block; otherwise
+  // the queue's parent drop and the caller's local RAII race
+  // for the same buffer.
+  q is Queue of List of int()
+  inner1 is List of int()
+  inner1.push(1)
+  inner1.push(2)
+  q.push(inner1)
+  inner2 is List of int()
+  inner2.push(10)
+  inner2.push(20)
+  q.push(inner2)
+  // Both inner lists alive; queue holds independent clones.
+  assert(inner1.len() eq 2)
+  assert(inner2.len() eq 2)
+  assert(q.len() eq 2)
+  assert(q.front().get(0) eq 1)
+}
+
+// ---------------------------------------------------------------
+// Queue: pop / try_pop transfer ownership cleanly
+// ---------------------------------------------------------------
+
+test "Queue.pop transfers ownership; reuse via push is sound" {
+  // Pre-fix: pop returned the slot pointer without nulling, so
+  // the next push at the wrap-around point would drop a pointer
+  // the caller still held. Post-fix: pop's `is now` extracts +
+  // nulls; push reuses the slot through F-001 drop-before-
+  // overwrite (which finds null and skips).
+  q is Queue of String()
+  q.push("a")
+  q.push("b")
+  q.push("c")
+  v1 is q.pop()
+  q.push("d")
+  v2 is q.pop()
+  q.push("e")
+  assert(v1 eq "a")
+  assert(v2 eq "b")
+  assert(q.len() eq 3)
+  assert(q.pop() eq "c")
+  assert(q.pop() eq "d")
+  assert(q.pop() eq "e")
+  // v1 and v2 remain valid bindings — no UAF.
+  assert(v1 eq "a")
+  assert(v2 eq "b")
+}
+
+test "Queue.try_pop on heap-shaped T survives further use" {
+  q is Queue of String()
+  q.push("first")
+  q.push("second")
+  o1 is q.try_pop()
+  v1 is o1.unwrap()
+  q.push("third")
+  o2 is q.try_pop()
+  v2 is o2.unwrap()
+  assert(v1 eq "first")
+  assert(v2 eq "second")
+  assert(q.len() eq 1)
+  assert(q.pop() eq "third")
+}
+
+test "Queue.try_pop on empty returns None and stays sound" {
+  q is Queue of String()
+  o is q.try_pop()
+  assert(o.is_none())
+}
+
+// ---------------------------------------------------------------
+// Queue: wraparound and growth on heap-shaped T
+// ---------------------------------------------------------------
+
+test "Queue of String wraparound: push/pop/push pattern" {
+  // Drive head past zero so the next push wraps to physical
+  // slot 0 while logical tail is at the high end. Heap-shaped
+  // ownership must hold across the wrap.
+  q is Queue of String()
+  through (i from 0 to 6 by 1) {
+    q.push("payload")
+  }
+  through (i from 0 to 5 by 1) {
+    discard is q.pop()
+  }
+  // count=1, head somewhere mid-buffer, cap=8.
+  through (i from 0 to 6 by 1) {
+    q.push("after-wrap")
+  }
+  // Drain all and verify count.
+  through (i from 0 to 7 by 1) {
+    discard is q.pop()
+  }
+  assert(q.empty())
+}
+
+test "Queue of String growth across multiple capacity doublings" {
+  // Force two grow events with heap-shaped payload. The growth
+  // path must transfer ownership of each logical element from
+  // the old buffer into the fresh one without aliasing.
+  q is Queue of String()
+  through (i from 0 to 25 by 1) {
+    q.push("grow-payload")
+  }
+  // First push triggers cap=8; growth at cap=16; growth at cap=32.
+  assert(q.len() eq 25)
+  through (j from 0 to 25 by 1) {
+    v is q.pop()
+    assert(v eq "grow-payload")
+  }
+  assert(q.empty())
+}
+
+test "Queue of String growth after wraparound preserves order" {
+  // Set up a wrap-state queue and then trigger growth. Tests
+  // that the logical-order traversal in the grow path correctly
+  // unwraps the buffer.
+  q is Queue of String()
+  through (i from 0 to 8 by 1) {
+    q.push("filler")
+  }
+  // cap=8 reached. Drain 4 to advance head.
+  through (i from 0 to 4 by 1) {
+    discard is q.pop()
+  }
+  // count=4, head=4, cap=8. Push 5 more — wraps and triggers grow.
+  through (i from 0 to 5 by 1) {
+    q.push("post-wrap")
+  }
+  // Drain and verify.
+  through (i from 0 to 4 by 1) {
+    v is q.pop()
+    assert(v eq "filler")
+  }
+  through (i from 0 to 5 by 1) {
+    v is q.pop()
+    assert(v eq "post-wrap")
+  }
+}
+
+// ---------------------------------------------------------------
+// Queue: clear + reuse on heap-shaped T
+// ---------------------------------------------------------------
+
+test "Queue.clear releases payloads at scope end" {
+  // After clear the slots that held heap-shaped payloads are
+  // still owned by the queue (head=0, count=0 doesn't iterate
+  // them). The cap-bounded parent drop reaps every still-non-
+  // null slot at scope end.
+  through (round from 0 to 100 by 1) {
+    q is Queue of String()
+    through (i from 0 to 20 by 1) {
+      q.push("payload")
+    }
+    q.clear()
+    assert(q.empty())
+  }
+  yell("queue-clear survived")
+}
+
+test "Queue.clear + reuse before drop" {
+  // After clear, push at slot[head=0]. The slot may still hold
+  // a pre-clear pointer; F-001 drop-before-overwrite handles
+  // it. Loop many cycles so any double-drop or leak surfaces.
+  q is Queue of String()
+  through (round from 0 to 30 by 1) {
+    through (i from 0 to 10 by 1) {
+      q.push("first-fill")
+    }
+    q.clear()
+    through (i from 0 to 10 by 1) {
+      q.push("second-fill")
+    }
+    assert(q.len() eq 10)
+    assert(q.pop() eq "second-fill")
+    q.clear()
+  }
+  yell("queue-clear-reuse survived")
+}
+
+// ---------------------------------------------------------------
+// Deque: scope-end drop with heap-shaped elements
+// ---------------------------------------------------------------
+
+test "Deque of String drops heap payloads at scope end" {
+  total is 0
+  through (round from 0 to 50 by 1) {
+    d is Deque of String()
+    a is "front"
+    b is a.concat("-end")
+    d.push_front(a)
+    d.push_back(b)
+    d.push_back("literal")
+    total be total + d.len()
+  }
+  assert(total eq 50 * 3)
+}
+
+test "Deque of List of int: push + scope-end drop" {
+  d is Deque of List of int()
+  inner1 is List of int()
+  inner1.push(7)
+  d.push_back(inner1)
+  inner2 is List of int()
+  inner2.push(70)
+  d.push_front(inner2)
+  assert(inner1.len() eq 1)
+  assert(inner2.len() eq 1)
+  assert(d.len() eq 2)
+  assert(d.front().get(0) eq 70)
+  assert(d.back().get(0) eq 7)
+}
+
+// ---------------------------------------------------------------
+// Deque: pop_front / pop_back / try_pop_* transfer ownership
+// ---------------------------------------------------------------
+
+test "Deque.pop_front transfers ownership; reuse via push" {
+  d is Deque of String()
+  d.push_back("a")
+  d.push_back("b")
+  d.push_back("c")
+  v is d.pop_front()
+  d.push_back("d")
+  assert(v eq "a")
+  assert(d.len() eq 3)
+  assert(d.pop_front() eq "b")
+  assert(d.pop_front() eq "c")
+  assert(d.pop_front() eq "d")
+  // v stays valid.
+  assert(v eq "a")
+}
+
+test "Deque.pop_back transfers ownership; reuse via push" {
+  d is Deque of String()
+  d.push_back("a")
+  d.push_back("b")
+  d.push_back("c")
+  v is d.pop_back()
+  d.push_back("d")
+  assert(v eq "c")
+  assert(d.len() eq 3)
+  // Logical order: a, b, d.
+  assert(d.pop_front() eq "a")
+  assert(d.pop_front() eq "b")
+  assert(d.pop_front() eq "d")
+  assert(v eq "c")
+}
+
+test "Deque.try_pop_front on heap-shaped T survives further use" {
+  d is Deque of String()
+  d.push_back("alpha")
+  d.push_back("beta")
+  o is d.try_pop_front()
+  v is o.unwrap()
+  d.push_back("gamma")
+  assert(v eq "alpha")
+  assert(d.len() eq 2)
+  assert(d.pop_front() eq "beta")
+  assert(d.pop_front() eq "gamma")
+}
+
+test "Deque.try_pop_back on heap-shaped T survives further use" {
+  d is Deque of String()
+  d.push_back("alpha")
+  d.push_back("beta")
+  d.push_back("gamma")
+  o is d.try_pop_back()
+  v is o.unwrap()
+  d.push_back("delta")
+  assert(v eq "gamma")
+  assert(d.len() eq 3)
+  assert(d.pop_back() eq "delta")
+  assert(d.pop_back() eq "beta")
+  assert(d.pop_back() eq "alpha")
+}
+
+test "Deque.try_pop_front / back on empty returns None" {
+  d is Deque of String()
+  ofront is d.try_pop_front()
+  oback is d.try_pop_back()
+  assert(ofront.is_none())
+  assert(oback.is_none())
+}
+
+// ---------------------------------------------------------------
+// Deque: wraparound and growth on heap-shaped T from both ends
+// ---------------------------------------------------------------
+
+test "Deque wraparound from front: push_front then pop_back" {
+  // push_front past 0 wraps head to cap-1. Heap-shaped element
+  // ownership must hold across the wrap.
+  d is Deque of String()
+  d.push_front("a")
+  d.push_front("b")
+  d.push_front("c")
+  // logical: c, b, a (front to back)
+  assert(d.pop_back() eq "a")
+  assert(d.pop_back() eq "b")
+  assert(d.pop_back() eq "c")
+}
+
+test "Deque growth from push_back across multiple doublings" {
+  d is Deque of String()
+  through (i from 0 to 25 by 1) {
+    d.push_back("payload")
+  }
+  assert(d.len() eq 25)
+  through (j from 0 to 25 by 1) {
+    v is d.pop_front()
+    assert(v eq "payload")
+  }
+}
+
+test "Deque growth from push_front across multiple doublings" {
+  d is Deque of String()
+  through (i from 0 to 25 by 1) {
+    d.push_front("payload")
+  }
+  assert(d.len() eq 25)
+  through (j from 0 to 25 by 1) {
+    v is d.pop_back()
+    assert(v eq "payload")
+  }
+}
+
+test "Deque interleaved heap-shaped pushes from both ends" {
+  // Mix push_front and push_back beyond initial cap to force
+  // wraparound and growth. Drain logically and verify order.
+  d is Deque of String()
+  d.push_back("b1")
+  d.push_back("b2")
+  d.push_front("f1")
+  d.push_front("f2")
+  d.push_back("b3")
+  d.push_front("f3")
+  // logical: f3, f2, f1, b1, b2, b3
+  assert(d.len() eq 6)
+  assert(d.pop_front() eq "f3")
+  assert(d.pop_front() eq "f2")
+  assert(d.pop_front() eq "f1")
+  assert(d.pop_front() eq "b1")
+  assert(d.pop_front() eq "b2")
+  assert(d.pop_front() eq "b3")
+}
+
+// ---------------------------------------------------------------
+// Deque: clear + reuse on heap-shaped T
+// ---------------------------------------------------------------
+
+test "Deque.clear releases payloads at scope end" {
+  through (round from 0 to 100 by 1) {
+    d is Deque of String()
+    through (i from 0 to 15 by 1) {
+      d.push_back("payload")
+    }
+    d.clear()
+    assert(d.empty())
+  }
+  yell("deque-clear survived")
+}
+
+test "Deque.clear + reuse before drop" {
+  d is Deque of String()
+  through (round from 0 to 30 by 1) {
+    through (i from 0 to 10 by 1) {
+      d.push_back("first-fill")
+    }
+    d.clear()
+    through (i from 0 to 10 by 1) {
+      d.push_front("second-fill")
+    }
+    assert(d.len() eq 10)
+    assert(d.pop_back() eq "second-fill")
+    d.clear()
+  }
+  yell("deque-clear-reuse survived")
+}
+
+// ---------------------------------------------------------------
+// Primitive-T fast paths still work
+// ---------------------------------------------------------------
+
+test "Queue of int unaffected by heap-shape ownership rewrite" {
+  q is Queue of int()
+  through (i from 0 to 1000 by 1) {
+    q.push(i)
+  }
+  through (j from 0 to 1000 by 1) {
+    assert(q.pop() eq j)
+  }
+  assert(q.empty())
+}
+
+test "Deque of int unaffected by heap-shape ownership rewrite" {
+  d is Deque of int()
+  through (i from 0 to 100 by 1) {
+    d.push_back(i)
+  }
+  through (i from 0 to 50 by 1) {
+    d.push_front(0 - i - 1)
+  }
+  // logical: -50, -49, ..., -1, 0, 1, ..., 99
+  assert(d.len() eq 150)
+  through (i from 0 to 50 by 1) {
+    expected is 0 - 50 + i
+    assert(d.pop_front() eq expected)
+  }
+  through (j from 0 to 100 by 1) {
+    assert(d.pop_front() eq j)
+  }
+}
