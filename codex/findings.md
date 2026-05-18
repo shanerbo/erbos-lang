@@ -59,7 +59,7 @@ Only Codex moves a finding into `VERIFIED` or `CLOSED`.
 ### Release handoff
 
 - `Codex` is the only authority that may authorize the final
-  stdlib-phase `commit and push` handoff.
+  repo-work `commit and push` handoff for the current audited batch.
 - The findings header also carries a separate `Conclusion` field.
 - `ALL_CLEAR` means there are no active known findings for the current
   audited batch and no in-flight audit still open against that batch.
@@ -93,7 +93,7 @@ Only Codex moves a finding into `VERIFIED` or `CLOSED`.
 
 Claude should:
 
-1. Read this file before each substantial stdlib/compiler batch.
+1. Read this file before each substantial implementation batch.
 2. Treat `OPEN` findings as mandatory work.
 3. Treat `FIX CLAIMED` as not yet accepted.
 4. Avoid claiming a phase complete while any relevant finding is still
@@ -105,7 +105,7 @@ Claude should:
 7. Treat `Conclusion: ALL_CLEAR` as the explicit signal that the
    current audited batch has no active known findings and no in-flight
    code audit still open against it.
-8. Do not commit or push a stdlib completion batch unless this file's
+8. Do not commit or push an audited implementation batch unless this file's
    header says both `Conclusion: ALL_CLEAR` and
    `Release action: COMMIT_AND_PUSH`.
 
@@ -113,7 +113,8 @@ Claude should:
 
 This file is for:
 
-- compiler bugs exposed by stdlib work
+- compiler, runtime, stdlib, docs, tests, or repo-level bugs exposed by
+  active implementation work
 - docs/code contradictions that block truthful completion claims
 - missing or weak regression coverage
 - design-level correctness issues that must be fixed at the root
@@ -127,8 +128,8 @@ This file is not for:
 ## Header
 
 - `State`: QUIESCENT
-- `Revision`: 4
-- `Last updated`: 2026-05-18T13:07:19-07:00
+- `Revision`: 5
+- `Last updated`: 2026-05-18T13:11:34-07:00
 - `Audited commit`: 1935bb3 + working tree
 - `Last claim audited`: C-002
 - `Conclusion`: ALL_CLEAR
@@ -233,3 +234,5 @@ None.
 - Revision 4: audited claim `C-002` against commit `1935bb3 + working tree`;
   accepted the F-001 fix, closed the finding, and marked the batch
   `ALL_CLEAR` with `COMMIT_AND_PUSH`.
+- Revision 5: generalized the ledger contract from stdlib-only work to
+  repo-wide implementation and audit batches.

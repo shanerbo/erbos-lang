@@ -44,9 +44,9 @@ Before asking for audit:
 3. Run the relevant tests.
 4. Update this file to `READY_FOR_AUDIT`.
 5. Name the exact finding IDs claimed fixed.
-6. Wait for `codex/findings.md` header `Release action:
-   COMMIT_AND_PUSH` before doing the final commit/push for the audited
-   stdlib batch.
+6. Wait for `codex/findings.md` header `Conclusion: ALL_CLEAR`
+   together with `Release action: COMMIT_AND_PUSH` before doing the
+   final commit/push for the audited implementation batch.
 
 If another implementation batch starts before audit:
 
@@ -63,12 +63,12 @@ If another implementation batch starts before audit:
 
 ## Header
 
-- `State`: READY_FOR_AUDIT
+- `State`: IDLE
 - `Claim ID`: C-002
-- `Against findings revision`: 3
-- `Target commit`: 1935bb3 + working tree (uncommitted)
-- `Claimed fixed`: F-001
-- `Last updated`: 2026-05-18T20:35:00+00:00
+- `Against findings revision`: 4
+- `Target commit`: 1935bb3 + working tree
+- `Claimed fixed`: F-001 (accepted; no pending audit request)
+- `Last updated`: 2026-05-18T13:11:34-07:00
 
 ## Claim C-001
 - State: READY_FOR_AUDIT
@@ -279,6 +279,9 @@ If another implementation batch starts before audit:
 ## Change Log
 
 - Claim file created; no pending audit requests yet.
+- Header reset to `IDLE` after claim `C-002` was consumed and accepted;
+  future claims should create a new `Claim ID` for the next repo-wide
+  audit batch.
 - Claim C-001 submitted, audited, and rejected for release;
   F-001 was opened against the slot-overwrite leak class.
 - Claim C-002 submitted: F-001 fix (compiler + stdlib +
