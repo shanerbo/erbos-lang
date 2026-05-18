@@ -338,9 +338,10 @@ Rules:
   `Box.set`, the name `T` refers to whatever the caller instantiated
   the box with — the compiler reads it off the receiver's `of T`
   clause, so the method head doesn't repeat the parameter list.
-- Constructors at use sites carry their type arguments explicitly:
-  `Box of int ()`, `Both of String, int ()`, `Map of String, int ()`.
-  The compiler does not currently infer type arguments from context.
+- Value-formation expressions at use sites carry their type
+  arguments explicitly: `Box of int()`, `Both of String, int()`,
+  `Map of String, int()`. The compiler does not currently infer
+  type arguments from context.
 - The compiler **monomorphizes**: each unique concrete form
   (`Box of int`, `Box of String`, `Both of String, int`, …) becomes
   its own emitted struct layout and its own emitted methods. There

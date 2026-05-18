@@ -355,6 +355,13 @@ static Node *clone_node(Node *n) {
             } else {
                 c->method_call.arg_is_ref = NULL;
             }
+            // Carry the language-law allow-list flag through every
+            // monomorphic clone. Without this, a stdlib factory body
+            // cloned per (T) instantiation would lose the privilege
+            // and the checker would reject the legacy variant
+            // formation in the cloned body.
+            c->method_call.is_stdlib_enum_factory =
+                n->method_call.is_stdlib_enum_factory;
             break;
         case NODE_FIELD_ACCESS:
             c->field_access.object = clone_node(n->field_access.object);

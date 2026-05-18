@@ -254,6 +254,17 @@ struct Node {
             // the user-written alias is preserved here so checker
             // diagnostics report `math.max`, not `m1.max`.
             char *alias_display;
+            // Language-law allow-list flag (parse-time). Set only by
+            // the parser when reading a stdlib factory body
+            // (std/option.ptt or std/result.ptt). The checker trusts
+            // this flag — and ONLY this flag — to permit the legacy
+            // type-receiver enum value-formation `Option of T .Some(v)`
+            // / `Result of T, E .Ok(v)`. User code in any other file
+            // cannot set the flag, so the factory privilege is tied
+            // to source provenance instead of function name. Without
+            // this, a user file with a free function literally named
+            // `some` / `none` / `ok` / `err` could bypass the law.
+            int is_stdlib_enum_factory;
         } method_call;
 
         // NODE_BINARY

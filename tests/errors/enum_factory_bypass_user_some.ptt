@@ -1,0 +1,19 @@
+// Regression: a user file MUST NOT bypass the language law by
+// defining a free function literally named `some` (or `none` /
+// `ok` / `err`) and then writing `Option of T .Some(v)` inside
+// it. The factory privilege is tied to source provenance
+// (the parser sets the AST flag only when reading the bundled
+// stdlib std/option.ptt / std/result.ptt), not to the function
+// name. Codex caught the previous name-based allow-list as a
+// real user-visible bypass.
+
+use std/option
+
+some() Option of int {
+  give Option of int .Some(7)
+}
+
+spark {
+  o is some()
+  yell(o.unwrap())
+}

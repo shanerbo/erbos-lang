@@ -49,12 +49,6 @@ typedef struct {
     // Current function context
     Type cur_return_type;
     int found_give;
-    // Name of the function whose body is currently being checked.
-    // Used by the type-receiver method-call path to permit
-    // `Option of T .Some(v)` style variant materialization inside
-    // the stdlib factory bodies (`some`, `none`, `ok`, `err`) and
-    // nowhere else. NULL outside of any function body (top-level).
-    const char *cur_func_name;
 } Checker;
 
 static Type make_type(TypeKind k) { return (Type){k, NULL, NULL, NULL, NULL}; }
@@ -723,26 +717,16 @@ static Type check_expr(Checker *c, Node *n) {
             if (n->method_call.object->type == NODE_IDENT) {
                 const char *obj_name = n->method_call.object->ident.name;
                 Type sym_t = get_sym(c, obj_name);
-                // Monomorphization mangles factory names to forms
-                // like `some__int` / `none__int` / `ok__int__String`
-                // / `err__int__String`. Match either the raw name
-                // (untemplated) or any name that begins with one of
-                // the factory heads followed by `__`.
-                int is_factory_body = 0;
-                if (c->cur_func_name) {
-                    static const char *heads[4] = {"none", "some", "ok", "err"};
-                    for (int hi = 0; hi < 4; hi++) {
-                        const char *h = heads[hi];
-                        size_t hl = strlen(h);
-                        if (!strcmp(c->cur_func_name, h)) {
-                            is_factory_body = 1; break;
-                        }
-                        if (!strncmp(c->cur_func_name, h, hl) &&
-                            !strncmp(c->cur_func_name + hl, "__", 2)) {
-                            is_factory_body = 1; break;
-                        }
-                    }
-                }
+                // Allow-list for the legacy `Type.variant(...)` AST
+                // is set ONLY by the parser, ONLY for nodes parsed
+                // from std/option.ptt / std/result.ptt (verified
+                // against the compiler's binary dir, not function
+                // name). Every other source — including a user file
+                // with a free function literally named `none` /
+                // `some` / `ok` / `err` — produces nodes with
+                // is_stdlib_enum_factory == 0, so the diagnostic
+                // path below fires.
+                int is_factory_body = n->method_call.is_stdlib_enum_factory;
                 if (sym_t.kind == TYPE_UNKNOWN && is_enum_type(c, obj_name)) {
                     if (!is_factory_body) {
                         char display[256];
@@ -2071,7 +2055,6 @@ void checker_run(Node *program) {
         c.count = 0;
         c.cur_return_type = c.funcs[i].return_type;
         c.found_give = 0;
-        c.cur_func_name = f->func_def.name;
 
         // Register params
         for (int j = 0; j < f->func_def.param_count; j++) {
@@ -2102,7 +2085,6 @@ void checker_run(Node *program) {
         c.count = 0;
         c.cur_return_type = make_type(TYPE_VOID);
         c.found_give = 0;
-        c.cur_func_name = NULL;
         Node *body = t->test_def.body;
         for (int j = 0; j < body->block.stmts.count; j++)
             check_stmt(&c, body->block.stmts.items[j]);

@@ -348,12 +348,16 @@ static Node *parse_primary(Parser *p) {
             }
             // Parametric type used as a method receiver (legacy
             // `Option of T .Some(value)` shape). The parser still
-            // accepts this AST shape because stdlib factory bodies
-            // construct enum variants this way; the *checker*
-            // restricts use of the form to those factory bodies and
-            // rejects every other source position with a teaching
-            // diagnostic that points users at the `none/some/ok/err`
-            // factories.
+            // produces this AST shape so the stdlib factory bodies
+            // can lower enum variant materialization through it,
+            // but every node it produces is stamped with
+            // `is_stdlib_enum_factory` only when the parser is
+            // reading a vetted stdlib factory source file (set by
+            // main.c after `parser_init`). The checker uses that
+            // flag — and only that flag — as the allow-list for the
+            // legacy form. User code cannot set the flag, so a
+            // user file whose function happens to be named
+            // `none` / `some` / `ok` / `err` cannot bypass the law.
             if (ok && saw_type_token && p->tokens[p->pos + look].type == TOK_DOT) {
                 char *full = parse_type_name(p);
                 Node *base = alloc_node(NODE_IDENT, line);
@@ -367,6 +371,8 @@ static Node *parse_primary(Parser *p) {
                             Node *mc = alloc_node(NODE_METHOD_CALL, line);
                             mc->method_call.object = base;
                             mc->method_call.method = field;
+                            mc->method_call.is_stdlib_enum_factory =
+                                p->is_stdlib_enum_factory_file;
                             int mcap = 4;
                             mc->method_call.args = malloc(mcap * sizeof(Node *));
                             mc->method_call.arg_is_ref = malloc(mcap * sizeof(int));
@@ -1545,6 +1551,10 @@ void parser_init(Parser *p, Lexer *l) {
     p->count = l->count;
     p->pos = 0;
     p->filename = "unknown";
+    // Default: not a stdlib factory. main.c flips this on for
+    // sources whose absolute path is the bundled-stdlib
+    // std/option.ptt / std/result.ptt.
+    p->is_stdlib_enum_factory_file = 0;
 }
 
 Node *parser_parse(Parser *p) {

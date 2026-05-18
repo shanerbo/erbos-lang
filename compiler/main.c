@@ -138,6 +138,39 @@ static int compiler_dir(char *out, size_t out_size) {
     return 1;
 }
 
+// Returns 1 iff `path` is the bundled-stdlib std/option.ptt or
+// std/result.ptt — the only two source files allowed to use the
+// legacy `Option of T .Some(v)` / `Result of T, E .Ok(v)` enum
+// value-formation shape. Tied to provenance (absolute path under
+// the compiler binary dir) so a user file with a free function
+// literally named `none` / `some` / `ok` / `err` cannot bypass
+// the language law. Falls back to a strict prefix+suffix check
+// against `compiler_dir()`; if that lookup fails (cwd-relative
+// fallback path), the flag stays off.
+static int is_stdlib_enum_factory_path(const char *path) {
+    if (!path) return 0;
+    char comp_dir[1024];
+    if (!compiler_dir(comp_dir, sizeof(comp_dir))) return 0;
+    char expected[1100];
+    const char *names[2] = {"std/option.ptt", "std/result.ptt"};
+    for (int i = 0; i < 2; i++) {
+        snprintf(expected, sizeof(expected), "%s%s", comp_dir, names[i]);
+        if (!strcmp(path, expected)) return 1;
+    }
+    // realpath() on the input may differ from the literal candidate
+    // string the resolver produced (symlink in `comp_dir`, e.g.).
+    // Normalize and re-compare.
+    char res_path[1024];
+    if (realpath(path, res_path)) {
+        for (int i = 0; i < 2; i++) {
+            snprintf(expected, sizeof(expected), "%s%s", comp_dir, names[i]);
+            char res_exp[1024];
+            if (realpath(expected, res_exp) && !strcmp(res_path, res_exp)) return 1;
+        }
+    }
+    return 0;
+}
+
 // Walk up from the source file's directory looking for `potato.toml`.
 // First ancestor that contains the marker is treated as the project
 // root; the path is written into `out` (with trailing `/`) and 1 is
@@ -714,6 +747,7 @@ int main(int argc, char **argv) {
     Parser p;
     parser_init(&p, &l);
     p.filename = input;
+    p.is_stdlib_enum_factory_file = is_stdlib_enum_factory_path(input);
     Node *program = parser_parse(&p);
 
     // Resolve imports. Track already-loaded paths so a file that's
@@ -938,6 +972,8 @@ int main(int argc, char **argv) {
         Parser imp_p;
         parser_init(&imp_p, &imp_l);
         imp_p.filename = import_path;
+        imp_p.is_stdlib_enum_factory_file =
+            is_stdlib_enum_factory_path(import_path);
         Node *imp_prog = parser_parse(&imp_p);
 
         // Codex P1-11 round 3: rewrite imp_prog's body's

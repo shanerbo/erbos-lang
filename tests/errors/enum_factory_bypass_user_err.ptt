@@ -1,0 +1,15 @@
+// Regression mirror for Result. A user file with a function
+// literally named `err` does not get factory privilege and
+// cannot use the legacy `Result of T, E .Err(...)` value-form.
+
+use std/string
+use std/result
+
+err() Result of int, String {
+  give Result of int, String .Err("nope")
+}
+
+spark {
+  r is err()
+  yell(r.is_err())
+}
