@@ -8,6 +8,6 @@ bump(xs List of int) {
 }
 
 spark {
-  xs is List of int
+  xs is List of int()
   bump(xs)
 }

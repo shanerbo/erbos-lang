@@ -1,6 +1,6 @@
 use std/list
 
 spark {
-  xs is List of int
+  xs is List of int()
   algo.sort_ints(ref xs)
 }

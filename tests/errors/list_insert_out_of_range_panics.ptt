@@ -4,6 +4,6 @@
 use std/list
 
 spark {
-  xs is List of int
+  xs is List of int()
   xs.insert(3, 99)
 }

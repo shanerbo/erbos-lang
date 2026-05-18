@@ -215,7 +215,7 @@ nomut origin is Point(x is 0, y is 0)   // ok: atomic init
 // origin.x be 1                        // error: nomut blocks field mutation
 // origin be Point(x is 9, y is 9)      // error: nomut blocks reassignment
 
-nomut xs is List of int                 // ok: zero-default of stdlib container
+nomut xs is List of int()               // ok: zero-value formation of stdlib container
 xs.push(10)                              // ok: List.push takes `ref self`
 ```
 
@@ -300,25 +300,31 @@ Both of K, V is {
 }
 
 spark {
-  // Two distinct instantiations of the same template. With no
-  // value expression after `is`, the compiler auto-constructs:
-  bi is Box of int
+  // Two distinct instantiations of the same template. Type
+  // expressions name a type only — to form a value you must
+  // write the empty `()` (zero-value formation) or the named-
+  // field form `(field is value, ...)`.
+  bi is Box of int()
   bi.set(42)
-  bs is Box of String
+  bs is Box of String()
   bs.set("hello")
   yell(bi.get())   // 42
   yell(bs.get())   // hello
 
-  p is Both of String, int
+  p is Both of String, int()
   // ...
 }
 ```
 
-Auto-construct also works for an explicit constructor call —
-`bi is Box of int ()` is equivalent. The trailing `()` is a
-nullary call on the type expression. The no-parens form is
-preferred — `xs is List of int` reads as "xs is a list of int"
-rather than "xs is a list-of-int call result".
+A type expression names a type. To form a value, follow it with
+`()` (zero-value formation) or `(field is value, ...)` (named-
+field formation). Bare-type-as-value is rejected:
+
+```
+bi is Box of int                // error: type expression is not a value
+bi is Box of int()              // ok: zero-value formation
+bi is Box of int(value is 7)    // ok: named-field formation
+```
 
 Rules:
 
@@ -350,7 +356,7 @@ Rules:
 ```
 use std/list
 
-nums is List of int           // auto-constructed
+nums is List of int()         // zero-value formation
 nums.push(10)
 nums.push(20)
 yell(nums[0])                 // 10
@@ -362,8 +368,8 @@ vals is [1, 2, 3]
 yell(vals[0])                 // 1
 
 // Chained indexing on List of List of int:
-grid is List of List of int
-inner is List of int
+grid is List of List of int()
+inner is List of int()
 inner.push(1)
 inner.push(2)
 inner.push(3)
@@ -382,13 +388,13 @@ through (x in nums) {
 use std/map
 
 // String-keyed
-scores is Map of String, int
+scores is Map of String, int()
 scores.set("alice", 95)
 yell(scores.get("alice"))     // 95
 yell(scores.len())            // 1
 
 // Int-keyed
-memo is Map of int, int
+memo is Map of int, int()
 memo.set(42, 100)
 yell(memo.get(42))            // 100
 
@@ -412,18 +418,35 @@ rodata addresses still match.
 
 ## Enums + Pattern Matching
 
-```
-Result is
-  Ok(value int)
-  | Err(message String)
+Enum values are formed only through the stdlib factories:
+`none of T ()`, `some of T (v)`, `ok of T, E (v)`,
+`err of T, E (e)`. There is no `Type.variant(...)` value-form;
+the legacy `Result of int, String .Ok(42)` syntax is gone.
 
-r is Result.Ok(42)
+```
+use std/result
+
+r is ok of int, String (42)
 
 match r {
   Ok(v) => yell(v)
   Err(msg) => yell(msg)
 }
 ```
+
+User-defined enums declare variants the same way:
+
+```
+Shape is
+  Circle(radius int)
+  | Square(side int)
+```
+
+User enum values must be produced by code that has access to a
+factory function. The stdlib's `none/some/ok/err` are the only
+factories you can call out of the box; any other enum needs a
+factory written for it (in the form of a function that returns
+the enum type) before user code can construct values.
 
 ## Ownership & Memory
 

@@ -49,6 +49,12 @@ typedef struct {
     // Current function context
     Type cur_return_type;
     int found_give;
+    // Name of the function whose body is currently being checked.
+    // Used by the type-receiver method-call path to permit
+    // `Option of T .Some(v)` style variant materialization inside
+    // the stdlib factory bodies (`some`, `none`, `ok`, `err`) and
+    // nowhere else. NULL outside of any function body (top-level).
+    const char *cur_func_name;
 } Checker;
 
 static Type make_type(TypeKind k) { return (Type){k, NULL, NULL, NULL, NULL}; }
@@ -340,12 +346,27 @@ static Type check_expr(Checker *c, Node *n) {
                     }
                     return c->syms[i].type;
                 }
-            // Names that resolve to types (struct/enum) are fine in
-            // expression position because they're constructor calls
-            // dispatched in NODE_CALL / NODE_METHOD_CALL above. Only
-            // bare identifier refs that match no symbol AND no type
-            // get reported.
-            if (is_struct(c, n->ident.name)) return make_struct(n->ident.name);
+            // Under the new language law, a bare type expression is
+            // not a value. Names that resolve to a struct or enum
+            // type used as bare values get a teaching error pointing
+            // the user at the value-formation forms.
+            if (is_struct(c, n->ident.name) || is_enum_type(c, n->ident.name)) {
+                fprintf(stderr,
+                    "error:%d: type expression `%s` is not a value\n",
+                    n->line, n->ident.name);
+                if (is_enum_type(c, n->ident.name)) {
+                    fprintf(stderr,
+                        "  help: enum values are formed with factories; "
+                        "use `none of T ()`, `some of T (v)`, "
+                        "`ok of T, E (v)`, or `err of T, E (e)`\n");
+                } else {
+                    fprintf(stderr,
+                        "  help: form a value with `%s()` or "
+                        "`%s(field is value, ...)`\n",
+                        n->ident.name, n->ident.name);
+                }
+                exit(1);
+            }
             // Import aliases (e.g. `math` from `use std/math`) are
             // valid in method-call object position; the NODE_METHOD_CALL
             // case dispatches them as `_<alias>_<func>` calls. The bare
@@ -434,7 +455,7 @@ static Type check_expr(Checker *c, Node *n) {
         case NODE_CALL: {
             const char *name = n->call.name;
             if (is_struct(c, name)) {
-                // Named-arg constructor: validate every arg's field name
+                // Named-field formation: validate every arg's field name
                 // exists, every declared field is set exactly once, and
                 // each arg's value type matches the field's declared
                 // type. Order in source is free.
@@ -653,33 +674,64 @@ static Type check_expr(Checker *c, Node *n) {
         case NODE_METHOD_CALL: {
             const char *m = n->method_call.method;
 
-            // Detect an enum constructor BEFORE evaluating the object,
-            // because the object is a bare identifier naming the enum
-            // type (e.g. `Result.Ok(42)`), not a value. If we let
-            // check_expr() of the object run first, get_sym() on the
-            // type name would produce TYPE_UNKNOWN and the constructor
-            // would lose its statically-known result type.
+            // Type-receiver method calls. Under the new language
+            // law, a type expression is never a value, so user code
+            // can't form a value with `Type.variant(...)`.
+            //
+            // Exception: the stdlib factory bodies (`none`, `some`,
+            // `ok`, `err`) construct enum variants this way as
+            // their canonical lowering. The checker permits the
+            // form there and forwards the AST to irgen, which knows
+            // how to emit enum variant materialization for an
+            // IDENT-named-receiver method call. Every other source
+            // position is rejected with a teaching diagnostic.
             if (n->method_call.object->type == NODE_IDENT) {
                 const char *obj_name = n->method_call.object->ident.name;
                 Type sym_t = get_sym(c, obj_name);
+                // Monomorphization mangles factory names to forms
+                // like `some__int` / `none__int` / `ok__int__String`
+                // / `err__int__String`. Match either the raw name
+                // (untemplated) or any name that begins with one of
+                // the factory heads followed by `__`.
+                int is_factory_body = 0;
+                if (c->cur_func_name) {
+                    static const char *heads[4] = {"none", "some", "ok", "err"};
+                    for (int hi = 0; hi < 4; hi++) {
+                        const char *h = heads[hi];
+                        size_t hl = strlen(h);
+                        if (!strcmp(c->cur_func_name, h)) {
+                            is_factory_body = 1; break;
+                        }
+                        if (!strncmp(c->cur_func_name, h, hl) &&
+                            !strncmp(c->cur_func_name + hl, "__", 2)) {
+                            is_factory_body = 1; break;
+                        }
+                    }
+                }
                 if (sym_t.kind == TYPE_UNKNOWN && is_enum_type(c, obj_name)) {
-                    // It's a known enum name used as a variant
-                    // constructor receiver. Type-check the args
-                    // (best effort) and return the enum's named
-                    // struct type.
+                    if (!is_factory_body) {
+                        fprintf(stderr,
+                            "error:%d: enum values are formed with factories, not `%s.%s(...)`\n",
+                            n->line, obj_name, m);
+                        fprintf(stderr,
+                            "  help: use `none of T ()`, `some of T (v)`, "
+                            "`ok of T, E (v)`, or `err of T, E (e)`\n");
+                        exit(1);
+                    }
+                    // Inside a factory body: type-check args (best
+                    // effort) and return the enum's named struct type.
                     for (int j = 0; j < n->method_call.arg_count; j++)
                         check_expr(c, n->method_call.args[j]);
                     return make_struct(obj_name);
                 }
                 if (sym_t.kind == TYPE_UNKNOWN && is_struct(c, obj_name)) {
                     fprintf(stderr,
-                        "error:%d: type-receiver method calls are not allowed here\n",
-                        n->line);
+                        "error:%d: type expression `%s` is not a value\n",
+                        n->line, obj_name);
                     fprintf(stderr,
-                        "  help: construct a value first, then call `%s(...)` on that value\n",
-                        m);
-                    fprintf(stderr,
-                        "  help: only enum variants support the `Type.method(...)` form\n");
+                        "  help: form a value with `%s()` or "
+                        "`%s(field is value, ...)` first, then call `%s(...)` on it\n",
+                        obj_name, obj_name, m);
                     exit(1);
                 }
             }
@@ -1977,6 +2029,7 @@ void checker_run(Node *program) {
         c.count = 0;
         c.cur_return_type = c.funcs[i].return_type;
         c.found_give = 0;
+        c.cur_func_name = f->func_def.name;
 
         // Register params
         for (int j = 0; j < f->func_def.param_count; j++) {
@@ -2007,6 +2060,7 @@ void checker_run(Node *program) {
         c.count = 0;
         c.cur_return_type = make_type(TYPE_VOID);
         c.found_give = 0;
+        c.cur_func_name = NULL;
         Node *body = t->test_def.body;
         for (int j = 0; j < body->block.stmts.count; j++)
             check_stmt(&c, body->block.stmts.items[j]);

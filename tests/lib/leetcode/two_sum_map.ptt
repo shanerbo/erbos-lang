@@ -8,7 +8,7 @@ use std/map
 use std/list
 
 solve(nums List of int, size int, target int) int {
-  seen is Map of String, int
+  seen is Map of String, int()
   through (i from 0 to size by 1) {
     complement is target - nums[i]
     key is complement.to_string()

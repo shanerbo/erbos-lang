@@ -6,11 +6,13 @@
 //     Some(value T)
 //     | None
 //
-// Construction:
-//   o is some of int (7)        // Some(7), via free-function factory
-//   n is none of int ()         // None, via free-function factory
-//   o is Option of int .Some(7) // direct variant constructor
-//   n is Option of int .None()  // no-arg variant; parens required
+// Construction (enum factory formation only):
+//   o is some of int (7)        // Some(7)
+//   n is none of int ()         // None
+//
+// The legacy `Option of int .Some(...)` / `.None()` value-form is
+// gone under the language-law cleanup; only the factories
+// `none`/`some`/`ok`/`err` materialize enum values.
 //
 // All methods use `match` over the variants. `unwrap`'s None arm
 // calls `assert(false)`; the recursive give at the end of unwrap

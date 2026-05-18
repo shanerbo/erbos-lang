@@ -8,6 +8,6 @@ use std/string
 use std/list
 
 spark {
-  xs is List of int
+  xs is List of int()
   yell(xs.pop())
 }

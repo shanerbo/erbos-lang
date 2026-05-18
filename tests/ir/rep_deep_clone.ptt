@@ -22,7 +22,7 @@ test "rep + mutate-source after — source unchanged at every -O level" {
 }
 
 test "rep'd List survives source push at every -O level" {
-  a is List of int
+  a is List of int()
   a.push(1)
   a.push(2)
   b is rep a

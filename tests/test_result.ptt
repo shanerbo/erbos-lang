@@ -5,9 +5,9 @@
 // unwrap_err panic on Ok (covered by tests/errors/result_unwrap_err_on_ok_panics.ptt),
 // heap-shaped T and E payloads.
 //
-// Construction: bare-factory call (`ok of int, String (...)`,
-// `err of int, String (...)`) and direct variant construction
-// (`Result of int, String .Ok(...)`, `... .Err(...)`).
+// Construction: enum factory formation only (`ok of T, E (...)`,
+// `err of T, E (...)`). The legacy `Result of T, E .Ok(...)` /
+// `.Err(...)` direct variant form is gone.
 
 use std/string
 use std/result
@@ -24,18 +24,6 @@ test "err factory returns Err(error)" {
   assert(r.is_err())
   assert(not r.is_ok())
   assert(r.unwrap_err().equals("nope"))
-}
-
-test "Result of int, String .Ok direct variant constructor" {
-  r is Result of int, String .Ok(42)
-  assert(r.is_ok())
-  assert(r.unwrap() eq 42)
-}
-
-test "Result of int, String .Err direct variant constructor" {
-  r is Result of int, String .Err("boom")
-  assert(r.is_err())
-  assert(r.unwrap_err().equals("boom"))
 }
 
 test "unwrap_or returns inner Ok value" {
@@ -69,10 +57,9 @@ test "ok factory deep-clones a heap-shaped value" {
   r is ok of String, int (src)
   assert(r.is_ok())
   assert(r.unwrap().equals("owned ok"))
-  // src is independent: the variant constructor `.Ok(src)`
-  // (called inside the factory) copies the reference into its
-  // own freshly-allocated enum block; the caller still owns
-  // `src` and can read it.
+  // src is independent: the factory copies the reference into
+  // its own freshly-allocated enum block; the caller still
+  // owns `src` and can read it.
   assert(src.equals("owned ok"))
 }
 

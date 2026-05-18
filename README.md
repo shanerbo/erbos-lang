@@ -172,21 +172,22 @@ Counter.bump(self ref Counter) { self.value be self.value + 1 }
 
 // Generics — word-style, no <T>
 Box of T is { value T }
-b is Box of int
+b is Box of int()
 ```
 
 ```
 // Collections
 use std/basics                  // bundle: String + List + Map
 
-xs is List of int               // also: [1, 2, 3]
+xs is List of int()             // also: [1, 2, 3]
 xs.push(10)
 
-m is Map of String, int       // also: ["k" to 1]
+m is Map of String, int()       // also: ["k" to 1]
 m.set("key", 42)
 
-// Enums + pattern matching
-Result is Ok(value int) | Err(code int)
+// Enums — values formed only via the stdlib factories
+use std/result
+r is ok of int, String (42)
 match r {
   Ok(v) => yell(v)
   Err(e) => yell(e)

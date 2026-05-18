@@ -250,7 +250,7 @@ List.reverse(self ref List of T) {
 // value-copied by `rep` as a no-op. Capacity of the returned
 // list is exactly `count` — the clone is not over-provisioned.
 List.clone(self List of T) List of T {
-  out is List of T
+  out is List of T()
   out.reserve(self.count)
   through (i from 0 to self.count by 1) {
     el is rep self.data[i]

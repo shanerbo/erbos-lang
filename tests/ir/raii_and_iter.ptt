@@ -40,7 +40,7 @@ test "iter through-keys with high stack offsets" {
   pad15 is "padding-string-15"
   pad16 is "padding-string-16"
 
-  fruits is Map of String, int
+  fruits is Map of String, int()
   fruits.set("apple", 1)
   fruits.set("banana", 2)
   fruits.set("cherry", 3)

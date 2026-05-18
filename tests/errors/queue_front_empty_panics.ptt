@@ -4,6 +4,6 @@
 use std/queue
 
 spark {
-  q is Queue of int
+  q is Queue of int()
   yell(q.front())
 }

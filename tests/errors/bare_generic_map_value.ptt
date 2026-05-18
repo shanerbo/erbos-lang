@@ -1,0 +1,10 @@
+// Language-law cleanup: a bare generic type expression with
+// multiple parameters is not a value either.
+
+use std/string
+use std/map
+
+spark {
+  m is Map of String, int
+  yell(m.len())
+}

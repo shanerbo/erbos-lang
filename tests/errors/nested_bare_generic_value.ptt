@@ -1,0 +1,18 @@
+// Language-law cleanup: even nested generic types are
+// types-only in named-field formation. `Wrap(items is List of Foo)`
+// is rejected; the user must write `Wrap(items is List of Foo())`.
+
+use std/list
+
+Foo is {
+  x int
+}
+
+Wrap is {
+  items List of Foo
+}
+
+spark {
+  w is Wrap(items is List of Foo)
+  yell(w.items.len())
+}

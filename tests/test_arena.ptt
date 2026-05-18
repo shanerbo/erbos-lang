@@ -28,13 +28,13 @@ App is {
 }
 
 test "fresh arena is empty" {
-  a is Arena of int
+  a is Arena of int()
   assert(a.len() eq 0)
   assert(not a.has(0))
 }
 
 test "add returns stable index and get reads value" {
-  a is Arena of int
+  a is Arena of int()
   id0 is a.add(10)
   id1 is a.add(20)
   assert(id0 eq 0)
@@ -44,21 +44,21 @@ test "add returns stable index and get reads value" {
 }
 
 test "set overwrites existing slot" {
-  a is Arena of int
+  a is Arena of int()
   id is a.add(10)
   a.set(id, 99)
   assert(a.get(id) eq 99)
 }
 
 test "try_get returns None for invalid id" {
-  a is Arena of int
+  a is Arena of int()
   assert(a.try_get(0).is_none())
   a.add(7)
   assert(a.try_get(1).is_none())
 }
 
 test "clear empties arena and it remains reusable" {
-  a is Arena of int
+  a is Arena of int()
   a.add(1)
   a.add(2)
   a.clear()
@@ -69,7 +69,7 @@ test "clear empties arena and it remains reusable" {
 }
 
 test "Arena of String stores heap-shaped values" {
-  a is Arena of String
+  a is Arena of String()
   id is a.add("alpha")
   a.add("beta")
   assert(a.get(id).equals("alpha"))
@@ -77,14 +77,14 @@ test "Arena of String stores heap-shaped values" {
 }
 
 test "ref arena param may mutate heap-shaped item through get" {
-  a is Arena of Counter
+  a is Arena of Counter()
   id is a.add(Counter(value is 0))
   touch(ref a, id)
   assert(a.get(id).value eq 1)
 }
 
 test "reserve pre-allocates arena backing storage" {
-  a is Arena of int
+  a is Arena of int()
   a.reserve(32)
   through (i from 0 to 16 by 1) {
     id is a.add(i)

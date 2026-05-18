@@ -52,7 +52,7 @@ import is present.
 
 | Method / Form | Description | Example |
 |---|---|---|
-| `xs is List of T` | construct an empty list | `nums is List of int` |
+| `xs is List of T()` | zero-value formation of an empty list | `nums is List of int()` |
 | `xs.push(v)` | append | `nums.push(10)` |
 | `xs.pop()` | remove and return last | `last is nums.pop()` |
 | `xs.get(i)` / `xs[i]` | element at index | `nums[0]` |
@@ -74,7 +74,7 @@ automatically when `use std/map` is in scope.
 
 | Method / Form | Description |
 |---|---|
-| `m is Map of K, V` | construct an empty map |
+| `m is Map of K, V()` | zero-value formation of an empty map |
 | `m.set(key, val)` | insert / update |
 | `m.get(key)` | get value (0 if absent) |
 | `m.keys()` | `List of K` of keys in insertion order |
@@ -85,9 +85,11 @@ automatically when `use std/map` is in scope.
 
 | Syntax | Description | Example |
 |--------|-------------|---------|
-| `StructName()` | heap-allocate struct | `Point()` |
+| `StructName()` | zero-value formation | `Point()` |
+| `StructName(field is value, ...)` | named-field formation (every field exactly once) | `Point(x is 1, y is 2)` |
 | `Type.method(self [ref] Type, ...)` | define a method on a struct or enum | `Counter.bump(self ref Counter) { ... }` |
-| `StructName of T` (no parens) | auto-construct a generic instantiation | `Box of int`, `Map of String, int` |
+| `StructName of T ()` | zero-value formation of a generic instantiation | `Box of int()`, `Map of String, int()` |
+| `StructName of T (field is value, ...)` | named-field formation of a generic instantiation | `Box of int(value is 7)` |
 | `Type.method(self [ref] Type of T, ...)` | method on a generic type | `Box.set(self ref Box of T, v T) { ... }` |
 
 Struct and enum names must start with an uppercase letter

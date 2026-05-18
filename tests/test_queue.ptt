@@ -13,13 +13,13 @@ use std/queue
 use std/option
 
 test "fresh queue reports empty" {
-  q is Queue of int
+  q is Queue of int()
   assert(q.empty())
   assert(q.len() eq 0)
 }
 
 test "FIFO order via push/pop" {
-  q is Queue of int
+  q is Queue of int()
   q.push(1)
   q.push(2)
   q.push(3)
@@ -30,7 +30,7 @@ test "FIFO order via push/pop" {
 }
 
 test "front does not consume" {
-  q is Queue of int
+  q is Queue of int()
   q.push(7)
   q.push(8)
   assert(q.front() eq 7)
@@ -39,13 +39,13 @@ test "front does not consume" {
 }
 
 test "try_pop on empty returns None" {
-  q is Queue of int
+  q is Queue of int()
   o is q.try_pop()
   assert(o.is_none())
 }
 
 test "try_pop on non-empty returns Some(head)" {
-  q is Queue of int
+  q is Queue of int()
   q.push(11)
   q.push(22)
   o is q.try_pop()
@@ -54,13 +54,13 @@ test "try_pop on non-empty returns Some(head)" {
 }
 
 test "try_front on empty returns None" {
-  q is Queue of int
+  q is Queue of int()
   o is q.try_front()
   assert(o.is_none())
 }
 
 test "try_front on non-empty returns Some(head) without consuming" {
-  q is Queue of int
+  q is Queue of int()
   q.push(33)
   q.push(44)
   o is q.try_front()
@@ -69,7 +69,7 @@ test "try_front on non-empty returns Some(head) without consuming" {
 }
 
 test "clear empties the queue and it remains usable" {
-  q is Queue of int
+  q is Queue of int()
   q.push(1)
   q.push(2)
   q.push(3)
@@ -83,7 +83,7 @@ test "wraparound: push, pop, push hits physical slot 0" {
   // Fill exactly to cap=8, drain 4, then push 4 more. The new
   // values wrap into physical slots 0..3. Verify FIFO order
   // is preserved even though head crosses cap.
-  q is Queue of int
+  q is Queue of int()
   through (i from 0 to 8 by 1) { q.push(i) }
   through (j from 0 to 4 by 1) {
     expected is j
@@ -102,7 +102,7 @@ test "growth after wraparound preserves logical order" {
   // Fill to cap=8, drain 4 (head=4), push 4 more so the buffer
   // is full again and head is mid-array. The next push must
   // grow and rebase to head=0 in logical order.
-  q is Queue of int
+  q is Queue of int()
   through (i from 0 to 8 by 1) { q.push(i) }
   through (j from 0 to 4 by 1) { q.pop() }
   through (k from 8 to 12 by 1) { q.push(k) }
@@ -120,7 +120,7 @@ test "growth after wraparound preserves logical order" {
 test "growth across multiple capacity doublings preserves data" {
   // Stress: push 1000 values, pop a few, push a few more,
   // drain everything, confirm exact FIFO order.
-  q is Queue of int
+  q is Queue of int()
   through (i from 0 to 1000 by 1) { q.push(i) }
   assert(q.len() eq 1000)
   through (j from 0 to 1000 by 1) {
@@ -130,7 +130,7 @@ test "growth across multiple capacity doublings preserves data" {
 }
 
 test "Queue of String — heap-shaped element type" {
-  q is Queue of String
+  q is Queue of String()
   q.push("first")
   q.push("second")
   q.push("third")
@@ -141,7 +141,7 @@ test "Queue of String — heap-shaped element type" {
 }
 
 test "Queue of String — try_pop drains in order" {
-  q is Queue of String
+  q is Queue of String()
   q.push("a")
   q.push("b")
   o1 is q.try_pop()
@@ -153,7 +153,7 @@ test "Queue of String — try_pop drains in order" {
 }
 
 test "reserve pre-allocates without changing length" {
-  q is Queue of int
+  q is Queue of int()
   q.reserve(100)
   assert(q.empty())
   // Push beyond what would have grown the default cap=8 — no
@@ -168,7 +168,7 @@ test "reserve pre-allocates without changing length" {
 test "interleaved push/pop maintains FIFO without leaks" {
   // Producer/consumer pattern: 5000 push/pop pairs with the
   // queue staying small. Exercises wraparound many times.
-  q is Queue of int
+  q is Queue of int()
   through (i from 0 to 5000 by 1) {
     q.push(i)
     assert(q.pop() eq i)

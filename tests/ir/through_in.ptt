@@ -7,7 +7,7 @@ use std/list
 
 test "through-in walks all elements + accumulates" {
   xs is [10, 20, 30]
-  visited is List of int
+  visited is List of int()
   total is 0
   through (v in xs) {
     visited.push(v)

@@ -1,0 +1,17 @@
+// Language-law cleanup: `List of Foo(x is 1, y is 2)` is
+// rejected because `Foo` there is a type *argument*, not a
+// value position. The named-field form attaches to the inner
+// type, not to the outer list. To form a list with one Foo
+// inside, write `xs is List of Foo()` and then `xs.push(Foo(x is 1, y is 2))`.
+
+use std/list
+
+Foo is {
+  x int
+  y int
+}
+
+spark {
+  xs is List of Foo(x is 1, y is 2)
+  yell(xs.len())
+}

@@ -15,14 +15,14 @@ touch_front(d ref Deque of Counter) {
 }
 
 test "fresh deque reports empty + zero cap" {
-  d is Deque of int
+  d is Deque of int()
   assert(d.empty())
   assert(d.len() eq 0)
   assert(d.cap() eq 0)
 }
 
 test "push_back plus pop_front is FIFO" {
-  d is Deque of int
+  d is Deque of int()
   d.push_back(1)
   d.push_back(2)
   d.push_back(3)
@@ -33,7 +33,7 @@ test "push_back plus pop_front is FIFO" {
 }
 
 test "push_front plus pop_front is LIFO at the front" {
-  d is Deque of int
+  d is Deque of int()
   d.push_front(1)
   d.push_front(2)
   d.push_front(3)
@@ -44,7 +44,7 @@ test "push_front plus pop_front is LIFO at the front" {
 }
 
 test "push_back plus pop_back is LIFO at the back" {
-  d is Deque of int
+  d is Deque of int()
   d.push_back(1)
   d.push_back(2)
   d.push_back(3)
@@ -55,7 +55,7 @@ test "push_back plus pop_back is LIFO at the back" {
 }
 
 test "front and back do not consume" {
-  d is Deque of int
+  d is Deque of int()
   d.push_back(7)
   d.push_back(8)
   d.push_front(6)
@@ -65,13 +65,13 @@ test "front and back do not consume" {
 }
 
 test "try pops on empty deque return None" {
-  d is Deque of int
+  d is Deque of int()
   assert(d.try_pop_front().is_none())
   assert(d.try_pop_back().is_none())
 }
 
 test "try pops return values from both ends" {
-  d is Deque of int
+  d is Deque of int()
   d.push_back(10)
   d.push_back(20)
   d.push_front(5)
@@ -82,7 +82,7 @@ test "try pops return values from both ends" {
 }
 
 test "get sees logical order after front pushes and back pushes" {
-  d is Deque of int
+  d is Deque of int()
   d.push_back(2)
   d.push_back(3)
   d.push_front(1)
@@ -94,7 +94,7 @@ test "get sees logical order after front pushes and back pushes" {
 }
 
 test "wraparound at the back preserves logical order" {
-  d is Deque of int
+  d is Deque of int()
   through (i from 0 to 8 by 1) { d.push_back(i) }
   through (j from 0 to 4 by 1) { assert(d.pop_front() eq j) }
   through (k from 8 to 12 by 1) { d.push_back(k) }
@@ -106,7 +106,7 @@ test "wraparound at the back preserves logical order" {
 }
 
 test "wraparound at the front preserves logical order" {
-  d is Deque of int
+  d is Deque of int()
   d.reserve(8)
   through (i from 0 to 4 by 1) { d.push_back(i) }
   assert(d.pop_back() eq 3)
@@ -125,7 +125,7 @@ test "wraparound at the front preserves logical order" {
 }
 
 test "growth after wraparound and push_front preserves order" {
-  d is Deque of int
+  d is Deque of int()
   through (i from 0 to 8 by 1) { d.push_back(i) }
   through (j from 0 to 4 by 1) { assert(d.pop_front() eq j) }
   through (k from 8 to 12 by 1) { d.push_back(k) }
@@ -139,7 +139,7 @@ test "growth after wraparound and push_front preserves order" {
 }
 
 test "reserve pre-allocates without changing logical contents" {
-  d is Deque of int
+  d is Deque of int()
   d.reserve(64)
   assert(d.cap() eq 64)
   assert(d.empty())
@@ -151,7 +151,7 @@ test "reserve pre-allocates without changing logical contents" {
 }
 
 test "clear empties deque and preserves usability" {
-  d is Deque of int
+  d is Deque of int()
   d.push_back(1)
   d.push_back(2)
   before is d.cap()
@@ -163,7 +163,7 @@ test "clear empties deque and preserves usability" {
 }
 
 test "reserve pre-allocates requested capacity for a fresh deque" {
-  d is Deque of int
+  d is Deque of int()
   d.reserve(32)
   assert(d.cap() eq 32)
   through (i from 0 to 16 by 1) { d.push_back(i) }
@@ -173,7 +173,7 @@ test "reserve pre-allocates requested capacity for a fresh deque" {
 }
 
 test "Deque of String handles heap-shaped values" {
-  d is Deque of String
+  d is Deque of String()
   d.push_back("b")
   d.push_front("a")
   d.push_back("c")
@@ -186,7 +186,7 @@ test "Deque of String handles heap-shaped values" {
 }
 
 test "ref Deque param may mutate heap-shaped element through get" {
-  d is Deque of Counter
+  d is Deque of Counter()
   d.push_back(Counter(value is 0))
   touch_front(ref d)
   assert(d.get(0).value eq 1)

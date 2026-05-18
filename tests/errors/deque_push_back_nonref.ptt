@@ -5,6 +5,6 @@ touch(d Deque of int) {
 }
 
 spark {
-  d is Deque of int
+  d is Deque of int()
   touch(d)
 }

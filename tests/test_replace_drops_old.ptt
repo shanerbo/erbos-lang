@@ -16,10 +16,10 @@ test "local reassignment drops previous List" {
   // array. Without drop-on-replace, every iteration leaks
   // 16 + 64 bytes (List header + initial cap-8 array). ASan
   // catches the leak.
-  a is List of int
+  a is List of int()
   a.push(1)
   through (i from 0 to 200 by 1) {
-    fresh is List of int
+    fresh is List of int()
     fresh.push(i)
     a be now fresh
   }
@@ -33,7 +33,7 @@ test "field reassignment drops previous List" {
   // auto-init'd-empty + previously-pushed contents.
   b is Box()
   through (i from 0 to 100 by 1) {
-    fresh is List of int
+    fresh is List of int()
     fresh.push(i)
     fresh.push(i + 1)
     b.items be now fresh

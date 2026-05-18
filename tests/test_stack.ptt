@@ -5,13 +5,13 @@ use std/stack
 use std/option
 
 test "fresh stack reports empty" {
-  s is Stack of int
+  s is Stack of int()
   assert(s.empty())
   assert(s.len() eq 0)
 }
 
 test "push grows length and exposes value via peek" {
-  s is Stack of int
+  s is Stack of int()
   s.push(10)
   assert(s.len() eq 1)
   assert(not s.empty())
@@ -19,7 +19,7 @@ test "push grows length and exposes value via peek" {
 }
 
 test "LIFO order via push/pop" {
-  s is Stack of int
+  s is Stack of int()
   s.push(1)
   s.push(2)
   s.push(3)
@@ -30,7 +30,7 @@ test "LIFO order via push/pop" {
 }
 
 test "peek does not consume" {
-  s is Stack of int
+  s is Stack of int()
   s.push(99)
   assert(s.peek() eq 99)
   assert(s.peek() eq 99)
@@ -38,13 +38,13 @@ test "peek does not consume" {
 }
 
 test "try_pop on empty returns None" {
-  s is Stack of int
+  s is Stack of int()
   o is s.try_pop()
   assert(o.is_none())
 }
 
 test "try_pop on non-empty returns Some(top)" {
-  s is Stack of int
+  s is Stack of int()
   s.push(7)
   o is s.try_pop()
   assert(o.unwrap() eq 7)
@@ -52,13 +52,13 @@ test "try_pop on non-empty returns Some(top)" {
 }
 
 test "try_peek on empty returns None" {
-  s is Stack of int
+  s is Stack of int()
   o is s.try_peek()
   assert(o.is_none())
 }
 
 test "try_peek on non-empty returns Some(top) without consuming" {
-  s is Stack of int
+  s is Stack of int()
   s.push(11)
   s.push(22)
   o is s.try_peek()
@@ -67,7 +67,7 @@ test "try_peek on non-empty returns Some(top) without consuming" {
 }
 
 test "clear empties the stack but it remains usable" {
-  s is Stack of int
+  s is Stack of int()
   s.push(1)
   s.push(2)
   s.push(3)
@@ -79,7 +79,7 @@ test "clear empties the stack but it remains usable" {
 }
 
 test "Stack of String — heap-shaped element type" {
-  s is Stack of String
+  s is Stack of String()
   s.push("alpha")
   s.push("beta")
   assert(s.len() eq 2)
@@ -90,7 +90,7 @@ test "Stack of String — heap-shaped element type" {
 }
 
 test "Stack of String — try_pop drains correctly" {
-  s is Stack of String
+  s is Stack of String()
   s.push("a")
   s.push("b")
   o1 is s.try_pop()
@@ -102,7 +102,7 @@ test "Stack of String — try_pop drains correctly" {
 }
 
 test "reserve pre-allocates stack backing storage" {
-  s is Stack of int
+  s is Stack of int()
   s.reserve(64)
   through (i from 0 to 32 by 1) {
     s.push(i)
@@ -113,7 +113,7 @@ test "reserve pre-allocates stack backing storage" {
 
 test "growth past initial capacity" {
   // Push 32 elements; underlying List doubles from 8 to 16 to 32.
-  s is Stack of int
+  s is Stack of int()
   through (i from 0 to 32 by 1) {
     s.push(i)
   }

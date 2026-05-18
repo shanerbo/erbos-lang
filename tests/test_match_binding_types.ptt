@@ -9,41 +9,35 @@
 // (undefined). Spudlock's report.ptt hit this exactly.
 
 use std/string
+use std/result
 
-Result is
-  Success(value int)
-  | Failure(code int, message String)
-
-format_result(r Result) String {
+format_result(r Result of int, String) String {
   match r {
-    Success(v) => give "ok " + v.to_string()
-    Failure(c, m) => give "error " + c.to_string() + ": " + m
+    Ok(v) => give "ok " + v.to_string()
+    Err(m) => give "error " + ": " + m
   }
   give ""
 }
 
-test "match Success arm binds int to use to_string()" {
-  r is Result.Success(42)
+test "match Ok arm binds int to use to_string()" {
+  r is ok of int, String (42)
   s is format_result(r)
   assert(s.equals("ok 42"))
 }
 
-test "match Failure arm binds int and String correctly" {
-  r is Result.Failure(7, "boom")
+test "match Err arm binds String correctly" {
+  r is err of int, String ("boom")
   s is format_result(r)
-  assert(s.equals("error 7: boom"))
+  assert(s.equals("error : boom"))
 }
 
 test "match arm method dispatch picks the right symbol per type" {
   // Stress: int.to_string() and String passed unchanged in same
-  // arm. Without the binding-type fix, c was treated as having
+  // arm. Without the binding-type fix, v was treated as having
   // unknown type and method dispatch fell back to a bare call.
-  r is Result.Failure(99, "down")
+  r is ok of int, String (99)
   match r {
-    Success(v) => assert(false)
-    Failure(c, m) => {
-      assert(c.to_string().equals("99"))
-      assert(m.equals("down"))
-    }
+    Ok(v) => assert(v.to_string().equals("99"))
+    Err(m) => assert(false)
   }
 }

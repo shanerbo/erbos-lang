@@ -4,6 +4,6 @@
 use std/stack
 
 spark {
-  s is Stack of int
+  s is Stack of int()
   yell(s.peek())
 }

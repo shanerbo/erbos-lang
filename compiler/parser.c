@@ -27,6 +27,43 @@ static Node *alloc_node(NodeType type, int line) {
     return n;
 }
 
+// Render a type-name string from its internal `<>`-bracketed form
+// back to the user-facing word-style form for diagnostics. The
+// internal form is what parse_type_name produces (for the
+// monomorphizer); the source uses `Type of T1, T2, ...`.
+//
+// "List<int>"           -> "List of int"
+// "Map<String,int>"     -> "Map of String, int"
+// "List<List<int>>"     -> "List of List of int"
+// "Foo"                 -> "Foo"
+//
+// The output is malloc'd by the caller-controlled buffer; bounded.
+static void format_type_word_style(const char *internal, char *out, int outsz) {
+    if (!internal || outsz <= 0) { if (outsz > 0) out[0] = '\0'; return; }
+    int oi = 0;
+    int depth = 0;
+    for (int i = 0; internal[i] && oi + 1 < outsz; i++) {
+        char c = internal[i];
+        if (c == '<') {
+            if (oi + 4 < outsz) {
+                memcpy(out + oi, " of ", 4);
+                oi += 4;
+            }
+            depth++;
+        } else if (c == '>') {
+            depth--;
+        } else if (c == ',' && depth > 0) {
+            if (oi + 2 < outsz) {
+                out[oi++] = ',';
+                out[oi++] = ' ';
+            }
+        } else {
+            out[oi++] = c;
+        }
+    }
+    out[oi] = '\0';
+}
+
 static void list_push(NodeList *l, Node *n) {
     if (l->count >= l->cap) {
         l->cap = l->cap ? l->cap * 2 : 4;
@@ -268,19 +305,27 @@ static Node *parse_primary(Parser *p) {
     if (at(p, TOK_IDENT)) {
         char *name = cur(p)->value;
 
-        // Parametric constructor: `Box of int ()` or `Map of String, int ()`.
-        // We disambiguate from a generic non-call expression with `of`
-        // inside (e.g. a hypothetical `xs is List of int` in a place
-        // that expects an expression) by looking ahead: a parametric
-        // constructor's type-arg list is followed by '('. The shape
-        // is IDENT `of` IDENT [`to` IDENT] `(`, optionally with the
-        // type args themselves being parametric (recursing through
-        // more `of` / `to`).
+        // Parametric value formation: `Box of int(value is 7)`,
+        // `Map of String, int()`, or enum factory `some of int (7)`.
+        //
+        // Language law: a type expression names a type only. A bare
+        // type expression like `List of int` is never a value. A
+        // value is formed only by:
+        //   - TypeExpr()
+        //   - TypeExpr(field is value, ...)
+        //   - enum factories: none/some/ok/err
+        //
+        // We disambiguate by looking ahead: a value-formation
+        // expression's type-arg list is always followed by '('. The
+        // shape is IDENT `of` TYPE [`,` TYPE]* `(`, with the type
+        // args themselves possibly parametric (recursing through `of`).
         //
         // Lookahead walker: starting at peek(1), consume only
         // type-position tokens (IDENT / primitive keywords / `of` /
         // comma). Stop at the first token that can't be in a type
-        // position. If that token is `(`, it's a constructor call.
+        // position. If that token is `(`, it's a value-formation call.
+        // If it's anything else (including `.`), the bare type
+        // expression is rejected as a value below.
         if (peek_at(p, 1)->type == TOK_OF) {
             int look = 1;
             int ok = 1;
@@ -301,37 +346,14 @@ static Node *parse_primary(Parser *p) {
                 }
                 break;
             }
-            // No-parens auto-construct in expression position. When
-            // `IDENT of TYPE [to TYPE]` is followed by something
-            // that ends an expression — `,`, `)`, NEWLINE, or EOF —
-            // synthesize a zero-arg constructor call. This lets
-            // users write `Foo(items is List of Int, count is 0)`
-            // (the natural form for "default-construct this nested
-            // collection field") instead of the parser refusing the
-            // value position. Same idea as the var-decl
-            // auto-construct path lower down — extended to argument
-            // position so named-arg constructors work for fields of
-            // generic stdlib type.
-            if (ok && saw_type_token) {
-                TokenType end = p->tokens[p->pos + look].type;
-                if (end == TOK_COMMA || end == TOK_RPAREN ||
-                    end == TOK_NEWLINE || end == TOK_EOF) {
-                    char *full = parse_type_name(p);
-                    Node *n = alloc_node(NODE_CALL, line);
-                    n->call.name = full;
-                    n->call.args = NULL;
-                    n->call.arg_names = NULL;
-                    n->call.arg_count = 0;
-                    return n;
-                }
-            }
-            // Parametric-type-as-receiver: `Option of int .Some(7)`
-            // or `Option of int .None()`. parse_type_name reads the
-            // type expression in legacy `<>` form; we emit a bare
-            // IDENT node naming that type so the existing dot-chain
-            // logic builds a NODE_METHOD_CALL with the type as the
-            // receiver. The monomorph pass mangles the IDENT name to
-            // its concrete form (e.g. `Option<int>` -> `Option__int`).
+            // Parametric type used as a method receiver (legacy
+            // `Option of T .Some(value)` shape). The parser still
+            // accepts this AST shape because stdlib factory bodies
+            // construct enum variants this way; the *checker*
+            // restricts use of the form to those factory bodies and
+            // rejects every other source position with a teaching
+            // diagnostic that points users at the `none/some/ok/err`
+            // factories.
             if (ok && saw_type_token && p->tokens[p->pos + look].type == TOK_DOT) {
                 char *full = parse_type_name(p);
                 Node *base = alloc_node(NODE_IDENT, line);
@@ -393,10 +415,33 @@ static Node *parse_primary(Parser *p) {
                 }
                 return base;
             }
+            // Bare type expression in value position. `List of int`,
+            // `Map of String, int`, `Box of Foo` etc. are types, not
+            // values. To form a value, write `TypeExpr()` or
+            // `TypeExpr(field is value, ...)`.
+            if (ok && saw_type_token && p->tokens[p->pos + look].type != TOK_LPAREN) {
+                // Render the type expression in the user-facing
+                // word-style form for the diagnostic.
+                char *full = parse_type_name(p);
+                char display[512];
+                format_type_word_style(full ? full : "", display, sizeof(display));
+                fprintf(stderr,
+                    "error:%d: type expression `%s` is not a value\n",
+                    line, display);
+                fprintf(stderr,
+                    "  help: form a value with `%s()` or "
+                    "`%s(field is value, ...)`\n",
+                    display, display);
+                if (full) free(full);
+                exit(1);
+            }
             if (ok && saw_type_token && p->tokens[p->pos + look].type == TOK_LPAREN) {
                 // Parametric constructor confirmed. parse_type_name reads
                 // `Box of int` as `Box<int>` (legacy internal form) for
                 // the monomorphizer, then we consume `(` and arguments.
+                // The checker later rejects the redundant empty-paren
+                // form `Box of int()`; only named-arg generic
+                // constructors pay rent.
                 char *full = parse_type_name(p);
                 eat(p, TOK_LPAREN);
                 Node *n = alloc_node(NODE_CALL, line);
@@ -922,14 +967,13 @@ static Node *parse_stmt(Parser *p) {
             //
             // (b) Primitive-named types (`int`, `str`, `bool`).
             //
-            // (c) User-generic / capitalized struct types in the
-            //     word-style form: `IDENT [of TYPE [to TYPE]]`. With no
-            //     value expression after, this auto-constructs to
-            //     `IDENT(...)` — same convenience as (a), so users
-            //     can write `xs is List of int` without trailing `()`.
-            //     Triggered only when the IDENT isn't immediately
-            //     followed by `(` (which would be a constructor call
-            //     parsed as a regular expression).
+            // (c) Type annotation followed by an initializer:
+            //     `xs is int 5` / `flag is bool true`. The
+            //     bare-type-without-initializer auto-construct form
+            //     (e.g. `xs is List of int`) is rejected under the
+            //     new language law — a value is formed only by
+            //     `TypeExpr()`, `TypeExpr(field is value, ...)`, or
+            //     enum factories.
             int explicit_type_consumed = 0;
             // Codex P2-16: `x str` variable annotations are also
             // rejected — same teaching error as type positions
@@ -1024,25 +1068,26 @@ static Node *parse_stmt(Parser *p) {
                     explicit_type_consumed = 1;
                 }
             }
-            // If no value expression — auto-construct.
+            // Under the new language law, a bare type expression is
+            // not a value. `xs is List of int` (no initializer) is
+            // rejected; the user must write `xs is List of int()`
+            // for zero-value formation or `xs is List of int(...)`
+            // for named-field formation.
             if (at(p, TOK_NEWLINE) || at(p, TOK_EOF)) {
                 if (explicit_type_consumed && n->var_decl.type_name) {
-                    // Auto-create the constructor call. For lowercase
-                    // legacy keywords (list / map / imap / task) the
-                    // call name is the keyword spelling (irgen remaps
-                    // them to `_list_new` / `_map_new` etc.). For user
-                    // types the call name is the parsed type string,
-                    // which goes through monomorphization just like
-                    // any other constructor call.
-                    Node *call = alloc_node(NODE_CALL, line);
-                    call->call.name = n->var_decl.type_name;
-                    call->call.args = NULL;
-                    call->call.arg_count = 0;
-                    n->var_decl.value = call;
-                } else {
-                    fprintf(stderr, "%s:%d: error: variable '%s' must be initialized with a value\n", p->filename, line, name);
+                    char display[512];
+                    format_type_word_style(n->var_decl.type_name, display, sizeof(display));
+                    fprintf(stderr,
+                        "error:%d: type expression `%s` is not a value\n",
+                        line, display);
+                    fprintf(stderr,
+                        "  help: form a value with `%s()` or "
+                        "`%s(field is value, ...)`\n",
+                        display, display);
                     exit(1);
                 }
+                fprintf(stderr, "%s:%d: error: variable '%s' must be initialized with a value\n", p->filename, line, name);
+                exit(1);
             } else {
                 n->var_decl.value = parse_expr(p);
             }

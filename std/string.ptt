@@ -187,7 +187,7 @@ String.split(self String, sep String) List of String {
   sep.count eq 0 ?{
     assert(false)
   }
-  parts is List of String
+  parts is List of String()
   start is 0
   i is 0
   infi (i le self.count - sep.count) {

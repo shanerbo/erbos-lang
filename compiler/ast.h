@@ -211,6 +211,12 @@ struct Node {
         // validates this matches the callee's param_is_ref. Codex
         // audit P0-2 — without preserving the marker, `f(ref x)`
         // and `f(x)` were indistinguishable downstream.
+        //
+        // (Removed: `explicit_generic_zero_ctor` was a parser-only
+        // marker used to reject `List of T()` / `Box of int()` in
+        // favour of the bare auto-construct form. Under the new
+        // language law, `TypeExpr()` is the canonical zero-value
+        // formation; bare type expressions are not values.)
         struct {
             char *name;
             Node **args;

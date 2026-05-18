@@ -17,7 +17,7 @@ touch(xs List of Outer) {
 }
 
 spark {
-  xs is List of Outer
+  xs is List of Outer()
   o is Outer()
   o.inner.v be 5
   xs.push(o)

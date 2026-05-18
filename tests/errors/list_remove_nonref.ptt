@@ -8,7 +8,7 @@ drop_first(xs List of int) {
 }
 
 spark {
-  xs is List of int
+  xs is List of int()
   xs.push(1)
   drop_first(xs)
 }

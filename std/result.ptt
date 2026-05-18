@@ -6,11 +6,13 @@
 //     Ok(value T)
 //     | Err(error E)
 //
-// Construction:
-//   r is ok of int, String (7)              // Ok(7) via free-fn factory
-//   e is err of int, String ("nope")        // Err("nope") via factory
-//   r is Result of int, String .Ok(7)       // direct variant ctor
-//   e is Result of int, String .Err("e")    // direct variant ctor
+// Construction (enum factory formation only):
+//   r is ok of int, String (7)              // Ok(7)
+//   e is err of int, String ("nope")        // Err("nope")
+//
+// The legacy `Result of T, E .Ok(...)` / `.Err(...)` value-form
+// is gone under the language-law cleanup; only the factories
+// `none`/`some`/`ok`/`err` materialize enum values.
 //
 // All methods use `match`; `unwrap` panics on Err and
 // `unwrap_err` panics on Ok via assert(false). The recursive

@@ -13,7 +13,7 @@ use std/list
 
 solve(grid List of int, rows int, cols int) int {
   // Queue: list of encoded positions
-  queue is List of int
+  queue is List of int()
   fresh is 0
 
   // Find initial rotten and count fresh

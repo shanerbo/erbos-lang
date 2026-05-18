@@ -1,0 +1,12 @@
+// Language-law cleanup: a bare type expression is never a value.
+// `f is Foo` must be rejected; only `Foo()` or
+// `Foo(field is value, ...)` form values.
+
+Foo is {
+  x int
+}
+
+spark {
+  f is Foo
+  yell(f.x)
+}

@@ -139,7 +139,7 @@ spark {
   yell("---")
 
   // === 11. Typed lists ===
-  nums is List of int
+  nums is List of int()
   nums.push(10)
   nums.push(20)
   nums.push(30)
@@ -165,7 +165,7 @@ spark {
   yell("---")
 
   // === 14. Typed maps ===
-  scores is Map of String, int
+  scores is Map of String, int()
   scores.set("alice", 95)
   scores.set("bob", 87)
   scores.set("charlie", 92)
@@ -184,18 +184,18 @@ spark {
   yell("---")
 
   // === 16. Nested collections: List of List of int ===
-  grid is List of List of int
-  inner1 is List of int
+  grid is List of List of int()
+  inner1 is List of int()
   inner1.push(1)
   inner1.push(2)
   inner1.push(3)
   grid.push(inner1)
-  inner2 is List of int
+  inner2 is List of int()
   inner2.push(4)
   inner2.push(5)
   inner2.push(6)
   grid.push(inner2)
-  inner3 is List of int
+  inner3 is List of int()
   inner3.push(7)
   inner3.push(8)
   inner3.push(9)
@@ -206,8 +206,8 @@ spark {
   yell("---")
 
   // === 17. Nested: map + list combo ===
-  registry is Map of String, int
-  people is List of Person
+  registry is Map of String, int()
+  people is List of Person()
   p1 is Person()
   p1.age be 25
   p1.score be 100
@@ -248,7 +248,7 @@ spark {
   yell("---")
 
   // === 21. Growable list stress (100 elements) ===
-  big is List of int
+  big is List of int()
   through (i from 0 to 100 by 1) {
     big.push(i * 2)
   }
@@ -259,7 +259,7 @@ spark {
   yell("---")
 
   // === 22. Growable map stress (50 entries) ===
-  bigmap is Map of String, int
+  bigmap is Map of String, int()
   through (i from 0 to 50 by 1) {
     bigmap.set(i.to_string(), i * i)
   }

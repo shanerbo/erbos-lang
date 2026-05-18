@@ -1,18 +1,15 @@
 use std/string
+use std/result
 
-Result is
-  Ok(value int)
-  | Err(message String)
-
-divide(a int, b int) Result {
+divide(a int, b int) Result of int, String {
   b eq 0 ?{
-    give Result.Err("div by zero")
+    give err of int, String ("div by zero")
   }
-  give Result.Ok(a / b)
+  give ok of int, String (a / b)
 }
 
 test "enum creation" {
-  r is Result.Ok(42)
+  r is ok of int, String (42)
   match r {
     Ok(v) => assert(v eq 42)
     Err(msg) => assert(false)

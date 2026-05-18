@@ -7,9 +7,10 @@
 //   - heap-shaped T ownership behaviour
 //   - import test (covered by tests/errors/option_missing_use.ptt)
 //
-// Construction shapes exercised here: bare-factory call
-// (`some of int (...)`, `none of int ()`) and direct variant
-// construction (`Option of int .Some(...)`, `Option of int .None()`).
+// Construction shape: enum factory formation only.
+// The legacy `Option of int .Some(...)` / `.None()` direct
+// variant form is gone; `none`, `some`, `ok`, `err` are the
+// only ways to form Option / Result values.
 
 use std/string
 use std/option
@@ -26,17 +27,6 @@ test "none factory returns None" {
   n is none of int ()
   assert(n.is_none())
   assert(not n.is_some())
-}
-
-test "Option of int .Some direct variant constructor" {
-  o is Option of int .Some(7)
-  assert(o.is_some())
-  assert(o.unwrap() eq 7)
-}
-
-test "Option of int .None direct variant constructor" {
-  n is Option of int .None()
-  assert(n.is_none())
 }
 
 test "unwrap_or returns inner Some value" {
@@ -70,11 +60,10 @@ test "Some(0) is unambiguously a value, not absence" {
 
 test "Option of List of int — nested heap-shaped variant payload" {
   // Stress: T is itself a generic struct with its own backing
-  // array. The factory's `Option of int .Some(value)` clones
-  // the variant payload into the heap-allocated enum block,
-  // so caller's `fresh` and the option's payload are
-  // independent owners.
-  fresh is List of int
+  // array. The factory clones the variant payload into the
+  // heap-allocated enum block, so caller's `fresh` and the
+  // option's payload are independent owners.
+  fresh is List of int()
   fresh.push(1)
   fresh.push(2)
   fresh.push(3)

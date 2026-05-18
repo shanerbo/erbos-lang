@@ -1,4 +1,4 @@
 spark {
-  a is Arena of int
+  a is Arena of int()
   yell(a.len())
 }

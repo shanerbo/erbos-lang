@@ -6,7 +6,7 @@ use std/string
 use std/map
 
 longest(s String, n int) int {
-  seen is Map of String, int
+  seen is Map of String, int()
   start is 0
   max_len is 0
   through (i from 0 to n by 1) {

@@ -10,7 +10,7 @@
 // Replaces the previous int-only `std/stack.ptt`. Two-line
 // migration guide:
 //   old (int-only)            new (generic)
-//   s is stack.new()        s is Stack of int
+//   s is stack.new()        s is Stack of int()
 //   stack.push(s, 5)        s.push(5)
 //   stack.pop(s)            s.pop()        // panics on empty
 //                           s.try_pop()    // returns Option

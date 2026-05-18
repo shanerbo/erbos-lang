@@ -40,7 +40,7 @@ test "two literal fields, nested struct, then drop" {
 test "subsequent allocation after literal-field drop" {
   // Pre-fix the prior test's drop chain would corrupt the
   // free list and this allocation would crash.
-  xs is List of int
+  xs is List of int()
   xs.push(1)
   xs.push(2)
   xs.push(3)

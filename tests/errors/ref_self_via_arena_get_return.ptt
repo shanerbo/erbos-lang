@@ -13,7 +13,7 @@ touch(a Arena of Counter) {
 }
 
 spark {
-  a is Arena of Counter
+  a is Arena of Counter()
   a.add(Counter(value is 0))
   touch(a)
   yell(a.get(0).value)

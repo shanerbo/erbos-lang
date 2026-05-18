@@ -1,0 +1,11 @@
+// Language-law cleanup: bare generic type expressions are not
+// values. `xs is List of int` must be rejected; only
+// `List of int()` or `List of int(field is value, ...)` form
+// values.
+
+use std/list
+
+spark {
+  xs is List of int
+  yell(xs.len())
+}

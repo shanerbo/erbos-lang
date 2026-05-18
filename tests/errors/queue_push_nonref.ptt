@@ -8,6 +8,6 @@ bad(q Queue of int) {
 }
 
 spark {
-  q is Queue of int
+  q is Queue of int()
   bad(q)
 }

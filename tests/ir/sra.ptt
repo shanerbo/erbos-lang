@@ -45,7 +45,7 @@ Pair is {
 }
 
 test "SRA: straight-line (entry-block only)" {
-  b is Box of int
+  b is Box of int()
   b.set(42)
   assert(b.get() eq 42)
 }

@@ -2,6 +2,6 @@
 // must error. Proves no hidden auto-import.
 
 spark {
-  s is Stack of int
+  s is Stack of int()
   s.push(1)
 }

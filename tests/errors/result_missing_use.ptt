@@ -4,6 +4,6 @@
 use std/string
 
 spark {
-  r is Result of int, String
+  r is Result of int, String()
   yell(r.is_err())
 }

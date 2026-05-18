@@ -4,7 +4,7 @@
 use std/list
 
 spark {
-  xs is List of int
+  xs is List of int()
   xs.push(1)
   v is xs.remove(5)
   yell(v)

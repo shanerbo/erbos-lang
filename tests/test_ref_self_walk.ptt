@@ -48,7 +48,7 @@ bump_first(xs ref List of Counter) {
 }
 
 test "ref param allows ref-self call through xs.get(i)" {
-  xs is List of Counter
+  xs is List of Counter()
   c is Counter()
   c.value be 5
   xs.push(c)
@@ -58,7 +58,7 @@ test "ref param allows ref-self call through xs.get(i)" {
 }
 
 test "local List root allows ref-self call through xs.get(i)" {
-  xs is List of Counter
+  xs is List of Counter()
   xs.push(Counter(value is 1))
   xs.get(0).bump()
   xs.get(0).bump()
@@ -78,7 +78,7 @@ bump_map_field(h ref HolderMap) {
 }
 
 test "ref map param allows ref-self call through m.get(k)" {
-  m is Map of String, Counter
+  m is Map of String, Counter()
   m.set("main", Counter(value is 10))
   bump_named(ref m)
   bump_named(ref m)

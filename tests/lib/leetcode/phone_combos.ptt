@@ -33,7 +33,7 @@ backtrack(digits String, index int, current String, n int, out ref List of Strin
 }
 
 solve(digits String) List of String {
-  out is List of String
+  out is List of String()
   n is digits.len()
   n eq 0 ?{ give out }
   backtrack(digits, 0, "", n, ref out)

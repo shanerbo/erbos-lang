@@ -25,7 +25,7 @@ test "multiline named-arg constructor parses and assigns correctly" {
 }
 
 test "field be now src transfers ownership of a List" {
-  ctx is List of int
+  ctx is List of int()
   ctx.push(10)
   ctx.push(20)
   ctx.push(30)

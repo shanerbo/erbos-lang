@@ -1,0 +1,109 @@
+// Language-law cleanup compile-pass coverage. Exercises every
+// form the new grammar accepts.
+//
+// Forms covered:
+//   - zero-value formation:       Foo(), List of int(), Map of String, int()
+//   - named-field formation:      Foo(x is 1, y is 2)
+//   - nested named-field:         Wrap(item is Foo())
+//   - nested generic named-field: Wrap(items is List of Foo())
+//   - enum factory formation:     none / some / ok / err
+
+use std/string
+use std/list
+use std/map
+use std/option
+use std/result
+
+Foo is {
+  x int
+  y int
+}
+
+Wrap is {
+  item Foo
+}
+
+WrapList is {
+  items List of Foo
+}
+
+test "zero-value formation: bare struct" {
+  f is Foo()
+  assert(f.x eq 0)
+  assert(f.y eq 0)
+}
+
+test "named-field formation" {
+  f is Foo(x is 1, y is 2)
+  assert(f.x eq 1)
+  assert(f.y eq 2)
+}
+
+test "zero-value formation: List of int" {
+  xs is List of int()
+  xs.push(7)
+  assert(xs.len() eq 1)
+  assert(xs.get(0) eq 7)
+}
+
+test "zero-value formation: Map of String, int" {
+  m is Map of String, int()
+  m.set("k", 3)
+  assert(m.get("k") eq 3)
+}
+
+test "nested named-field with zero-value inner" {
+  w is Wrap(item is Foo())
+  assert(w.item.x eq 0)
+}
+
+test "nested named-field with named-field inner" {
+  w is Wrap(item is Foo(x is 9, y is 11))
+  assert(w.item.x eq 9)
+  assert(w.item.y eq 11)
+}
+
+test "nested named-field with List of Foo" {
+  w is WrapList(items is List of Foo())
+  assert(w.items.len() eq 0)
+}
+
+test "enum factory formation: some / none" {
+  o is some of int (7)
+  assert(o.is_some())
+  assert(o.unwrap() eq 7)
+  n is none of int ()
+  assert(n.is_none())
+}
+
+test "enum factory formation: ok / err" {
+  r is ok of int, String (1)
+  assert(r.is_ok())
+  assert(r.unwrap() eq 1)
+  e is err of int, String ("bad")
+  assert(e.is_err())
+  assert(e.unwrap_err().equals("bad"))
+}
+
+test "ok and err of the same T,E share an outer Result of T,E" {
+  // Regression: both factories produce values whose static type
+  // is the same `Result of T, E`, so they can flow through the
+  // same variable / function-return slot.
+  use_either(true)
+  use_either(false)
+}
+
+use_either(pick_ok bool) {
+  r is mk(pick_ok)
+  match r {
+    Ok(v) => assert(v eq 1)
+    Err(e) => assert(e.equals("bad"))
+  }
+}
+
+mk(pick_ok bool) Result of int, String {
+  pick_ok ?{
+    give ok of int, String (1)
+  }
+  give err of int, String ("bad")
+}

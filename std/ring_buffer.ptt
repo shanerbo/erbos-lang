@@ -7,7 +7,7 @@ RingBuffer of T is {
 }
 
 ring_with_cap of T (cap int) RingBuffer of T {
-  out is RingBuffer of T
+  out is RingBuffer of T()
   cap le 0 ?{ give out }
   out.data be array of T with cap cap
   give out

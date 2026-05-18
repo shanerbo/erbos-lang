@@ -13,7 +13,7 @@ touch(d Deque of Counter) {
 }
 
 spark {
-  d is Deque of Counter
+  d is Deque of Counter()
   d.push_back(Counter(value is 0))
   touch(d)
   yell(d.get(0).value)

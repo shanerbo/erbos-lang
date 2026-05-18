@@ -1,7 +1,7 @@
 use std/list
 
 spark {
-  nums is List of int
+  nums is List of int()
   nums.push(10)
   nums.push(20)
   nums.push(30)

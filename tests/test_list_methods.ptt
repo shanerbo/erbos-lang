@@ -8,7 +8,7 @@ use std/string
 use std/list
 
 test "len reflects pushed count" {
-  xs is List of int
+  xs is List of int()
   assert(xs.len() eq 0)
   xs.push(10)
   assert(xs.len() eq 1)
@@ -18,7 +18,7 @@ test "len reflects pushed count" {
 }
 
 test "get returns pushed values in order" {
-  xs is List of int
+  xs is List of int()
   xs.push(10)
   xs.push(20)
   xs.push(30)
@@ -28,7 +28,7 @@ test "get returns pushed values in order" {
 }
 
 test "set updates in place" {
-  xs is List of int
+  xs is List of int()
   xs.push(10)
   xs.push(20)
   xs.set(1, 99)
@@ -37,7 +37,7 @@ test "set updates in place" {
 }
 
 test "pop returns last and shrinks" {
-  xs is List of int
+  xs is List of int()
   xs.push(10)
   xs.push(20)
   xs.push(30)
@@ -50,7 +50,7 @@ test "pop returns last and shrinks" {
 }
 
 test "growth past initial capacity" {
-  xs is List of int
+  xs is List of int()
   // Initial cap is 8 — push 100 elements to force multiple
   // doublings.
   through (i from 0 to 100 by 1) {
@@ -63,7 +63,7 @@ test "growth past initial capacity" {
 }
 
 test "List of String stores header pointers" {
-  xs is List of String
+  xs is List of String()
   xs.push("alpha")
   xs.push("beta")
   xs.push("gamma")

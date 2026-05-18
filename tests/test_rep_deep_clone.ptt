@@ -38,7 +38,7 @@ test "rep deep-clones nested struct fields" {
 }
 
 test "rep deep-clones a List, including its array storage" {
-  a is List of int
+  a is List of int()
   a.push(10)
   a.push(20)
   a.push(30)

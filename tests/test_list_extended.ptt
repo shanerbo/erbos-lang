@@ -7,14 +7,14 @@ use std/list
 use std/option
 
 test "fresh list reports empty + zero cap" {
-  xs is List of int
+  xs is List of int()
   assert(xs.empty())
   assert(xs.len() eq 0)
   assert(xs.cap() eq 0)
 }
 
 test "reserve allocates the requested capacity on a fresh list" {
-  xs is List of int
+  xs is List of int()
   xs.reserve(32)
   assert(xs.cap() eq 32)
   assert(xs.len() eq 0)
@@ -22,7 +22,7 @@ test "reserve allocates the requested capacity on a fresh list" {
 }
 
 test "reserve is a no-op below current capacity" {
-  xs is List of int
+  xs is List of int()
   xs.reserve(64)
   xs.reserve(8)             // smaller -> ignored
   assert(xs.cap() eq 64)
@@ -31,7 +31,7 @@ test "reserve is a no-op below current capacity" {
 }
 
 test "reserve grows above current cap and copies elements" {
-  xs is List of int
+  xs is List of int()
   xs.push(1)
   xs.push(2)
   xs.push(3)
@@ -47,7 +47,7 @@ test "growth across multiple capacity doublings preserves data" {
   // Push 1..1000; cap should double several times. Verify every
   // element survives the cascade of `be now fresh` field
   // replacements.
-  xs is List of int
+  xs is List of int()
   through (i from 0 to 1000 by 1) {
     xs.push(i)
   }
@@ -59,13 +59,13 @@ test "growth across multiple capacity doublings preserves data" {
 }
 
 test "try_pop on empty list returns None" {
-  xs is List of int
+  xs is List of int()
   o is xs.try_pop()
   assert(o.is_none())
 }
 
 test "try_pop on non-empty list returns Some(last)" {
-  xs is List of int
+  xs is List of int()
   xs.push(7)
   xs.push(8)
   o is xs.try_pop()
@@ -76,21 +76,21 @@ test "try_pop on non-empty list returns Some(last)" {
 }
 
 test "try_get returns None for negative index" {
-  xs is List of int
+  xs is List of int()
   xs.push(0)
   o is xs.try_get(0 - 1)
   assert(o.is_none())
 }
 
 test "try_get returns None for out-of-range index" {
-  xs is List of int
+  xs is List of int()
   xs.push(0)
   o is xs.try_get(5)
   assert(o.is_none())
 }
 
 test "try_get returns Some(value) for valid index" {
-  xs is List of int
+  xs is List of int()
   xs.push(11)
   xs.push(22)
   o is xs.try_get(1)
@@ -99,7 +99,7 @@ test "try_get returns Some(value) for valid index" {
 }
 
 test "insert at front shifts existing elements right" {
-  xs is List of int
+  xs is List of int()
   xs.push(2)
   xs.push(3)
   xs.insert(0, 1)
@@ -110,7 +110,7 @@ test "insert at front shifts existing elements right" {
 }
 
 test "insert in the middle" {
-  xs is List of int
+  xs is List of int()
   xs.push(1)
   xs.push(3)
   xs.insert(1, 2)
@@ -120,7 +120,7 @@ test "insert in the middle" {
 }
 
 test "insert at back equals push" {
-  xs is List of int
+  xs is List of int()
   xs.push(1)
   xs.insert(xs.len(), 2)
   assert(xs[0] eq 1)
@@ -130,7 +130,7 @@ test "insert at back equals push" {
 
 test "insert that triggers growth" {
   // Force the list to grow inside insert by filling to cap.
-  xs is List of int
+  xs is List of int()
   through (i from 0 to 8 by 1) {
     xs.push(i)
   }
@@ -144,7 +144,7 @@ test "insert that triggers growth" {
 }
 
 test "remove from front shifts left" {
-  xs is List of int
+  xs is List of int()
   xs.push(1)
   xs.push(2)
   xs.push(3)
@@ -156,7 +156,7 @@ test "remove from front shifts left" {
 }
 
 test "remove from middle" {
-  xs is List of int
+  xs is List of int()
   xs.push(10)
   xs.push(20)
   xs.push(30)
@@ -167,7 +167,7 @@ test "remove from middle" {
 }
 
 test "remove from back behaves like pop" {
-  xs is List of int
+  xs is List of int()
   xs.push(5)
   xs.push(6)
   v is xs.remove(xs.len() - 1)
@@ -177,7 +177,7 @@ test "remove from back behaves like pop" {
 }
 
 test "clear resets count but keeps capacity" {
-  xs is List of int
+  xs is List of int()
   xs.push(1)
   xs.push(2)
   before_cap is xs.cap()
@@ -191,7 +191,7 @@ test "clear resets count but keeps capacity" {
 }
 
 test "contains finds present elements" {
-  xs is List of int
+  xs is List of int()
   xs.push(2)
   xs.push(4)
   xs.push(6)
@@ -200,7 +200,7 @@ test "contains finds present elements" {
 }
 
 test "index_of returns position or -1" {
-  xs is List of int
+  xs is List of int()
   xs.push(10)
   xs.push(20)
   xs.push(30)
@@ -209,13 +209,13 @@ test "index_of returns position or -1" {
 }
 
 test "reverse on empty list is a no-op" {
-  xs is List of int
+  xs is List of int()
   xs.reverse()
   assert(xs.empty())
 }
 
 test "reverse on single-element list is a no-op" {
-  xs is List of int
+  xs is List of int()
   xs.push(42)
   xs.reverse()
   assert(xs.len() eq 1)
@@ -223,7 +223,7 @@ test "reverse on single-element list is a no-op" {
 }
 
 test "reverse on even-length list" {
-  xs is List of int
+  xs is List of int()
   xs.push(1)
   xs.push(2)
   xs.push(3)
@@ -236,7 +236,7 @@ test "reverse on even-length list" {
 }
 
 test "reverse on odd-length list keeps middle fixed" {
-  xs is List of int
+  xs is List of int()
   xs.push(1)
   xs.push(2)
   xs.push(3)
@@ -247,7 +247,7 @@ test "reverse on odd-length list keeps middle fixed" {
 }
 
 test "List of String — heap-shape contains/index_of via String byte equality" {
-  xs is List of String
+  xs is List of String()
   xs.push("alpha")
   xs.push("beta")
   xs.push("gamma")
@@ -260,7 +260,7 @@ test "List of String — push of an owned String survives a regrow" {
   // Push 12 owned-String elements (from concat) so the list
   // grows past cap=8 at least once. After regrow, every header
   // pointer must still resolve to the original heap data.
-  xs is List of String
+  xs is List of String()
   through (i from 0 to 12 by 1) {
     s is "item_" + i.to_string()
     xs.push(s)
@@ -271,7 +271,7 @@ test "List of String — push of an owned String survives a regrow" {
 }
 
 test "reserve can pre-allocate an empty list to the requested cap" {
-  xs is List of int
+  xs is List of int()
   xs.reserve(64)
   assert(xs.empty())
   assert(xs.len() eq 0)
@@ -279,7 +279,7 @@ test "reserve can pre-allocate an empty list to the requested cap" {
 }
 
 test "reserve on heap-shaped T allocates the right-sized backing array" {
-  ys is List of String
+  ys is List of String()
   ys.reserve(16)
   assert(ys.empty())
   assert(ys.cap() eq 16)
@@ -295,14 +295,14 @@ test "reserve on heap-shaped T allocates the right-sized backing array" {
 }
 
 test "clone of an empty list is empty" {
-  xs is List of int
+  xs is List of int()
   ys is xs.clone()
   assert(ys.empty())
   assert(ys.len() eq 0)
 }
 
 test "clone of List of int is a value-equal independent copy" {
-  xs is List of int
+  xs is List of int()
   xs.push(10)
   xs.push(20)
   xs.push(30)
@@ -320,7 +320,7 @@ test "clone of List of int is a value-equal independent copy" {
 }
 
 test "clone of List of String deep-copies each element" {
-  xs is List of String
+  xs is List of String()
   xs.push("alpha")
   xs.push("beta")
   ys is xs.clone()
@@ -334,7 +334,7 @@ test "clone of List of String deep-copies each element" {
 }
 
 test "try_pop drains a List of int correctly" {
-  xs is List of int
+  xs is List of int()
   xs.push(1)
   xs.push(2)
   xs.push(3)

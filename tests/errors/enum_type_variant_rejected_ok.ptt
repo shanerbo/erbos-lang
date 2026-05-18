@@ -1,0 +1,10 @@
+// Language-law cleanup: `Result of int, String .Ok(1)` is
+// rejected; users write `ok of int, String (1)`.
+
+use std/string
+use std/result
+
+spark {
+  r is Result of int, String .Ok(1)
+  yell(r.unwrap())
+}

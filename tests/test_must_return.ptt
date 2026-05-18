@@ -2,6 +2,7 @@
 // that does return on every path.
 
 use std/string
+use std/result
 
 // 1. Trailing `give` is the simplest case.
 trailing_give(n int) int {
@@ -36,9 +37,13 @@ fallthrough_give(x int) int {
   give 0
 }
 
-// 5. Match with give in every arm.
-Result is Ok(v int) | Err(e int)
-match_all(r Result) int {
+// 5. Match with give in every arm. Uses the stdlib Result of T, E
+//    enum because the new language law restricts enum value
+//    formation to the `none`/`some`/`ok`/`err` factories — user
+//    enums have no value-formation syntax. The shape exercised
+//    here is the same: a match expression with `give` in every
+//    arm.
+match_all(r Result of int, int) int {
   match r {
     Ok(v) => give v
     Err(e) => give 0 - e
@@ -55,6 +60,6 @@ test "fallthrough give" {
   assert(fallthrough_give(0 - 5) eq 0)
 }
 test "match all arms" {
-  assert(match_all(Result.Ok(7)) eq 7)
-  assert(match_all(Result.Err(3)) eq 0 - 3)
+  assert(match_all(ok of int, int (7)) eq 7)
+  assert(match_all(err of int, int (3)) eq 0 - 3)
 }

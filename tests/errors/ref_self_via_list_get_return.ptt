@@ -25,7 +25,7 @@ touch(xs List of Counter) {
 }
 
 spark {
-  xs is List of Counter
+  xs is List of Counter()
   xs.push(Counter(value is 0))
   touch(xs)
   yell(xs.get(0).value)

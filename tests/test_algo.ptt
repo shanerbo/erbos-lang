@@ -2,7 +2,7 @@ use std/list
 use std/algo
 
 test "sort_ints handles empty and single-element lists" {
-  xs is List of int
+  xs is List of int()
   algo.sort_ints(ref xs)
   assert(xs.len() eq 0)
   xs.push(7)
@@ -11,7 +11,7 @@ test "sort_ints handles empty and single-element lists" {
 }
 
 test "sort_ints orders duplicates and reverse-sorted data" {
-  xs is List of int
+  xs is List of int()
   xs.push(5)
   xs.push(1)
   xs.push(4)
@@ -26,7 +26,7 @@ test "sort_ints orders duplicates and reverse-sorted data" {
 }
 
 test "binary search and bounds over sorted ints" {
-  xs is List of int
+  xs is List of int()
   xs.push(1)
   xs.push(2)
   xs.push(2)

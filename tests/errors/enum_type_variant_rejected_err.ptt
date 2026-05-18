@@ -1,0 +1,10 @@
+// Language-law cleanup: `Result of int, String .Err("bad")` is
+// rejected; users write `err of int, String ("bad")`.
+
+use std/string
+use std/result
+
+spark {
+  r is Result of int, String .Err("bad")
+  yell(r.is_err())
+}

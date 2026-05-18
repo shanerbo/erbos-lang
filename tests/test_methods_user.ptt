@@ -10,6 +10,7 @@
 //   - methods called inside loops
 
 use std/string
+use std/result
 
 Counter is {
   value int
@@ -47,11 +48,16 @@ Point.translated(self Point, dx int, dy int) Point {
   give p
 }
 
-Result is
-  Ok(value int)
-  | Err(message String)
+// Method dispatch on enum receivers — exercised via the
+// stdlib `Result of T, E` enum. User-defined enums have no
+// value-formation syntax under the new language law (only the
+// stdlib factories `none`, `some`, `ok`, `err` form values),
+// so methods on user enums can't be tested without first
+// adding a factory function for them. The point of this case
+// is method-symbol resolution on an enum-typed receiver, which
+// `Result` covers fine.
 
-Result.tag(self Result) int {
+Result.tag(self Result of int, String) int {
   give 99
 }
 
@@ -104,6 +110,6 @@ test "user methods: returning the owning struct type" {
 }
 
 test "user methods: methods on enum receivers" {
-  r is Result.Ok(42)
+  r is ok of int, String (42)
   assert(r.tag() eq 99)
 }

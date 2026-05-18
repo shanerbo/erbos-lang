@@ -6,7 +6,7 @@ use std/string
 use std/list
 
 test "iterate List of String literals" {
-  names is List of String
+  names is List of String()
   names.push("alpha")
   names.push("beta")
   names.push("gamma")

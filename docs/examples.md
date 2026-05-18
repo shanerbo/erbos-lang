@@ -60,8 +60,8 @@ spark {
 use std/basics
 
 spark {
-  // Typed list
-  nums is List of int
+  // Typed list — zero-value formation requires `()`.
+  nums is List of int()
   nums.push(10)
   nums.push(20)
   yell(nums[0])
@@ -72,7 +72,7 @@ spark {
   yell(scores.get("alice"))
 
   // Int-keyed map
-  memo is Map of int, int
+  memo is Map of int, int()
   memo.set(1, 100)
   yell(memo.get(1))
 }
@@ -81,14 +81,11 @@ spark {
 ## Enums + Error Handling
 ```
 use std/string
+use std/result
 
-Result is
-  Ok(value int)
-  | Err(message String)
-
-divide(a int, b int) Result {
-  b eq 0 ?{ give Result.Err("division by zero") }
-  give Result.Ok(a / b)
+divide(a int, b int) Result of int, String {
+  b eq 0 ?{ give err of int, String ("division by zero") }
+  give ok of int, String (a / b)
 }
 
 spark {
@@ -159,15 +156,15 @@ spark {
   //   Box of int            -> _Box__int
   //   Box of String         -> _Box__String
   //   Pair of String, int -> _Pair__String__int
-  bi is Box of int
+  bi is Box of int()
   bi.set(42)
   yell(bi.get())   // 42
 
-  bs is Box of String
+  bs is Box of String()
   bs.set("hello")
   yell(bs.get())   // hello
 
-  p is Pair of String, int
+  p is Pair of String, int()
   p.set_key("alice")
   p.set_value(95)
 }

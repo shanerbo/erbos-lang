@@ -8,6 +8,6 @@ bad(s Stack of int) {
 }
 
 spark {
-  s is Stack of int
+  s is Stack of int()
   bad(s)
 }

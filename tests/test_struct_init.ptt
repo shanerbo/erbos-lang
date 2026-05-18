@@ -80,7 +80,7 @@ test "nomut + named-arg construction works" {
 
 test "nomut on stdlib container is allowed" {
   // nomut binds the variable; ref-self methods (.push) still mutate.
-  nomut xs is List of int
+  nomut xs is List of int()
   xs.push(10)
   xs.push(20)
   assert(xs.len() eq 2)

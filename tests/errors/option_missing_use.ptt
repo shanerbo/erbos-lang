@@ -3,6 +3,6 @@
 // auto-import for the Option type.
 
 spark {
-  o is Option of int
+  o is Option of int()
   yell(o.is_none())
 }

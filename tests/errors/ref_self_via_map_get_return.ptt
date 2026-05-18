@@ -22,7 +22,7 @@ touch(m Map of String, Counter) {
 }
 
 spark {
-  m is Map of String, Counter
+  m is Map of String, Counter()
   m.set("main", Counter(value is 0))
   touch(m)
   yell(m.get("main").value)

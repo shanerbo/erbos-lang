@@ -14,7 +14,7 @@ use std/map
 
 test "List of int goes out of scope cleanly" {
   through (i from 0 to 100 by 1) {
-    xs is List of int
+    xs is List of int()
     xs.push(i)
     xs.push(i + 1)
     xs.push(i + 2)
@@ -31,7 +31,7 @@ test "List of int goes out of scope cleanly" {
 
 test "Map of String, int goes out of scope cleanly" {
   through (i from 0 to 50 by 1) {
-    m is Map of String, int
+    m is Map of String, int()
     m.set("alpha", i)
     m.set("beta", i + 1)
     assert(m.get("alpha") eq i)

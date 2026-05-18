@@ -1,14 +1,13 @@
-// Regression test: enum constructors + match dispatch through the
-// IR backend. Verifies the NODE_MATCH handler in irgen.c.
+// Regression test: enum factory formation + match dispatch
+// through the IR backend. Verifies the NODE_MATCH handler in
+// irgen.c against values formed by the stdlib `ok`/`err`
+// factories.
 
 use std/string
-
-Result is
-  Ok(value int)
-  | Err(message String)
+use std/result
 
 test "match Ok arm with value" {
-  r is Result.Ok(42)
+  r is ok of int, String (42)
   ok_v is 0
   err_seen is 0
   match r {
@@ -20,7 +19,7 @@ test "match Ok arm with value" {
 }
 
 test "match Err arm with message" {
-  r is Result.Err("oops")
+  r is err of int, String ("oops")
   ok_seen is 0
   err_msg is ""
   match r {
@@ -32,7 +31,7 @@ test "match Err arm with message" {
 }
 
 test "match second Ok still routes correctly" {
-  r is Result.Ok(100)
+  r is ok of int, String (100)
   ok_v is 0
   match r {
     Ok(v) => ok_v be v
@@ -42,7 +41,7 @@ test "match second Ok still routes correctly" {
 }
 
 test "match second Err still routes correctly" {
-  r is Result.Err("missing")
+  r is err of int, String ("missing")
   err_msg is ""
   match r {
     Ok(v) => assert(false)

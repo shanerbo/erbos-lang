@@ -1,0 +1,9 @@
+// Language-law cleanup: `Option of int .None()` is rejected;
+// users write `none of int ()`.
+
+use std/option
+
+spark {
+  n is Option of int .None()
+  yell(n.is_none())
+}

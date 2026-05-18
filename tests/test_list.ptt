@@ -2,7 +2,7 @@ use std/string
 use std/list
 
 test "list push and index" {
-  nums is List of int
+  nums is List of int()
   nums.push(10)
   nums.push(20)
   nums.push(30)
@@ -13,7 +13,7 @@ test "list push and index" {
 }
 
 test "list pop" {
-  nums is List of int
+  nums is List of int()
   nums.push(1)
   nums.push(2)
   nums.push(3)
@@ -32,7 +32,7 @@ test "list literal" {
 }
 
 test "list growable" {
-  big is List of int
+  big is List of int()
   through (i from 0 to 50 by 1) {
     big.push(i)
   }
@@ -41,7 +41,7 @@ test "list growable" {
 }
 
 test "list index assign" {
-  nums is List of int
+  nums is List of int()
   nums.push(1)
   nums.push(2)
   nums.push(3)

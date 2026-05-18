@@ -19,13 +19,13 @@ Box.get(self Box of T) T {
 }
 
 test "Box of int round-trip" {
-  bi is Box of int
+  bi is Box of int()
   bi.set(42)
   assert(bi.get() eq 42)
 }
 
 test "Box of String round-trip" {
-  bs is Box of String
+  bs is Box of String()
   bs.set("hello")
   assert(bs.get() eq "hello")
 }

@@ -1,4 +1,4 @@
 spark {
-  d is Deque of int
+  d is Deque of int()
   yell(d.len())
 }

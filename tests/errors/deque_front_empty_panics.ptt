@@ -1,6 +1,6 @@
 use std/deque
 
 spark {
-  d is Deque of int
+  d is Deque of int()
   d.front()
 }

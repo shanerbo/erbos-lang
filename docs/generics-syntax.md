@@ -32,16 +32,22 @@ Map.set(self ref Map of K, V, k K, v V) {
   // ...
 }
 
-// Use sites — auto-construct (no parens)
-xs is List of int
-m is Map of String, int
-b is Box of int
-b.value be 42
+// Type expressions name a type only — never a value.
+xs_type is List of int           // INVALID: bare type expression
+                                 // is not a value (compile error)
 
-// Nested — no parens needed; right-associative
-ll is List of List of int
-mml is Map of String, List of int
-deep is Map of String, Map of int, String
+// Value formation is always explicit:
+xs is List of int()              // zero-value formation
+m  is Map of String, int()       // zero-value formation
+b  is Box of int(value is 42)    // named-field formation
+b2 is Box of int()               // zero-value formation
+
+// Nested type expressions are right-associative; value
+// formation still needs the trailing `()` or
+// `(field is value, ...)`.
+ll   is List of List of int()
+mml  is Map of String, List of int()
+deep is Map of String, Map of int, String()
 ```
 
 ## Rules
@@ -56,8 +62,11 @@ deep is Map of String, Map of int, String
 4. **No parens around type arguments.** Nested generic arguments are
    parsed through the `of` chains, so `List of List of int` parses
    exactly one way.
-5. **Auto-construct on typed declaration.** `x is List of int` with
-   no initializer auto-emits the constructor call.
+5. **Type expressions name types, not values.** `x is List of int`
+   (no parens) is rejected — that's a *type expression*, and a
+   value is formed only by `TypeExpr()` or
+   `TypeExpr(field is value, ...)`. Write
+   `x is List of int()` for the zero-value formation.
 6. **Method head infers parameters from the receiver.** Write
    `Box.set(self ref Box of T, v T)` — not `Box of T.set(...)`.
    The compiler reads the receiver's `of T` clause and binds `T`
@@ -97,9 +106,9 @@ Same reasoning: zero parens in type position means zero precedence
 rules to memorise. The right-associative `of` chaining reads naturally:
 
 ```
-List of Map of int, List of str
+List of Map of int, List of String
 //   parses as:
-List of (Map of int, (List of str))
+List of (Map of int, (List of String))
 ```
 
 The parser consumes comma-separated type arguments after `of` while the

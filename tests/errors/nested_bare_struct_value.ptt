@@ -1,0 +1,17 @@
+// Language-law cleanup: a bare type expression is rejected
+// even when it appears as a nested named-field initializer.
+// `Wrap(item is Foo)` must be rejected because `Foo` there is
+// a type, not a value.
+
+Foo is {
+  x int
+}
+
+Wrap is {
+  item Foo
+}
+
+spark {
+  w is Wrap(item is Foo)
+  yell(w.item.x)
+}

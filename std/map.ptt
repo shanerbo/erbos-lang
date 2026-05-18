@@ -69,7 +69,7 @@ Map.get(self Map of K, V, k K) V {
 // insertion order. Allocates; iteration order is stable for
 // repeated calls on the same map.
 Map.keys(self Map of K, V) List of K {
-  out is List of K
+  out is List of K()
   through (i from 0 to self.count by 1) {
     out.push(self.keys[i])
   }

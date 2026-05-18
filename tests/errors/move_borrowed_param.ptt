@@ -12,7 +12,7 @@ bad(xs List of int) {
 }
 
 spark {
-  fresh is List of int
+  fresh is List of int()
   fresh.push(1)
   bad(fresh)
 }

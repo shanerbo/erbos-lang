@@ -19,7 +19,7 @@ use std/list
 use std/map
 
 spark {
-  m is Map of String, int
+  m is Map of String, int()
 
   // Phase 1: set 512 distinct keys.
   through (i from 0 to 512 by 1) {

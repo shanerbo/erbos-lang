@@ -27,11 +27,11 @@ Counter.value(self Counter) int {
 }
 
 test "inline Box.get" {
-  bi is Box of int
+  bi is Box of int()
   bi.set(42)
   assert(bi.get() eq 42)
 
-  bs is Box of int
+  bs is Box of int()
   bs.set(100)
   assert(bs.get() eq 100)
 }

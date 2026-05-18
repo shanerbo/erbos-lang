@@ -42,7 +42,7 @@ test "is rep produces independent copy for struct" {
 }
 
 test "is now transfers a List" {
-  a is List of int
+  a is List of int()
   a.push(1)
   a.push(2)
   b is now a
@@ -50,7 +50,7 @@ test "is now transfers a List" {
 }
 
 test "is rep deep-clones a List" {
-  a is List of int
+  a is List of int()
   a.push(1)
   a.push(2)
   b is rep a

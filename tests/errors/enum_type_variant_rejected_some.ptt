@@ -1,0 +1,10 @@
+// Language-law cleanup: enum values are formed only by
+// factories. `Option of int .Some(7)` must be rejected; users
+// write `some of int (7)`.
+
+use std/option
+
+spark {
+  o is Option of int .Some(7)
+  yell(o.unwrap())
+}
