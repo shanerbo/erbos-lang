@@ -1,6 +1,6 @@
 // Framework tests for the std/list API additions:
 //   reserve, cap, empty, try_pop, try_get, insert, remove,
-//   clear, contains, index_of, reverse, with_cap, new, clone.
+//   clear, contains, index_of, reverse, clone.
 
 use std/string
 use std/list
@@ -270,15 +270,17 @@ test "List of String — push of an owned String survives a regrow" {
   assert(xs[11].equals("item_11"))
 }
 
-test "with_cap factory returns an empty list with the requested cap" {
-  xs is with_cap of int (64)
+test "reserve can pre-allocate an empty list to the requested cap" {
+  xs is List of int
+  xs.reserve(64)
   assert(xs.empty())
   assert(xs.len() eq 0)
   assert(xs.cap() eq 64)
 }
 
-test "with_cap on heap-shaped T allocates the right-sized backing array" {
-  ys is with_cap of String (16)
+test "reserve on heap-shaped T allocates the right-sized backing array" {
+  ys is List of String
+  ys.reserve(16)
   assert(ys.empty())
   assert(ys.cap() eq 16)
   // Use the pre-allocated capacity without growth.

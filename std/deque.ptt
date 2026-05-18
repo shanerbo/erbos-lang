@@ -16,18 +16,6 @@ Deque of T is {
   data  array of T
 }
 
-new_deque of T () Deque of T {
-  out is Deque of T
-  give out
-}
-
-deque_with_cap of T (cap int) Deque of T {
-  out is Deque of T
-  cap le 0 ?{ give out }
-  out.data be array of T with cap cap
-  give out
-}
-
 Deque.reserve(self ref Deque of T, cap int) {
   cap le 0 ?{ give }
   self.data eq 0 ?{

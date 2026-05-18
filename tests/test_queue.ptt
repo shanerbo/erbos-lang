@@ -165,36 +165,6 @@ test "reserve pre-allocates without changing length" {
   }
 }
 
-test "new_queue factory returns a fresh empty Queue of T" {
-  q is new_queue of int ()
-  assert(q.empty())
-  assert(q.len() eq 0)
-  q.push(7)
-  assert(q.front() eq 7)
-}
-
-test "queue_with_cap pre-allocates capacity without changing length" {
-  q is queue_with_cap of int (100)
-  assert(q.empty())
-  // Confirm pre-allocation by pushing 50 elements without
-  // triggering a regrow.
-  through (i from 0 to 50 by 1) { q.push(i) }
-  assert(q.len() eq 50)
-  through (j from 0 to 50 by 1) {
-    assert(q.pop() eq j)
-  }
-}
-
-test "new_queue of String works for heap-shaped T" {
-  q is new_queue of String ()
-  q.push("first")
-  q.push("second")
-  assert(q.front().equals("first"))
-  popped is q.pop()
-  assert(popped.equals("first"))
-  assert(q.front().equals("second"))
-}
-
 test "interleaved push/pop maintains FIFO without leaks" {
   // Producer/consumer pattern: 5000 push/pop pairs with the
   // queue staying small. Exercises wraparound many times.

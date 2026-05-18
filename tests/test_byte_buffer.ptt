@@ -71,8 +71,9 @@ test "clear empties buffer and keeps capacity" {
   assert(b.get(0) eq 3)
 }
 
-test "with-cap factory preallocates and growth still works" {
-  b is byte_buffer.with_cap(32)
+test "reserve preallocates and growth still works" {
+  b is ByteBuffer()
+  b.reserve(32)
   assert(b.cap() eq 32)
   through (i from 0 to 20 by 1) {
     b.push(65 + i)

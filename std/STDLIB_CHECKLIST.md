@@ -25,27 +25,66 @@ Every completed item needs:
 
 ## Current Baseline
 
-Current files:
+Verified current files:
 
 - `std/string.ptt`
 - `std/list.ptt`
 - `std/map.ptt`
+- `std/option.ptt`
+- `std/result.ptt`
 - `std/stack.ptt`
 - `std/queue.ptt`
+- `std/deque.ptt`
+- `std/arena.ptt`
+- `std/byte_buffer.ptt`
+- `std/string_builder.ptt`
+- `std/ring_buffer.ptt`
 - `std/math.ptt`
+- `std/algo.ptt`
 - `std/basics.ptt`
 
-Known weaknesses:
+Verified current state:
 
-- `std/stack.ptt` and `std/queue.ptt` are int-only helper modules, not
-  serious generic data structures.
+- `Option` and `Result` exist and have framework / panic coverage.
+- `List`, `Stack`, `Queue`, `Deque`, `String`, `StringBuilder`,
+  `ByteBuffer`, `Arena`, `RingBuffer`, `std/math`, and `std/algo` exist.
 - `Map` is a linear-scan parallel-array map.
-- `List` is usable but still needs a complete API and ownership/growth
-  review.
-- Fallible operations need `Option` / `Result` before the stdlib can avoid
-  panic-heavy APIs.
-- `Arena of T` plus integer handles should become the blessed shared-data
-  pattern.
+- `Set`, `Pool`, `Path`, `File`, `Reader`, `Writer`, and `Graph` do not
+  exist yet.
+- `Arena of T` plus integer handles is now the blessed shared-data pattern
+  in both docs and tests.
+- Growable containers now normalize around zero-default construction plus
+  `reserve`; only fixed-cap or semantic-value factories should remain.
+
+## Construction and Naming Rules
+
+Verified current behavior:
+
+- Zero-default construction is the primary empty-value path:
+  - non-generic structs: `StringBuilder()`, `ByteBuffer()`
+  - generic structs: `List of int`, `Stack of int`, `Queue of String`,
+    `Arena of User`
+- Growable containers preallocate through `reserve`, not through
+  alternate constructor spellings.
+- Generic free-function templates stay bare after import by compiler
+  design. See `compiler/main.c` around the import merge rewrite:
+  `some of int (7)`, `none of int ()`, `ok of int, String ("x")`,
+  `err of int, String ("x")`, `ring_with_cap of int (64)`.
+
+Normalization target:
+
+- Keep the language-level two-form construction model for structs:
+  zero-default and named-arg.
+- Prefer zero-default construction for fresh empty values.
+- Use `reserve` on growable containers when preallocation matters.
+- Keep enum/fallible-value factories bare:
+  `some`, `none`, `ok`, `err`.
+- Keep dedicated construction helpers only when the capacity or shape is a
+  real invariant, such as `RingBuffer`'s fixed capacity.
+- Do not add `Type.new(...)` as an additional public convention while
+  the language already has struct construction and free factories.
+- Do not normalize toward type-receiver calls like
+  `List of int .with_cap(64)`.
 
 ## Phase 0: Foundation Types
 
@@ -112,8 +151,8 @@ Purpose: growable contiguous array.
 
 Required API:
 
-- `List.new() List of T`
-- `List.with_cap(cap int) List of T`
+- zero-default construction: `xs is List of T`
+- `List.reserve(self ref List of T, cap int)`
 - `List.len(self List of T) int`
 - `List.cap(self List of T) int`
 - `List.empty(self List of T) bool`
@@ -162,8 +201,8 @@ Purpose: double-ended queue with O(1) amortized pushes/pops at both ends.
 
 Required API:
 
-- `Deque.new() Deque of T`
-- `Deque.with_cap(cap int) Deque of T`
+- zero-default construction: `d is Deque of T`
+- `Deque.reserve(self ref Deque of T, cap int)`
 - `Deque.len(self Deque of T) int`
 - `Deque.cap(self Deque of T) int`
 - `Deque.empty(self Deque of T) bool`
@@ -199,7 +238,8 @@ Purpose: LIFO container. Replace current int-only helper module.
 
 Required API:
 
-- `Stack.new() Stack of T`
+- zero-default construction: `s is Stack of T`
+- `Stack.reserve(self ref Stack of T, cap int)`
 - `Stack.len(self Stack of T) int`
 - `Stack.empty(self Stack of T) bool`
 - `Stack.push(self ref Stack of T, v T)`
@@ -229,8 +269,8 @@ helper module.
 
 Required API:
 
-- `Queue.new() Queue of T`
-- `Queue.with_cap(cap int) Queue of T`
+- zero-default construction: `q is Queue of T`
+- `Queue.reserve(self ref Queue of T, cap int)`
 - `Queue.len(self Queue of T) int`
 - `Queue.empty(self Queue of T) bool`
 - `Queue.push(self ref Queue of T, v T)`
@@ -262,8 +302,8 @@ scan and should be replaced or renamed as a tiny map.
 
 Required API:
 
-- `Map.new() Map of K, V`
-- `Map.with_cap(cap int) Map of K, V`
+- zero-default construction: `m is Map of K, V`
+- `Map.reserve(self ref Map of K, V, cap int)`
 - `Map.len(self Map of K, V) int`
 - `Map.cap(self Map of K, V) int`
 - `Map.empty(self Map of K, V) bool`
@@ -305,8 +345,8 @@ Purpose: unique-value collection.
 
 Required API:
 
-- `Set.new() Set of T`
-- `Set.with_cap(cap int) Set of T`
+- zero-default construction: `s is Set of T`
+- `Set.reserve(self ref Set of T, cap int)`
 - `Set.len(self Set of T) int`
 - `Set.empty(self Set of T) bool`
 - `Set.add(self ref Set of T, v T) bool`
@@ -382,8 +422,8 @@ Purpose: efficient repeated string construction.
 
 Required API:
 
-- `StringBuilder.new() StringBuilder`
-- `StringBuilder.with_cap(cap int) StringBuilder`
+- zero-default construction: `b is StringBuilder()`
+- `StringBuilder.reserve(self ref StringBuilder, cap int)`
 - `StringBuilder.len(self StringBuilder) int`
 - `StringBuilder.empty(self StringBuilder) bool`
 - `StringBuilder.push_byte(self ref StringBuilder, b int)`
@@ -413,8 +453,8 @@ Purpose: raw byte storage for I/O, parsing, and binary protocols.
 
 Required API:
 
-- `ByteBuffer.new() ByteBuffer`
-- `ByteBuffer.with_cap(cap int) ByteBuffer`
+- zero-default construction: `b is ByteBuffer()`
+- `ByteBuffer.reserve(self ref ByteBuffer, cap int)`
 - `ByteBuffer.len(self ByteBuffer) int`
 - `ByteBuffer.cap(self ByteBuffer) int`
 - `ByteBuffer.empty(self ByteBuffer) bool`
@@ -449,7 +489,8 @@ refcounting, inheritance, or long-lived borrows.
 
 Required API:
 
-- `Arena.new() Arena of T`
+- zero-default construction: `a is Arena of T`
+- `Arena.reserve(self ref Arena of T, cap int)`
 - `Arena.len(self Arena of T) int`
 - `Arena.add(self ref Arena of T, value T) int`
 - `Arena.get(self Arena of T, id int) T`
@@ -478,7 +519,8 @@ Purpose: arena with deletion and slot reuse.
 
 Required API:
 
-- `Pool.new() Pool of T`
+- zero-default construction: `p is Pool of T`
+- `Pool.reserve(self ref Pool of T, cap int)`
 - `Pool.insert(self ref Pool of T, value T) int`
 - `Pool.remove(self ref Pool of T, id int) bool`
 - `Pool.has(self Pool of T, id int) bool`
@@ -490,10 +532,12 @@ Required API:
 Algorithm / representation:
 
 - `items List of T`
-- `alive BitSet`
+- `alive List of bool`
 - `free List of int`
 - reuse slots from `free`
 - future upgrade: generational handles to reject stale ids
+- `BitSet` is optional here, not a prerequisite for the first serious
+  version
 
 Tests:
 
@@ -505,11 +549,15 @@ Tests:
 
 ### `PriorityQueue of T`
 
-Purpose: heap-backed priority queue.
+Status: optional later. Do not block stdlib consolidation on this.
+
+Purpose: heap-backed priority queue, only once a concrete workload needs
+it.
 
 Required API:
 
-- `PriorityQueue.new() PriorityQueue of T`
+- zero-default construction: `pq is PriorityQueue of T`
+- `PriorityQueue.reserve(self ref PriorityQueue of T, cap int)`
 - `PriorityQueue.len(self PriorityQueue of T) int`
 - `PriorityQueue.empty(self PriorityQueue of T) bool`
 - `PriorityQueue.push(self ref PriorityQueue of T, v T)`
@@ -566,7 +614,10 @@ Tests:
 
 ### `BitSet`
 
-Purpose: compact boolean set for visited flags, pools, graph algorithms.
+Status: optional later. Do not block stdlib consolidation on this.
+
+Purpose: compact boolean flags for high-density visited sets or pool slot
+tracking once the language has a clear user-facing bitwise story.
 
 Required API:
 
@@ -687,7 +738,7 @@ Purpose: common algorithm/data modeling support using arena + indexes.
 
 Required API:
 
-- `Graph.new() Graph of T`
+- zero-default construction: `g is Graph of T`
 - `Graph.add_node(self ref Graph of T, value T) int`
 - `Graph.add_edge(self ref Graph of T, from int, to int)`
 - `Graph.node(self Graph of T, id int) T`
@@ -700,8 +751,8 @@ Algorithm / representation:
 
 - `nodes Arena of T`
 - adjacency list: `List of List of int`
-- BFS: `Queue of int` plus `BitSet`
-- DFS: `Stack of int` plus `BitSet`
+- BFS: `Queue of int` plus `List of bool`
+- DFS: `Stack of int` plus `List of bool`
 
 Tests:
 
@@ -776,23 +827,37 @@ until the compiler can enforce that views do not outlive their owners.
 
 ## Acceptance Order
 
+Completed:
+
 1. `Option` and `Result`
 2. complete `List`
 3. generic `Stack`, `Queue`, `Deque`
 4. `String` API and `StringBuilder`
-5. hash `Map` and `Set`
-6. `Arena`
-7. `ByteBuffer`
-8. `Pool`, `BitSet`, `RingBuffer`
-9. `File`, `Path`, `Reader`, `Writer`
-10. `PriorityQueue`, graph helpers, sorting/search helpers
+5. `Arena`
+6. `ByteBuffer`
+7. `RingBuffer`
+8. int-first sorting/search helpers and current `std/math`
+
+Remaining before calling the stdlib consolidated:
+
+1. hash `Map`
+2. `Set`
+3. `Path`
+4. `Pool`
+5. `File`, `Reader`, `Writer`
+
+Optional later, only if a concrete workload justifies them:
+
+1. `BitSet`
+2. `PriorityQueue`
+3. `Graph`
 
 Do not claim stdlib completion while:
 
-- int-only `stack` / `queue` remain the main APIs
 - `Map.get` uses `0` as the only missing-key signal
-- fallible operations lack `Result`
-- checked lookup APIs lack `Option`
-- `List` growth/replacement leaks owned storage
-- shared-data examples lack `Arena` plus integer handles
+- `Map` remains the only serious associative container
+- `Set` is missing
+- `Path` is missing
+- `Pool` is missing if deletion/reuse is part of the target story
+- user-facing file I/O is missing
 - `make test` fails

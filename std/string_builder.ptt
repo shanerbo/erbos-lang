@@ -5,18 +5,6 @@ StringBuilder is {
   data  array of byte
 }
 
-new() StringBuilder {
-  out is StringBuilder()
-  give out
-}
-
-with_cap(cap int) StringBuilder {
-  out is StringBuilder()
-  cap le 0 ?{ give out }
-  out.data be array of byte with cap cap
-  give out
-}
-
 StringBuilder.reserve(self ref StringBuilder, cap int) {
   cap le 0 ?{ give }
   self.data eq 0 ?{

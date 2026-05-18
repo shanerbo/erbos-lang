@@ -5,18 +5,6 @@ ByteBuffer is {
   data  array of byte
 }
 
-new() ByteBuffer {
-  out is ByteBuffer()
-  give out
-}
-
-with_cap(cap int) ByteBuffer {
-  out is ByteBuffer()
-  cap le 0 ?{ give out }
-  out.data be array of byte with cap cap
-  give out
-}
-
 ByteBuffer.reserve(self ref ByteBuffer, cap int) {
   cap le 0 ?{ give }
   self.data eq 0 ?{

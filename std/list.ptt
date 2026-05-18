@@ -44,19 +44,6 @@ List.reserve(self ref List of T, cap int) {
   self.data be now fresh
 }
 
-// Factory: returns a fresh empty `List of T` with capacity
-// pre-allocated to `cap`. Per STDLIB_CHECKLIST.md:
-//   with_cap(cap int) List of T
-// Idiomatic use:
-//
-//   xs is with_cap of int (64)
-with_cap of T (cap int) List of T {
-  out is List of T
-  cap le 0 ?{ give out }
-  out.data be array of T with cap cap
-  give out
-}
-
 // -----------------------------------------------------------------
 // Inspection
 // -----------------------------------------------------------------

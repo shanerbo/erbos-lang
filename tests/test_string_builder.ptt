@@ -44,8 +44,9 @@ test "clear resets length and builder is reusable" {
   assert(b.to_string().equals("world"))
 }
 
-test "with-cap factory preallocates" {
-  b is string_builder.with_cap(64)
+test "reserve preallocates builder storage" {
+  b is StringBuilder()
+  b.reserve(64)
   assert(b.cap() eq 64)
   b.push_string("potato")
   assert(b.to_string().equals("potato"))

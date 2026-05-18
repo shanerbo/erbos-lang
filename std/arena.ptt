@@ -5,13 +5,12 @@ Arena of T is {
   items List of T
 }
 
-new_arena of T () Arena of T {
-  out is Arena of T
-  give out
-}
-
 Arena.len(self Arena of T) int {
   give self.items.len()
+}
+
+Arena.reserve(self ref Arena of T, cap int) {
+  self.items.reserve(cap)
 }
 
 Arena.add(self ref Arena of T, value T) int {

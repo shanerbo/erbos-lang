@@ -27,31 +27,15 @@ Queue of T is {
   data  array of T
 }
 
-// Factory: returns a fresh empty Queue of T. Per the checklist:
-//   Queue.new() Queue of T
-new_queue of T () Queue of T {
-  out is Queue of T
-  give out
-}
-
-// Factory with pre-allocated capacity. Per the checklist:
-//   Queue.with_cap(cap int) Queue of T
-queue_with_cap of T (cap int) Queue of T {
-  out is Queue of T
-  cap le 0 ?{ give out }
-  out.data be array of T with cap cap
-  give out
-}
-
 // -----------------------------------------------------------------
 // Construction helpers
 // -----------------------------------------------------------------
 
 // Reserve capacity for `cap` elements without changing length.
-// Replaces the canonical `with_cap(cap int) Queue of T` factory
-// from the checklist; same compiler-shape rationale as
-// `List.reserve`. If the new cap is smaller than the current
-// one or non-positive, this is a no-op.
+// Zero-default construction (`q is Queue of T`) is the normal
+// empty-value path; `reserve` is the explicit preallocation hook.
+// If the new cap is smaller than the current one or non-positive,
+// this is a no-op.
 Queue.reserve(self ref Queue of T, cap int) {
   cap le 0 ?{ give }
   self.data eq 0 ?{

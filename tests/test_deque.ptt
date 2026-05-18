@@ -106,7 +106,8 @@ test "wraparound at the back preserves logical order" {
 }
 
 test "wraparound at the front preserves logical order" {
-  d is deque_with_cap of int (8)
+  d is Deque of int
+  d.reserve(8)
   through (i from 0 to 4 by 1) { d.push_back(i) }
   assert(d.pop_back() eq 3)
   assert(d.pop_back() eq 2)
@@ -161,15 +162,9 @@ test "clear empties deque and preserves usability" {
   assert(d.front() eq 9)
 }
 
-test "new_deque factory returns a fresh empty deque" {
-  d is new_deque of int ()
-  assert(d.empty())
-  d.push_back(7)
-  assert(d.front() eq 7)
-}
-
-test "deque_with_cap pre-allocates requested capacity" {
-  d is deque_with_cap of int (32)
+test "reserve pre-allocates requested capacity for a fresh deque" {
+  d is Deque of int
+  d.reserve(32)
   assert(d.cap() eq 32)
   through (i from 0 to 16 by 1) { d.push_back(i) }
   assert(d.len() eq 16)

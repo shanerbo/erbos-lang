@@ -101,20 +101,14 @@ test "Stack of String — try_pop drains correctly" {
   assert(o3.is_none())
 }
 
-test "new_stack factory returns a fresh empty Stack of T" {
-  s is new_stack of int ()
-  assert(s.empty())
-  assert(s.len() eq 0)
-  s.push(7)
-  assert(s.peek() eq 7)
-}
-
-test "new_stack of String returns a usable heap-shaped stack" {
-  s is new_stack of String ()
-  assert(s.empty())
-  s.push("first")
-  s.push("second")
-  assert(s.peek().equals("second"))
+test "reserve pre-allocates stack backing storage" {
+  s is Stack of int
+  s.reserve(64)
+  through (i from 0 to 32 by 1) {
+    s.push(i)
+  }
+  assert(s.len() eq 32)
+  assert(s.peek() eq 31)
 }
 
 test "growth past initial capacity" {

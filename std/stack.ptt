@@ -26,19 +26,16 @@ Stack of T is {
   items List of T
 }
 
-// Factory: returns a fresh empty Stack of T. Per the checklist:
-//   Stack.new() Stack of T
-new_stack of T () Stack of T {
-  out is Stack of T
-  give out
-}
-
 Stack.len(self Stack of T) int {
   give self.items.len()
 }
 
 Stack.empty(self Stack of T) bool {
   give self.items.empty()
+}
+
+Stack.reserve(self ref Stack of T, cap int) {
+  self.items.reserve(cap)
 }
 
 Stack.push(self ref Stack of T, v T) {

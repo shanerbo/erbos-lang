@@ -83,11 +83,14 @@ test "ref arena param may mutate heap-shaped item through get" {
   assert(a.get(id).value eq 1)
 }
 
-test "new_arena factory returns usable generic arena" {
-  a is new_arena of int ()
-  assert(a.len() eq 0)
-  id is a.add(5)
-  assert(id eq 0)
+test "reserve pre-allocates arena backing storage" {
+  a is Arena of int
+  a.reserve(32)
+  through (i from 0 to 16 by 1) {
+    id is a.add(i)
+    assert(id eq i)
+  }
+  assert(a.len() eq 16)
 }
 
 test "App with multiple arenas models long-lived shared state" {
