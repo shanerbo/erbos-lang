@@ -6,7 +6,7 @@
 // (`use std/list`); std/basics is for the quick-script /
 // kitchen-sink case.
 //
-// `Map of String to V` covers the string-keyed map use case
+// `Map of String, V` covers the string-keyed map use case
 // — binary `eq` on String operands routes through `_str_eq`
 // (byte-equality) inside generic code, so two `"foo"` literals
 // from different rodata addresses still match.

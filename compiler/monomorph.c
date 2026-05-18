@@ -29,7 +29,7 @@
 //
 //      The `<>` bracketed form is the *internal* representation used
 //      between parser and monomorphizer. User-facing source syntax is
-//      word-style (`Map of String to int`, `List of Pair of String to
+//      word-style (`Map of String, int`, `List of Pair of String to
 //      int`); parse_type_name in compiler/parser.c emits the bracketed
 //      form for the monomorphizer's benefit.
 //
@@ -215,7 +215,7 @@ static char *mangle_type(const char *s) {
 //
 // The `<>` notation here is the *internal* mangled form used by
 // monomorphization, NOT user-facing syntax. Source-level Potato
-// uses word-style generics: `Pair of K to V`, not `Pair<K, V>`.
+// uses word-style generics: `Pair of K, V`, not `Pair<K, V>`.
 static char *substitute_type(const char *s, char **params, char **concrete,
                              int count) {
     if (!s) return NULL;
@@ -455,6 +455,8 @@ static Node *clone_node(Node *n) {
             c->func_def.return_type = xstrdup(n->func_def.return_type);
             c->func_def.body = clone_node(n->func_def.body);
             c->func_def.receiver_type_args = clone_string_array(n->func_def.receiver_type_args, n->func_def.receiver_type_arg_count);
+            c->func_def.type_params = clone_string_array(n->func_def.type_params, n->func_def.type_param_count);
+            c->func_def.type_param_count = n->func_def.type_param_count;
             break;
         case NODE_STRUCT_DEF:
             c->struct_def.name = xstrdup(n->struct_def.name);
@@ -462,11 +464,36 @@ static Node *clone_node(Node *n) {
             c->struct_def.field_types = clone_string_array(n->struct_def.field_types, n->struct_def.field_count);
             c->struct_def.type_params = clone_string_array(n->struct_def.type_params, n->struct_def.type_param_count);
             break;
+        case NODE_ENUM_DEF: {
+            // Generic enum cloning. Each variant has its own
+            // field_names / field_types arrays; deep-clone all of
+            // them. Variant counts and arity carry over verbatim.
+            c->enum_def.name = xstrdup(n->enum_def.name);
+            c->enum_def.variant_count = n->enum_def.variant_count;
+            c->enum_def.type_params = clone_string_array(
+                n->enum_def.type_params, n->enum_def.type_param_count);
+            c->enum_def.type_param_count = n->enum_def.type_param_count;
+            c->enum_def.variant_names = clone_string_array(
+                n->enum_def.variant_names, n->enum_def.variant_count);
+            c->enum_def.variant_field_counts = malloc(
+                n->enum_def.variant_count * sizeof(int));
+            c->enum_def.variant_field_names = malloc(
+                n->enum_def.variant_count * sizeof(char **));
+            c->enum_def.variant_field_types = malloc(
+                n->enum_def.variant_count * sizeof(char **));
+            for (int vi = 0; vi < n->enum_def.variant_count; vi++) {
+                int fc = n->enum_def.variant_field_counts[vi];
+                c->enum_def.variant_field_counts[vi] = fc;
+                c->enum_def.variant_field_names[vi] = clone_string_array(
+                    n->enum_def.variant_field_names[vi], fc);
+                c->enum_def.variant_field_types[vi] = clone_string_array(
+                    n->enum_def.variant_field_types[vi], fc);
+            }
+            break;
+        }
         default:
-            // Other node kinds (program, enum_def, test_def) are not
-            // expected inside a generic template body. Clone them
-            // shallowly; if a future feature lands one in a template,
-            // this is the place to extend.
+            // Other node kinds (program, test_def) are not expected
+            // inside a generic template body. Clone them shallowly.
             break;
     }
     return c;
@@ -531,6 +558,17 @@ static void substitute_in_node(Node *n, char **params, char **concrete, int coun
             char *t = sub(n->call.name, params, concrete, count);
             if (t) { n->call.name = t; }
             substitute_in_array(n->call.args, n->call.arg_count, params, concrete, count);
+            break;
+        }
+        case NODE_IDENT: {
+            // The parser emits NODE_IDENT for parametric type
+            // receivers (`Option of int .Some(7)` lowers to a method
+            // call whose object is an IDENT named "Option<int>").
+            // Substitute type-params inside that name string so a
+            // method body that mentions `Option of T` is rewritten
+            // to the concrete instantiation when monomorphized.
+            char *t = sub(n->ident.name, params, concrete, count);
+            if (t) { n->ident.name = t; }
             break;
         }
         case NODE_METHOD_CALL:
@@ -649,6 +687,12 @@ static void mangle_in_node(Node *n) {
         case NODE_CALL:
             mangle_string_in_place(&n->call.name);
             mangle_in_array(n->call.args, n->call.arg_count);
+            break;
+        case NODE_IDENT:
+            // Parametric IDENT names (`"Option<int>"`) get mangled
+            // to `"Option__int"` so the checker's enum / struct
+            // lookup paths find the concrete monomorphized type.
+            mangle_string_in_place(&n->ident.name);
             break;
         case NODE_METHOD_CALL:
             mangle_in_node(n->method_call.object);
@@ -780,6 +824,13 @@ static void collect_in_node(Node *n, StrSet *seen) {
             collect_from_string(seen, n->call.name);
             collect_in_array(n->call.args, n->call.arg_count, seen);
             break;
+        case NODE_IDENT:
+            // IDENT names that contain `<` are parametric type
+            // references (parser emits these for `Option of int
+            // .Some(7)` etc.). Surface them so the worklist
+            // materializes the corresponding instantiation.
+            collect_from_string(seen, n->ident.name);
+            break;
         case NODE_METHOD_CALL:
             collect_in_node(n->method_call.object, seen);
             collect_in_array(n->method_call.args, n->method_call.arg_count, seen);
@@ -849,6 +900,20 @@ static void collect_in_struct(Node *s, StrSet *seen) {
         collect_from_string(seen, s->struct_def.field_types[i]);
 }
 
+// Mirrors collect_in_struct for enum_def: every variant's payload
+// type may itself reference a parametric form (e.g. an Option of T
+// instantiation could carry a `value List of T` field once T is
+// concrete). Surfacing those into the worklist keeps the fixpoint
+// loop honest.
+static void collect_in_enum(Node *e, StrSet *seen) {
+    for (int vi = 0; vi < e->enum_def.variant_count; vi++) {
+        int fc = e->enum_def.variant_field_counts[vi];
+        for (int fi = 0; fi < fc; fi++) {
+            collect_from_string(seen, e->enum_def.variant_field_types[vi][fi]);
+        }
+    }
+}
+
 // ---------- normalize: strip whitespace from every type-name string ----------
 
 static void normalize_in_node(Node *n);
@@ -901,6 +966,9 @@ static void normalize_in_node(Node *n) {
             normalize_string_in_place(&n->call.name);
             normalize_in_array(n->call.args, n->call.arg_count);
             break;
+        case NODE_IDENT:
+            normalize_string_in_place(&n->ident.name);
+            break;
         case NODE_METHOD_CALL:
             normalize_in_node(n->method_call.object);
             normalize_in_array(n->method_call.args, n->method_call.arg_count);
@@ -951,6 +1019,20 @@ static void normalize_program(Node *program) {
         Node *s = program->program.structs.items[i];
         for (int j = 0; j < s->struct_def.field_count; j++)
             normalize_string_in_place(&s->struct_def.field_types[j]);
+    }
+    // Enums: normalise every variant-field type string. Variant
+    // payload types may textually reference type parameters
+    // (Option of T -> Some(value T)); the discovery / substitution
+    // / mangling passes all rely on whitespace-canonical strings.
+    for (int i = 0; i < program->program.enums.count; i++) {
+        Node *e = program->program.enums.items[i];
+        for (int vi = 0; vi < e->enum_def.variant_count; vi++) {
+            int fc = e->enum_def.variant_field_counts[vi];
+            for (int fi = 0; fi < fc; fi++) {
+                normalize_string_in_place(
+                    &e->enum_def.variant_field_types[vi][fi]);
+            }
+        }
     }
     for (int i = 0; i < program->program.funcs.count; i++) {
         Node *f = program->program.funcs.items[i];
@@ -1153,10 +1235,13 @@ void monomorph_run(Node *program) {
     //    invalid input to the checker anyway).
     Node *struct_templates[64];
     int struct_template_count = 0;
+    Node *enum_templates[64];
+    int enum_template_count = 0;
     Node *func_templates[256];
     int func_template_count = 0;
 
     NodeList kept_structs = {0};
+    NodeList kept_enums = {0};
     NodeList kept_funcs = {0};
 
     for (int i = 0; i < program->program.structs.count; i++) {
@@ -1175,6 +1260,28 @@ void monomorph_run(Node *program) {
             kept_structs.items[kept_structs.count++] = s;
         }
     }
+    for (int i = 0; i < program->program.enums.count; i++) {
+        Node *e = program->program.enums.items[i];
+        if (e->enum_def.type_param_count > 0) {
+            if (enum_template_count >= 64) {
+                fprintf(stderr, "error: too many generic enum templates (max 64)\n");
+                exit(1);
+            }
+            enum_templates[enum_template_count++] = e;
+        } else {
+            if (kept_enums.count >= kept_enums.cap) {
+                kept_enums.cap = kept_enums.cap ? kept_enums.cap * 2 : 8;
+                kept_enums.items = realloc(kept_enums.items, kept_enums.cap * sizeof(Node *));
+            }
+            kept_enums.items[kept_enums.count++] = e;
+        }
+    }
+    // Free generic-function templates: declared as
+    //   `name of T (...) Ret { ... }` /
+    //   `name of K, V (...) Ret { ... }`
+    // Tracked separately so the call-site worklist can find them.
+    Node *free_func_templates[256];
+    int free_func_template_count = 0;
     for (int i = 0; i < program->program.funcs.count; i++) {
         Node *f = program->program.funcs.items[i];
         if (f->func_def.receiver_type_arg_count > 0) {
@@ -1183,6 +1290,13 @@ void monomorph_run(Node *program) {
                 exit(1);
             }
             func_templates[func_template_count++] = f;
+        } else if (f->func_def.type_param_count > 0 &&
+                   !f->func_def.receiver_type) {
+            if (free_func_template_count >= 256) {
+                fprintf(stderr, "error: too many generic free-function templates (max 256)\n");
+                exit(1);
+            }
+            free_func_templates[free_func_template_count++] = f;
         } else {
             if (kept_funcs.count >= kept_funcs.cap) {
                 kept_funcs.cap = kept_funcs.cap ? kept_funcs.cap * 2 : 8;
@@ -1192,6 +1306,7 @@ void monomorph_run(Node *program) {
         }
     }
     program->program.structs = kept_structs;
+    program->program.enums = kept_enums;
     program->program.funcs = kept_funcs;
 
     // 2. Worklist: every parametric form discovered anywhere in the
@@ -1207,6 +1322,8 @@ void monomorph_run(Node *program) {
 
     for (int i = 0; i < program->program.structs.count; i++)
         collect_in_struct(program->program.structs.items[i], &seen);
+    for (int i = 0; i < program->program.enums.count; i++)
+        collect_in_enum(program->program.enums.items[i], &seen);
     for (int i = 0; i < program->program.funcs.count; i++)
         collect_in_func(program->program.funcs.items[i], &seen);
     for (int i = 0; i < program->program.tests.count; i++)
@@ -1265,16 +1382,175 @@ void monomorph_run(Node *program) {
         for (int i = 0; i < struct_template_count; i++) {
             if (!strcmp(struct_templates[i]->struct_def.name, head)) { st = struct_templates[i]; break; }
         }
+        // If no struct template matches, try enum templates.
+        // Enums are a separate class of monomorphic targets; the
+        // emitted shape is also a heap-allocated value, but the
+        // body has variant arrays instead of struct field arrays.
+        Node *et = NULL;
         if (!st) {
+            for (int i = 0; i < enum_template_count; i++) {
+                if (!strcmp(enum_templates[i]->enum_def.name, head)) {
+                    et = enum_templates[i];
+                    break;
+                }
+            }
+        }
+        // No struct or enum template matched; try free-function
+        // templates next.
+        Node *ft = NULL;
+        if (!st && !et) {
+            for (int i = 0; i < free_func_template_count; i++) {
+                if (!strcmp(free_func_templates[i]->func_def.name, head)) {
+                    ft = free_func_templates[i];
+                    break;
+                }
+            }
+        }
+        if (!st && !et && !ft) {
             // `array<T>` is a built-in type form (Phase α). The
             // checker handles it as TYPE_ARRAY; the monomorphizer
             // shouldn't try to find a user template for it.
             if (!strcmp(head, "array")) {
                 continue;
             }
-            fprintf(stderr, "error: cannot instantiate '%s' — no generic type named '%s' is in scope\n",
+            fprintf(stderr, "error: cannot instantiate '%s' — no generic type or function named '%s' is in scope\n",
                 form, head);
             exit(1);
+        }
+        if (ft) {
+            if (ft->func_def.type_param_count != arg_count) {
+                fprintf(stderr, "error: '%s' provides %d type argument(s), but free-function template '%s' expects %d\n",
+                    form, arg_count, head, ft->func_def.type_param_count);
+                exit(1);
+            }
+            // Clone the function template; mangle the name to the
+            // concrete form; substitute type-params in param/return
+            // types and the body.
+            Node *fclone = clone_node(ft);
+            fclone->func_def.name = mangle_type(form);
+            fclone->func_def.type_param_count = 0;
+            fclone->func_def.type_params = NULL;
+            for (int i = 0; i < fclone->func_def.param_count; i++) {
+                fclone->func_def.param_types[i] = substitute_type(
+                    fclone->func_def.param_types[i],
+                    ft->func_def.type_params, args,
+                    ft->func_def.type_param_count);
+            }
+            if (fclone->func_def.return_type) {
+                fclone->func_def.return_type = substitute_type(
+                    fclone->func_def.return_type,
+                    ft->func_def.type_params, args,
+                    ft->func_def.type_param_count);
+            }
+            substitute_in_node(fclone->func_def.body,
+                               ft->func_def.type_params, args,
+                               ft->func_def.type_param_count);
+            // Surface any newly-introduced parametric forms.
+            for (int i = 0; i < fclone->func_def.param_count; i++)
+                collect_from_string(&seen, fclone->func_def.param_types[i]);
+            collect_from_string(&seen, fclone->func_def.return_type);
+            collect_in_node(fclone->func_def.body, &seen);
+            // Append.
+            if (program->program.funcs.count >= program->program.funcs.cap) {
+                program->program.funcs.cap = program->program.funcs.cap ?
+                    program->program.funcs.cap * 2 : 8;
+                program->program.funcs.items = realloc(
+                    program->program.funcs.items,
+                    program->program.funcs.cap * sizeof(Node *));
+            }
+            program->program.funcs.items[program->program.funcs.count++] = fclone;
+            for (int i = 0; i < arg_count; i++) free(args[i]);
+            free(args);
+            continue;
+        }
+        if (et) {
+            if (et->enum_def.type_param_count != arg_count) {
+                fprintf(stderr, "error: '%s' provides %d type argument(s), but enum template '%s' expects %d\n",
+                    form, arg_count, head, et->enum_def.type_param_count);
+                exit(1);
+            }
+            // Clone the enum, mangle its name to the concrete form,
+            // substitute type params in every variant payload type.
+            Node *eclone = clone_node(et);
+            eclone->enum_def.name = mangle_type(form);
+            eclone->enum_def.type_param_count = 0;
+            for (int vi = 0; vi < eclone->enum_def.variant_count; vi++) {
+                int fc = eclone->enum_def.variant_field_counts[vi];
+                for (int fi = 0; fi < fc; fi++) {
+                    eclone->enum_def.variant_field_types[vi][fi] =
+                        substitute_type(
+                            eclone->enum_def.variant_field_types[vi][fi],
+                            et->enum_def.type_params, args,
+                            et->enum_def.type_param_count);
+                }
+            }
+            // Surface any newly-introduced parametric forms.
+            for (int vi = 0; vi < eclone->enum_def.variant_count; vi++) {
+                int fc = eclone->enum_def.variant_field_counts[vi];
+                for (int fi = 0; fi < fc; fi++) {
+                    collect_from_string(&seen,
+                        eclone->enum_def.variant_field_types[vi][fi]);
+                }
+            }
+            // Append to program.
+            if (program->program.enums.count >= program->program.enums.cap) {
+                program->program.enums.cap = program->program.enums.cap ?
+                    program->program.enums.cap * 2 : 8;
+                program->program.enums.items = realloc(
+                    program->program.enums.items,
+                    program->program.enums.cap * sizeof(Node *));
+            }
+            program->program.enums.items[program->program.enums.count++] = eclone;
+
+            // For every method template attached to this generic
+            // enum receiver, materialize a corresponding monomorphic
+            // method on the freshly-instantiated enum. Mirrors the
+            // struct-method path further below.
+            for (int mi = 0; mi < func_template_count; mi++) {
+                Node *mt = func_templates[mi];
+                if (!mt->func_def.receiver_type) continue;
+                if (strcmp(mt->func_def.receiver_type, head) != 0) continue;
+                if (mt->func_def.receiver_type_arg_count != arg_count) {
+                    fprintf(stderr, "error: method '%s.%s' has %d type parameter(s), enum instantiation '%s' provides %d\n",
+                        head, mt->func_def.name, mt->func_def.receiver_type_arg_count,
+                        form, arg_count);
+                    exit(1);
+                }
+                Node *mc = clone_node(mt);
+                mc->func_def.receiver_type = xstrdup(eclone->enum_def.name);
+                mc->func_def.receiver_type_arg_count = 0;
+                for (int i = 0; i < mc->func_def.param_count; i++) {
+                    mc->func_def.param_types[i] = substitute_type(
+                        mc->func_def.param_types[i],
+                        mt->func_def.receiver_type_args, args,
+                        mt->func_def.receiver_type_arg_count);
+                }
+                if (mc->func_def.return_type) {
+                    mc->func_def.return_type = substitute_type(
+                        mc->func_def.return_type,
+                        mt->func_def.receiver_type_args, args,
+                        mt->func_def.receiver_type_arg_count);
+                }
+                substitute_in_node(mc->func_def.body,
+                                   mt->func_def.receiver_type_args, args,
+                                   mt->func_def.receiver_type_arg_count);
+                for (int i = 0; i < mc->func_def.param_count; i++)
+                    collect_from_string(&seen, mc->func_def.param_types[i]);
+                collect_from_string(&seen, mc->func_def.return_type);
+                collect_in_node(mc->func_def.body, &seen);
+
+                if (program->program.funcs.count >= program->program.funcs.cap) {
+                    program->program.funcs.cap = program->program.funcs.cap ?
+                        program->program.funcs.cap * 2 : 8;
+                    program->program.funcs.items = realloc(program->program.funcs.items,
+                        program->program.funcs.cap * sizeof(Node *));
+                }
+                program->program.funcs.items[program->program.funcs.count++] = mc;
+            }
+
+            for (int i = 0; i < arg_count; i++) free(args[i]);
+            free(args);
+            continue;
         }
         if (st->struct_def.type_param_count != arg_count) {
             fprintf(stderr, "error: '%s' provides %d type argument(s), but template '%s' expects %d\n",
@@ -1375,6 +1651,16 @@ void monomorph_run(Node *program) {
         Node *s = program->program.structs.items[i];
         for (int j = 0; j < s->struct_def.field_count; j++)
             mangle_string_in_place(&s->struct_def.field_types[j]);
+    }
+    for (int i = 0; i < program->program.enums.count; i++) {
+        Node *e = program->program.enums.items[i];
+        for (int vi = 0; vi < e->enum_def.variant_count; vi++) {
+            int fc = e->enum_def.variant_field_counts[vi];
+            for (int fi = 0; fi < fc; fi++) {
+                mangle_string_in_place(
+                    &e->enum_def.variant_field_types[vi][fi]);
+            }
+        }
     }
     for (int i = 0; i < program->program.funcs.count; i++) {
         Node *f = program->program.funcs.items[i];

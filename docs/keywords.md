@@ -28,7 +28,7 @@ name resolved by `use`.
 | `nil` | null pointer | `root eq nil` |
 | `array` | typed-storage primitive (`array of T`, `array of byte`) — **contextual**, see note below | `xs is array of int with cap 8` |
 | `with` / `cap` | array constructor parts — **contextual**, see note below | `array of int with cap 8` |
-| `of` / `to` | generic type connectives | `List of int`, `Map of String to int` |
+| `of` | generic type connective | `List of int`, `Map of String, int` |
 | `match` | pattern match on enum | `match r { Ok(v) => ... }` |
 | `use` | import module | `use std/math` |
 | `as` | import alias | `use path as name` |
@@ -52,7 +52,7 @@ true reserved words.
 |------|------------|
 | `assert` | A stdlib function. `assert(cond)` parses as a regular call; the checker recognises the name and lowers to `_assert_fail`-on-false. Conceptually a `std/test` function. |
 | `String` | The canonical text type, defined as a struct in `std/string.ptt`. String literals (`"..."`) are typed as `String` directly. |
-| `List` / `Map` | Stdlib container structs from `std/list` / `std/map`. Used as `List of T` / `Map of K to V`. |
+| `List` / `Map` | Stdlib container structs from `std/list` / `std/map`. Used as `List of T` / `Map of K, V`. |
 | `yell` | A compiler-known function. Resolves at compile time on the static type of its argument (int / bool / String / user struct). Users overload by defining `Type.yell(self Type)`. |
 
 ## Symbols

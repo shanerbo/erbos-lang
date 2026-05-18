@@ -1,0 +1,11 @@
+// Runtime-panic test: Option.unwrap() on a None value must
+// abort cleanly via the assert(false) path. The Makefile runs
+// this with `erbos run` and treats a non-zero exit as success.
+
+use std/string
+use std/option
+
+spark {
+  n is none of int ()
+  yell(n.unwrap())        // must panic
+}

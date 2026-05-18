@@ -1,0 +1,111 @@
+use std/string
+
+StringBuilder is {
+  count int
+  data  array of byte
+}
+
+new() StringBuilder {
+  out is StringBuilder()
+  give out
+}
+
+with_cap(cap int) StringBuilder {
+  out is StringBuilder()
+  cap le 0 ?{ give out }
+  out.data be array of byte with cap cap
+  give out
+}
+
+StringBuilder.reserve(self ref StringBuilder, cap int) {
+  cap le 0 ?{ give }
+  self.data eq 0 ?{
+    self.data be array of byte with cap cap
+    give
+  }
+  cap le self.data.cap ?{ give }
+  fresh is array of byte with cap cap
+  through (i from 0 to self.count by 1) {
+    fresh[i] be self.data[i]
+  }
+  self.data be now fresh
+}
+
+StringBuilder.len(self StringBuilder) int {
+  give self.count
+}
+
+StringBuilder.empty(self StringBuilder) bool {
+  give self.count eq 0
+}
+
+StringBuilder.cap(self StringBuilder) int {
+  self.data eq 0 ?{ give 0 }
+  give self.data.cap
+}
+
+StringBuilder.push_byte(self ref StringBuilder, b int) {
+  b lt 0 or b gt 255 ?{
+    assert(false)
+  }
+  self.data eq 0 ?{
+    self.data be array of byte with cap 16
+  }
+  self.count ge self.data.cap ?{
+    fresh is array of byte with cap self.data.cap * 2
+    through (i from 0 to self.count by 1) {
+      fresh[i] be self.data[i]
+    }
+    self.data be now fresh
+  }
+  self.data[self.count] be b
+  self.count be self.count + 1
+}
+
+StringBuilder.push_string(self ref StringBuilder, s String) {
+  needed is self.count + s.count
+  self.data eq 0 ?{
+    cap is 16
+    infi (cap lt needed) {
+      cap be cap * 2
+    }
+    self.data be array of byte with cap cap
+  } self.data.cap lt needed ?{
+    cap is self.data.cap
+    infi (cap lt needed) {
+      cap be cap * 2
+    }
+    fresh is array of byte with cap cap
+    through (i from 0 to self.count by 1) {
+      fresh[i] be self.data[i]
+    }
+    self.data be now fresh
+  }
+  through (j from 0 to s.count by 1) {
+    self.data[self.count + j] be s.data[j]
+  }
+  self.count be needed
+}
+
+StringBuilder.push_int(self ref StringBuilder, x int) {
+  s is x.to_string()
+  self.push_string(s)
+}
+
+StringBuilder.clear(self ref StringBuilder) {
+  self.count be 0
+}
+
+StringBuilder.to_string(self StringBuilder) String {
+  self.count eq 0 ?{ give String() }
+  fresh is array of byte with cap self.count
+  through (i from 0 to self.count by 1) {
+    fresh[i] be self.data[i]
+  }
+  out is String()
+  out.cap be self.count
+  out.count be self.count
+  out.data be now fresh
+  out.owned be 1
+  give out
+}

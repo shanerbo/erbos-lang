@@ -1,0 +1,9 @@
+// Runtime-panic test: List.insert with i > count must abort
+// cleanly via the assert(false) path.
+
+use std/list
+
+spark {
+  xs is List of int
+  xs.insert(3, 99)
+}

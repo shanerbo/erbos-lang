@@ -1,0 +1,9 @@
+// Runtime-panic test: Stack.pop on an empty stack must abort
+// cleanly (the underlying List.pop assert path).
+
+use std/stack
+
+spark {
+  s is Stack of int
+  yell(s.pop())
+}

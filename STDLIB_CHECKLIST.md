@@ -76,20 +76,20 @@ Tests:
 - unwrap panic on none
 - heap-shaped `T` ownership behavior
 
-### `Result of T to E`
+### `Result of T, E`
 
 Purpose: standard fallible return type for parsing, I/O, checked lookups,
 and future APIs that should not panic.
 
 Required API:
 
-- `ok(value T) Result of T to E`
-- `err(error E) Result of T to E`
-- `Result.is_ok(self Result of T to E) bool`
-- `Result.is_err(self Result of T to E) bool`
-- `Result.unwrap(self Result of T to E) T`
-- `Result.unwrap_err(self Result of T to E) E`
-- `Result.unwrap_or(self Result of T to E, fallback T) T`
+- `ok(value T) Result of T, E`
+- `err(error E) Result of T, E`
+- `Result.is_ok(self Result of T, E) bool`
+- `Result.is_err(self Result of T, E) bool`
+- `Result.unwrap(self Result of T, E) T`
+- `Result.unwrap_err(self Result of T, E) E`
+- `Result.unwrap_or(self Result of T, E, fallback T) T`
 
 Algorithm / representation:
 
@@ -255,27 +255,27 @@ Tests:
 
 ## Phase 2: Hash Containers
 
-### `Map of K to V`
+### `Map of K, V`
 
 Purpose: serious associative map. Current implementation is O(n) linear
 scan and should be replaced or renamed as a tiny map.
 
 Required API:
 
-- `Map.new() Map of K to V`
-- `Map.with_cap(cap int) Map of K to V`
-- `Map.len(self Map of K to V) int`
-- `Map.cap(self Map of K to V) int`
-- `Map.empty(self Map of K to V) bool`
-- `Map.set(self ref Map of K to V, k K, v V)`
-- `Map.get(self Map of K to V, k K) V`
-- `Map.try_get(self Map of K to V, k K) Option of V`
-- `Map.has(self Map of K to V, k K) bool`
-- `Map.remove(self ref Map of K to V, k K) bool`
-- `Map.clear(self ref Map of K to V)`
-- `Map.keys(self Map of K to V) List of K`
-- `Map.values(self Map of K to V) List of V`
-- `Map.entries(self Map of K to V) List of Entry of K to V`
+- `Map.new() Map of K, V`
+- `Map.with_cap(cap int) Map of K, V`
+- `Map.len(self Map of K, V) int`
+- `Map.cap(self Map of K, V) int`
+- `Map.empty(self Map of K, V) bool`
+- `Map.set(self ref Map of K, V, k K, v V)`
+- `Map.get(self Map of K, V, k K) V`
+- `Map.try_get(self Map of K, V, k K) Option of V`
+- `Map.has(self Map of K, V, k K) bool`
+- `Map.remove(self ref Map of K, V, k K) bool`
+- `Map.clear(self ref Map of K, V)`
+- `Map.keys(self Map of K, V) List of K`
+- `Map.values(self Map of K, V) List of V`
+- `Map.entries(self Map of K, V) List of Entry of K, V`
 
 Algorithm / representation:
 
@@ -351,7 +351,7 @@ Required API additions:
 - `String.trim_end(self String) String`
 - `String.split(self String, sep String) List of String`
 - `String.replace(self String, from String, to String) String`
-- `String.to_int(self String) Result of int to String`
+- `String.to_int(self String) Result of int, String`
 - `String.hash(self String) int`
 - `String.clone(self String) String`
 
@@ -630,12 +630,12 @@ Purpose: actual I/O. Requires compiler/runtime syscall support.
 
 Required API:
 
-- `File.open(path String, mode String) Result of File to String`
-- `File.read_all(self ref File) Result of String to String`
-- `File.read_bytes(self ref File) Result of ByteBuffer to String`
-- `File.write_string(self ref File, s String) Result of int to String`
-- `File.write_bytes(self ref File, b ByteBuffer) Result of int to String`
-- `File.close(self ref File) Result of void to String`
+- `File.open(path String, mode String) Result of File, String`
+- `File.read_all(self ref File) Result of String, String`
+- `File.read_bytes(self ref File) Result of ByteBuffer, String`
+- `File.write_string(self ref File, s String) Result of int, String`
+- `File.write_bytes(self ref File, b ByteBuffer) Result of int, String`
+- `File.close(self ref File) Result of void, String`
 
 Algorithm / representation:
 
@@ -658,13 +658,13 @@ Purpose: buffered I/O on top of `File`.
 Required API:
 
 - `Reader.new(file File) Reader`
-- `Reader.read_byte(self ref Reader) Result of int to String`
-- `Reader.read_line(self ref Reader) Result of String to String`
-- `Reader.read_to_end(self ref Reader) Result of String to String`
+- `Reader.read_byte(self ref Reader) Result of int, String`
+- `Reader.read_line(self ref Reader) Result of String, String`
+- `Reader.read_to_end(self ref Reader) Result of String, String`
 - `Writer.new(file File) Writer`
-- `Writer.write(self ref Writer, s String) Result of int to String`
-- `Writer.write_line(self ref Writer, s String) Result of int to String`
-- `Writer.flush(self ref Writer) Result of void to String`
+- `Writer.write(self ref Writer, s String) Result of int, String`
+- `Writer.write_line(self ref Writer, s String) Result of int, String`
+- `Writer.flush(self ref Writer) Result of void, String`
 
 Algorithm / representation:
 

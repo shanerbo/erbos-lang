@@ -1014,12 +1014,15 @@ int main(int argc, char **argv) {
 
         // Pass 1: collect every free-function name declared in the
         // imported file (skip methods — they keep their declared
-        // name). This is the set we'll rewrite call sites to use.
+        // name; skip generic templates — they're global and stay
+        // unprefixed). This is the set we'll rewrite call sites
+        // to use.
         char **local_names = NULL;
         int local_count = 0;
         for (int fi = 0; fi < imp_prog->program.funcs.count; fi++) {
             Node *f = imp_prog->program.funcs.items[fi];
             if (f->func_def.receiver_type) continue;
+            if (f->func_def.type_param_count > 0) continue;
             if (!f->func_def.name) continue;
             local_names = realloc(local_names, (local_count + 1) * sizeof(char *));
             local_names[local_count++] = strdup(f->func_def.name);
@@ -1034,9 +1037,19 @@ int main(int argc, char **argv) {
         }
 
         // Pass 3: rename the function decls themselves and merge.
+        //
+        // Generic free-function templates (declared as
+        // `name of T (...)`) live in the global type-name namespace
+        // alongside generic struct / enum templates. Aliasing them
+        // with the import prefix would force users to write
+        // `option.some of int (7)` for every factory; instead we
+        // keep the bare name `some` so the user-facing call shape
+        // matches STDLIB_CHECKLIST.md exactly. Non-generic free
+        // functions still get the alias prefix.
         for (int fi = 0; fi < imp_prog->program.funcs.count; fi++) {
             Node *f = imp_prog->program.funcs.items[fi];
-            if (!f->func_def.receiver_type) {
+            if (!f->func_def.receiver_type &&
+                f->func_def.type_param_count == 0) {
                 snprintf(prefixed, sizeof(prefixed), "%s_%s", alias, f->func_def.name);
                 f->func_def.name = strdup(prefixed);
             }

@@ -1,0 +1,10 @@
+// Compile-fail: a generic free function declared with one
+// type parameter cannot be instantiated with two type args.
+
+box of T (v T) T {
+  give v
+}
+
+spark {
+  yell(box of int, String (7))
+}

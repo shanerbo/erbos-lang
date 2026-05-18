@@ -66,10 +66,10 @@ test "local List root allows ref-self call through xs.get(i)" {
 }
 
 HolderMap is {
-  items Map of String to Counter
+  items Map of String, Counter
 }
 
-bump_named(m ref Map of String to Counter) {
+bump_named(m ref Map of String, Counter) {
   m.get("main").bump()
 }
 
@@ -78,7 +78,7 @@ bump_map_field(h ref HolderMap) {
 }
 
 test "ref map param allows ref-self call through m.get(k)" {
-  m is Map of String to Counter
+  m is Map of String, Counter
   m.set("main", Counter(value is 10))
   bump_named(ref m)
   bump_named(ref m)

@@ -1,0 +1,4 @@
+spark {
+  r is ring_with_cap of int (4)
+  yell(r.len())
+}

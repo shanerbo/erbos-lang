@@ -1,0 +1,13 @@
+// Compile-fail: Queue.push takes `ref self` and must be
+// rejected through a non-ref parameter.
+
+use std/queue
+
+bad(q Queue of int) {
+  q.push(1)
+}
+
+spark {
+  q is Queue of int
+  bad(q)
+}

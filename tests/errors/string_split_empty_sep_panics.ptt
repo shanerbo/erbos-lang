@@ -1,0 +1,6 @@
+use std/string
+
+spark {
+  parts is "abc".split("")
+  yell(parts.len())
+}

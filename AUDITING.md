@@ -297,7 +297,7 @@ Value:
 - Improves first-hour usability, which the design docs say is worth
   paying for.
 
-### `Result of T to E`
+### `Result of T, E`
 
 - Implement word-style result syntax from the roadmap.
 - Use it for operations that can fail without crashing.

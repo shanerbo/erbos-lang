@@ -1,7 +1,7 @@
-# Map of String to int — bench baseline
+# Map of String, int — bench baseline
 
 Wall-clock timings for `tests/bench/map_bench.ptt`. Captured for
-the post-overhaul `Map of String to int` running through the
+the post-overhaul `Map of String, int` running through the
 pure-Potato stdlib (backed by `array of T`).
 
 ## Workload

@@ -601,7 +601,7 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
                 return dummy;
             }
             // ε1+ζ1: `list` / `map` / `imap` constructors are gone.
-            // User code now writes `List of T` / `Map of K to V` /
+            // User code now writes `List of T` / `Map of K, V` /
             // `StringMap of V` (or the literal forms) and the
             // monomorphizer + irgen route them through the stdlib
             // method symbols. The remap below is dead.
@@ -968,7 +968,7 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
 
         case NODE_MAP_LIT: {
             // ε4: when val_type_name is set (Map template is in
-            // scope), route through `Map of String to V` —
+            // scope), route through `Map of String, V` —
             // _alloc_Map__String__<V> + per-pair _Map__String__<V>_set.
             // The map literal `["k" to v]` is always String-keyed
             // (the key syntax requires a string literal); the
@@ -1119,8 +1119,17 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
                     }
                 }
             } else if (n->var_decl.is_rep) {
-                mark_heap_size(c, n->var_decl.name, 0);
+                // Only mark heap when the cloned source actually
+                // refers to a struct (or generic struct) value.
+                // `is rep <int>`, `is rep <bool>` is a value copy
+                // — the local owns no heap, so mark_heap_size +
+                // RAII drop on scope-end would mistreat the int
+                // as a pointer and SIGSEGV. The checker stashes
+                // type_name on a TYPE_STRUCT source; absence of
+                // type_name means primitive, so the local stays a
+                // plain value local with no RAII attached.
                 if (n->var_decl.type_name) {
+                    mark_heap_size(c, n->var_decl.name, 0);
                     mark_struct_local(c, n->var_decl.name, n->var_decl.type_name);
                 }
             } else if (n->var_decl.value->type == NODE_CALL) {
@@ -1824,9 +1833,12 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
                 // enum — same conservative behaviour as direct codegen.
                 int tag = i;
                 const char *vname = n->match_expr.arm_variant_names[i];
+                const char *escope = n->match_expr.enum_name;
                 if (c->program) {
                     for (int ei = 0; ei < c->program->program.enums.count; ei++) {
                         Node *e = c->program->program.enums.items[ei];
+                        if (escope && strcmp(e->enum_def.name, escope) != 0)
+                            continue;
                         int found = 0;
                         for (int vi = 0; vi < e->enum_def.variant_count; vi++) {
                             if (!strcmp(e->enum_def.variant_names[vi], vname)) {

@@ -68,7 +68,7 @@ struct Node {
 
             // Generic-method support (P3 foundation):
             //   - When a method is declared on a generic receiver
-            //     (`Map.set(self ref Map of K to V, ...)`),
+            //     (`Map.set(self ref Map of K, V, ...)`),
             //     receiver_type_args carries ["K","V"].
             //   - Free functions and methods on non-generic types leave
             //     receiver_type_args=NULL/0.
@@ -77,6 +77,19 @@ struct Node {
             //     change is required after that pass.
             char **receiver_type_args;
             int receiver_type_arg_count;
+
+            // Generic free-function support (Phase ζ): when a free
+            // function is declared with `name of T (...)` /
+            // `name of K, V (...)`, type_params carries the bound
+            // type variable names and type_param_count is > 0.
+            // Free functions without `of ...` leave both at zero.
+            // The monomorphization pass clones such templates per
+            // call-site instantiation. Methods use receiver_type_args
+            // for the same role (extracted from the receiver type
+            // string instead of declared explicitly), so the two
+            // fields stay independent.
+            char **type_params;
+            int type_param_count;
         } func_def;
 
         // NODE_STRUCT_DEF
@@ -89,7 +102,7 @@ struct Node {
             // Generic-struct support (P3 foundation):
             //   - For a non-generic struct (`Point is { x int, y int }`),
             //     type_params is NULL and type_param_count is 0.
-            //   - For `Map of K to V is { ... }`, type_params=["K","V"].
+            //   - For `Map of K, V is { ... }`, type_params=["K","V"].
             //   - Field types may textually reference these names; the
             //     monomorphization pass substitutes them per concrete
             //     instantiation.
@@ -105,8 +118,8 @@ struct Node {
             char *name;
             char *type_name;
             char *elem_type_name;  // for list of X
-            char *key_type_name;   // for map of X to Y
-            char *val_type_name;   // for map of X to Y
+            char *key_type_name;   // for map of X, Y
+            char *val_type_name;   // for map of X, Y
             int is_nomut;
             int is_move;
             int is_rep;
@@ -204,6 +217,14 @@ struct Node {
             char **arg_names;
             int *arg_is_ref;
             int arg_count;
+            // Generic free-function call sites carry explicit type
+            // arguments via `name of T (args)` /
+            // `name of K, V (args)`. The monomorphization pass
+            // uses these to materialize the right specialization.
+            // NULL/0 for non-parametric calls and for ordinary
+            // struct constructor / method-name calls.
+            char **type_args;
+            int type_arg_count;
         } call;
 
         // NODE_METHOD_CALL (obj.method(args))
@@ -266,8 +287,8 @@ struct Node {
         // ldrb/strb instead of the default 8-byte ldr/str.
         // method_struct (ε5): if set, the index access dispatches
         // to `<method_struct>_get(obj, idx)` instead of using the
-        // header layout — used for stdlib `List of T` / `Map of K
-        // to V` / `StringMap of V` whose backing storage is itself
+        // header layout — used for stdlib `List of T` /
+        // `Map of K, V` / `StringMap of V` whose backing storage is itself
         // an `array of T` field, not a flat header.
         struct { Node *object; Node *index; int is_array; int is_byte; char *method_struct; } index_access;
 
@@ -311,6 +332,14 @@ struct Node {
         } index_assign;
 
         // NODE_ENUM_DEF
+        //
+        // Generic-enum support mirrors the struct path:
+        //   - For a non-generic enum (`Result is Ok(int) | Err(String)`),
+        //     type_params is NULL and type_param_count is 0.
+        //   - For `Option of T is Some(value T) | None`,
+        //     type_params=["T"]. Variant field types may textually
+        //     reference these names; the monomorphization pass
+        //     substitutes them per concrete instantiation.
         struct {
             char *name;
             char **variant_names;
@@ -318,9 +347,18 @@ struct Node {
             char ***variant_field_types;
             int *variant_field_counts;
             int variant_count;
+            char **type_params;
+            int type_param_count;
         } enum_def;
 
         // NODE_MATCH
+        //
+        // enum_name (set by checker): the concrete enum type
+        // the scrutinee resolves to. Without this, irgen's
+        // variant-tag lookup walks every enum first-match-wins,
+        // which is wrong when multiple monomorphized enums share
+        // a variant name (e.g. `Result__int__String` and
+        // `Result__String__int` both have `Ok` and `Err`).
         struct {
             Node *expr;
             char **arm_variant_names;
@@ -328,6 +366,7 @@ struct Node {
             int *arm_binding_counts;
             Node **arm_bodies;
             int arm_count;
+            char *enum_name;
         } match_expr;
 
         // NODE_TEST_DEF

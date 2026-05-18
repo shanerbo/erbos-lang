@@ -2,7 +2,7 @@ use std/string
 use std/map
 
 spark {
-  m is Map of String to int
+  m is Map of String, int
   m.set("x", 10)
   m.set("y", 20)
   yell(m.get("x"))

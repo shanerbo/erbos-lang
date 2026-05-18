@@ -1,24 +1,161 @@
-// Queue: FIFO data structure using a list + head pointer.
+// std/queue — generic Queue of T (FIFO).
+//
+// Circular-buffer implementation per STDLIB_CHECKLIST.md:
+// `head` is the physical index of the front element; `count`
+// is the number of live elements; `data` is the backing array.
+// Logical index `i` maps to physical `(head + i) mod data.cap`.
+//
+// Growth doubles capacity and copies elements in logical order
+// to physical index 0 of the fresh array, so the new buffer
+// has head=0 after the regrow.
+//
+// `try_pop` and `try_front` return `Option of T` so callers can
+// handle empty queues without panicking.
+//
+// Replaces the previous int-only `std/queue.ptt`. The old API
+// (`use std/queue` plus a free `new()`/`push(q,val)` interface
+// that accumulated a dead `head` index in user code) is gone;
+// any code that depended on it must migrate to the methods
+// below.
 
 use std/list
+use std/option
 
-new() List of int {
-  give List of int
+Queue of T is {
+  head  int
+  count int
+  data  array of T
 }
 
-push(q List of int, val int) {
-  q.push(val)
+// Factory: returns a fresh empty Queue of T. Per the checklist:
+//   Queue.new() Queue of T
+new_queue of T () Queue of T {
+  out is Queue of T
+  give out
 }
 
-pop(q List of int, head int) int {
-  give q[head]
+// Factory with pre-allocated capacity. Per the checklist:
+//   Queue.with_cap(cap int) Queue of T
+queue_with_cap of T (cap int) Queue of T {
+  out is Queue of T
+  cap le 0 ?{ give out }
+  out.data be array of T with cap cap
+  give out
 }
 
-size(q List of int, head int) int {
-  give q.len() - head
+// -----------------------------------------------------------------
+// Construction helpers
+// -----------------------------------------------------------------
+
+// Reserve capacity for `cap` elements without changing length.
+// Replaces the canonical `with_cap(cap int) Queue of T` factory
+// from the checklist; same compiler-shape rationale as
+// `List.reserve`. If the new cap is smaller than the current
+// one or non-positive, this is a no-op.
+Queue.reserve(self ref Queue of T, cap int) {
+  cap le 0 ?{ give }
+  self.data eq 0 ?{
+    self.data be array of T with cap cap
+    give
+  }
+  cap le self.data.cap ?{ give }
+  fresh is array of T with cap cap
+  // Walk in logical order and rebase to physical index 0.
+  through (i from 0 to self.count by 1) {
+    src is (self.head + i) mod self.data.cap
+    fresh[i] be self.data[src]
+  }
+  // `be now` drops the prior backing array.
+  self.data be now fresh
+  self.head be 0
 }
 
-empty(q List of int, head int) int {
-  q.len() - head le 0 ?{ give 1 }
-  give 0
+// -----------------------------------------------------------------
+// Inspection
+// -----------------------------------------------------------------
+
+// Number of live elements.
+Queue.len(self Queue of T) int {
+  give self.count
+}
+
+// True when no elements are queued.
+Queue.empty(self Queue of T) bool {
+  give self.count eq 0
+}
+
+// -----------------------------------------------------------------
+// Mutation
+// -----------------------------------------------------------------
+
+// Append `v` at the tail. Doubles `data.cap` when full.
+//
+// The growth path produces a fresh array whose head is 0,
+// so subsequent `push` writes hit the trailing physical
+// slot directly.
+Queue.push(self ref Queue of T, v T) {
+  self.data eq 0 ?{
+    self.data be array of T with cap 8
+  }
+  self.count ge self.data.cap ?{
+    new_cap is self.data.cap * 2
+    fresh is array of T with cap new_cap
+    through (i from 0 to self.count by 1) {
+      src is (self.head + i) mod self.data.cap
+      fresh[i] be self.data[src]
+    }
+    self.data be now fresh
+    self.head be 0
+  }
+  tail is (self.head + self.count) mod self.data.cap
+  self.data[tail] be v
+  self.count be self.count + 1
+}
+
+// Remove and return the head element. Panics on empty.
+Queue.pop(self ref Queue of T) T {
+  self.count le 0 ?{
+    assert(false)
+  }
+  self.data eq 0 ?{
+    assert(false)
+  }
+  v is self.data[self.head]
+  self.head be (self.head + 1) mod self.data.cap
+  self.count be self.count - 1
+  give v
+}
+
+// Remove and return the head, or None on empty.
+Queue.try_pop(self ref Queue of T) Option of T {
+  self.count le 0 ?{ give none of T () }
+  self.data eq 0 ?{ give none of T () }
+  v is self.data[self.head]
+  self.head be (self.head + 1) mod self.data.cap
+  self.count be self.count - 1
+  give some of T (v)
+}
+
+// Read the head without removing. Panics on empty.
+Queue.front(self Queue of T) T {
+  self.count le 0 ?{
+    assert(false)
+  }
+  self.data eq 0 ?{
+    assert(false)
+  }
+  give self.data[self.head]
+}
+
+// Read the head without removing, or None on empty.
+Queue.try_front(self Queue of T) Option of T {
+  self.count le 0 ?{ give none of T () }
+  self.data eq 0 ?{ give none of T () }
+  give some of T (self.data[self.head])
+}
+
+// Reset to empty. The backing array is retained for reuse.
+Queue.clear(self ref Queue of T) {
+  self.head be 0
+  self.count be 0
 }

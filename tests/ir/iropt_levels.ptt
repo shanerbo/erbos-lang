@@ -8,7 +8,10 @@ use std/string
 Box of T is { value T }
 
 Box.set(self ref Box of T, v T) {
-  self.value be now v
+  // `v` is a non-ref borrow. For heap-shaped T we deep-clone
+  // into the field via `be rep` (moving from a borrowed param
+  // would be a checker error).
+  self.value be rep v
 }
 
 Box.get(self Box of T) T {

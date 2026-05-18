@@ -1,0 +1,7 @@
+use std/byte_buffer
+
+spark {
+  b is ByteBuffer()
+  b.push(1)
+  yell(b.get(4))
+}

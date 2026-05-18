@@ -63,18 +63,18 @@ import is present.
 
 ## Maps (`std/map`)
 
-`Map of K to V` handles every key type: int, pointer-shaped
+`Map of K, V` handles every key type: int, pointer-shaped
 struct, or `String`. The binary `eq` operator on String operands
 routes through `_str_eq` (byte-by-byte compare) inside generic
 code, so two `"foo"` literals from different rodata addresses
 match correctly.
 
-Map literals `["k" to v]` lower to `Map of String to int`
+Map literals `["k" to v]` lower to `Map of String, int`
 automatically when `use std/map` is in scope.
 
 | Method / Form | Description |
 |---|---|
-| `m is Map of K to V` | construct an empty map |
+| `m is Map of K, V` | construct an empty map |
 | `m.set(key, val)` | insert / update |
 | `m.get(key)` | get value (0 if absent) |
 | `m.keys()` | `List of K` of keys in insertion order |
@@ -87,7 +87,7 @@ automatically when `use std/map` is in scope.
 |--------|-------------|---------|
 | `StructName()` | heap-allocate struct | `Point()` |
 | `Type.method(self [ref] Type, ...)` | define a method on a struct or enum | `Counter.bump(self ref Counter) { ... }` |
-| `StructName of T` (no parens) | auto-construct a generic instantiation | `Box of int`, `Map of String to int` |
+| `StructName of T` (no parens) | auto-construct a generic instantiation | `Box of int`, `Map of String, int` |
 | `Type.method(self [ref] Type of T, ...)` | method on a generic type | `Box.set(self ref Box of T, v T) { ... }` |
 
 Struct and enum names must start with an uppercase letter
@@ -123,7 +123,7 @@ point that calls each `_test_<i>` function in turn.
 use std/basics       // bundle: String + List + Map
 use std/string       // String, String.* methods, int.to_string
 use std/list         // List of T
-use std/map          // Map of K to V (any K, including String)
+use std/map          // Map of K, V (any K, including String)
 use std/math         // min, max, abs, pow
 use std/queue        // queue.new, push, pop, size, empty
 use std/stack        // stack.new, push, pop, peek, size, empty

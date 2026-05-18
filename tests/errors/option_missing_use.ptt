@@ -1,0 +1,8 @@
+// Compile-fail: using `Option of T` without `use std/option`
+// must error at compile time. This proves there is no hidden
+// auto-import for the Option type.
+
+spark {
+  o is Option of int
+  yell(o.is_none())
+}

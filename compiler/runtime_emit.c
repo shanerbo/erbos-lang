@@ -360,10 +360,10 @@ static void emit_int_to_str(FILE *out) {
 
 
 // ζ1: emit_map_builtins / emit_imap_builtins / emit_list_builtins
-// removed. The legacy `list of T` / `map of K to V` /
-// `imap of int to V` keyword forms are gone (ε1); user code uses
+// removed. The legacy `list of T` / `map of K, V` /
+// `imap of int, V` keyword forms are gone (ε1); user code uses
 // the pure-Potato stdlib types `List of T` (std/list),
-// `Map of K to V` (std/map), `StringMap of V` (std/string_map),
+// `Map of K, V` (std/map), `StringMap of V` (std/string_map),
 // all backed by `array of T` and emitted as monomorphized
 // `_<Type>__<args>_<method>` symbols by the normal user-method
 // codegen path.
@@ -383,7 +383,7 @@ void runtime_emit_builtins(FILE *out) {
     // had no remaining callers after γ4.
     // ζ1: emit_map_builtins / emit_imap_builtins / emit_list_builtins
     // removed. ε1 retired the legacy `list` / `map` / `imap` keyword
-    // forms; user code uses pure-Potato `List of T` / `Map of K to V` /
+    // forms; user code uses pure-Potato `List of T` / `Map of K, V` /
     // `StringMap of V`, which monomorphize through the normal user-
     // method codegen path.
 

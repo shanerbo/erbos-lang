@@ -1,0 +1,107 @@
+use std/string
+use std/list
+use std/result
+
+test "starts_with and ends_with match prefixes and suffixes" {
+  s is "potato"
+  assert(s.starts_with("pot"))
+  assert(s.ends_with("ato"))
+  assert(not s.starts_with("ato"))
+  assert(not s.ends_with("pot"))
+}
+
+test "contains and index_of find substrings" {
+  s is "banana"
+  assert(s.contains("nan"))
+  assert(s.index_of("nan") eq 2)
+  assert(s.index_of("ba") eq 0)
+  assert(s.index_of("na") eq 2)
+  assert(s.index_of("zzz") eq 0 - 1)
+}
+
+test "empty needle is found at index zero" {
+  s is "abc"
+  assert(s.contains(""))
+  assert(s.index_of("") eq 0)
+}
+
+test "slice returns owned substring" {
+  s is "potato"
+  mid is s.slice(1, 5)
+  assert(mid.equals("otat"))
+  assert(s.slice(0, s.len()).equals("potato"))
+  assert(s.slice(3, 3).empty())
+}
+
+test "trim variants remove ASCII edge whitespace only" {
+  s is "   potato   "
+  assert(s.trim_start().equals("potato   "))
+  assert(s.trim_end().equals("   potato"))
+  assert(s.trim().equals("potato"))
+}
+
+test "split handles present, absent, and repeated separators" {
+  a is "a,b,c".split(",")
+  assert(a.len() eq 3)
+  assert(a.get(0).equals("a"))
+  assert(a.get(1).equals("b"))
+  assert(a.get(2).equals("c"))
+
+  b is "abc".split(",")
+  assert(b.len() eq 1)
+  assert(b.get(0).equals("abc"))
+
+  c is "a,,b".split(",")
+  assert(c.len() eq 3)
+  assert(c.get(0).equals("a"))
+  assert(c.get(1).equals(""))
+  assert(c.get(2).equals("b"))
+}
+
+test "split of empty string returns one empty part" {
+  xs is "".split(",")
+  assert(xs.len() eq 1)
+  assert(xs.get(0).equals(""))
+}
+
+test "replace handles longer shorter and absent matches" {
+  s is "potato potato"
+  assert(s.replace("potato", "spud").equals("spud spud"))
+  assert(s.replace("ta", "X").equals("poXto poXto"))
+  assert(s.replace("zzz", "x").equals("potato potato"))
+}
+
+test "clone preserves bytes for literals and owned strings" {
+  a is "hello".clone()
+  assert(a.equals("hello"))
+  owned is "po" + "tato"
+  b is owned.clone()
+  assert(b.equals("potato"))
+}
+
+test "hash is stable for equal content" {
+  a is "alpha"
+  b is "alpha"
+  c is "beta"
+  assert(a.hash() eq b.hash())
+  assert(a.hash() ne c.hash())
+}
+
+test "to_int parses zero positive and negative values" {
+  assert("0".to_int().unwrap() eq 0)
+  assert("42".to_int().unwrap() eq 42)
+  assert("-17".to_int().unwrap() eq 0 - 17)
+}
+
+test "to_int rejects invalid strings" {
+  assert("".to_int().is_err())
+  assert("-".to_int().is_err())
+  assert("12x".to_int().is_err())
+  assert("x12".to_int().is_err())
+}
+
+test "to_int rejects overflow and min-int underflow" {
+  assert("9223372036854775808".to_int().is_err())
+  assert("-9223372036854775809".to_int().is_err())
+  assert("-9223372036854775808".to_int().unwrap() eq 0 - 9223372036854775807 - 1)
+}

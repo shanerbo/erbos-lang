@@ -1,0 +1,7 @@
+use std/arena
+
+spark {
+  a is Arena of int
+  a.add(1)
+  yell(a.get(4))
+}

@@ -1,0 +1,4 @@
+spark {
+  b is ByteBuffer
+  yell(b.len())
+}

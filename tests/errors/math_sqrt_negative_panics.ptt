@@ -1,0 +1,5 @@
+use std/math
+
+spark {
+  yell(math.sqrt_floor(-1))
+}

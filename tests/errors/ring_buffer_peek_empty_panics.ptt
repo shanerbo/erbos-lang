@@ -1,0 +1,6 @@
+use std/ring_buffer
+
+spark {
+  r is ring_with_cap of int (4)
+  yell(r.peek())
+}

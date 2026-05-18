@@ -1,0 +1,4 @@
+spark {
+  b is StringBuilder
+  yell(b.len())
+}

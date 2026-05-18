@@ -18,12 +18,12 @@ Counter.bump(self ref Counter) {
   self.value be self.value + 1
 }
 
-touch(m Map of String to Holder) {
+touch(m Map of String, Holder) {
   m.get("main").counter.bump()
 }
 
 spark {
-  m is Map of String to Holder
+  m is Map of String, Holder
   m.set("main", Holder())
   touch(m)
   yell(m.get("main").counter.value)

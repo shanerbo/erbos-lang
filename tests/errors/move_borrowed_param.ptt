@@ -1,0 +1,18 @@
+// Compile-fail: a non-ref function parameter is a read-only
+// borrow. Moving out of it with `is now` (or `be now`) would
+// transfer the pointer into a callee-side binding while the
+// caller still owns the same heap block — a guaranteed
+// double-free at scope end. The checker rejects this.
+
+use std/list
+
+bad(xs List of int) {
+  ys is now xs
+  yell(ys.len())
+}
+
+spark {
+  fresh is List of int
+  fresh.push(1)
+  bad(fresh)
+}

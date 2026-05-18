@@ -1,0 +1,101 @@
+// Framework tests for std/option (Option of T).
+//
+// Coverage required by the goal:
+//   - some/none branches
+//   - unwrap success
+//   - unwrap panic on None  (covered by tests/errors/option_unwrap_none_panics.ptt)
+//   - heap-shaped T ownership behaviour
+//   - import test (covered by tests/errors/option_missing_use.ptt)
+//
+// Construction shapes exercised here: bare-factory call
+// (`some of int (...)`, `none of int ()`) and direct variant
+// construction (`Option of int .Some(...)`, `Option of int .None()`).
+
+use std/string
+use std/option
+use std/list
+
+test "some factory returns Some(value)" {
+  o is some of int (42)
+  assert(o.is_some())
+  assert(not o.is_none())
+  assert(o.unwrap() eq 42)
+}
+
+test "none factory returns None" {
+  n is none of int ()
+  assert(n.is_none())
+  assert(not n.is_some())
+}
+
+test "Option of int .Some direct variant constructor" {
+  o is Option of int .Some(7)
+  assert(o.is_some())
+  assert(o.unwrap() eq 7)
+}
+
+test "Option of int .None direct variant constructor" {
+  n is Option of int .None()
+  assert(n.is_none())
+}
+
+test "unwrap_or returns inner Some value" {
+  o is some of int (5)
+  assert(o.unwrap_or(0) eq 5)
+}
+
+test "unwrap_or returns fallback when None" {
+  n is none of int ()
+  assert(n.unwrap_or(13) eq 13)
+}
+
+test "Option of String holds heap-shaped value via Some" {
+  o is some of String ("hello world")
+  assert(o.is_some())
+  assert(o.unwrap().equals("hello world"))
+}
+
+test "Option of String unwrap_or with literal fallback" {
+  n is none of String ()
+  out is n.unwrap_or("default")
+  assert(out.equals("default"))
+}
+
+test "Some(0) is unambiguously a value, not absence" {
+  // Whole point of Option: 0 is a legitimate value, not "missing".
+  o is some of int (0)
+  assert(o.is_some())
+  assert(o.unwrap() eq 0)
+}
+
+test "Option of List of int — nested heap-shaped variant payload" {
+  // Stress: T is itself a generic struct with its own backing
+  // array. The factory's `Option of int .Some(value)` clones
+  // the variant payload into the heap-allocated enum block,
+  // so caller's `fresh` and the option's payload are
+  // independent owners.
+  fresh is List of int
+  fresh.push(1)
+  fresh.push(2)
+  fresh.push(3)
+  o is some of List of int (fresh)
+  assert(o.is_some())
+  // Inspect the payload by unwrapping (gives a value of the
+  // enum's payload type; for heap-shape T this returns a
+  // pointer to the enum's owned copy).
+  inner is o.unwrap()
+  assert(inner.len() eq 3)
+  assert(inner[0] eq 1)
+  assert(inner[2] eq 3)
+}
+
+test "stress: 1024 iterations of some/none alternation" {
+  // Container-like stress. Each iteration constructs both a
+  // Some and a None and exercises the unwrap_or fallback.
+  through (i from 0 to 1024 by 1) {
+    o is some of int (i)
+    assert(o.unwrap() eq i)
+    n is none of int ()
+    assert(n.unwrap_or(0 - 1) eq 0 - 1)
+  }
+}

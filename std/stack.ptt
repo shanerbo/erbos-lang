@@ -1,28 +1,69 @@
-// Stack: LIFO data structure using a list.
+// std/stack — generic Stack of T (LIFO).
+//
+// Wraps `List of T`: push appends to the tail, pop removes
+// the tail, peek reads the tail. Capacity grows with the
+// underlying list (doubling, minimum 8).
+//
+// `try_pop` and `try_peek` return `Option of T`, so callers
+// can handle empty stacks without panicking.
+//
+// Replaces the previous int-only `std/stack.ptt`. Two-line
+// migration guide:
+//   old (int-only)            new (generic)
+//   s is stack.new()        s is Stack of int
+//   stack.push(s, 5)        s.push(5)
+//   stack.pop(s)            s.pop()        // panics on empty
+//                           s.try_pop()    // returns Option
+//   stack.peek(s)           s.peek()       // panics on empty
+//                           s.try_peek()
+//   stack.size(s)           s.len()
+//   stack.empty(s)          s.empty()      // returns bool
 
 use std/list
+use std/option
 
-new() List of int {
-  give List of int
+Stack of T is {
+  items List of T
 }
 
-push(s List of int, val int) {
-  s.push(val)
+// Factory: returns a fresh empty Stack of T. Per the checklist:
+//   Stack.new() Stack of T
+new_stack of T () Stack of T {
+  out is Stack of T
+  give out
 }
 
-pop(s List of int) int {
-  give s.pop()
+Stack.len(self Stack of T) int {
+  give self.items.len()
 }
 
-peek(s List of int) int {
-  give s[s.len() - 1]
+Stack.empty(self Stack of T) bool {
+  give self.items.empty()
 }
 
-size(s List of int) int {
-  give s.len()
+Stack.push(self ref Stack of T, v T) {
+  self.items.push(v)
 }
 
-empty(s List of int) int {
-  s.len() eq 0 ?{ give 1 }
-  give 0
+Stack.pop(self ref Stack of T) T {
+  give self.items.pop()
+}
+
+Stack.try_pop(self ref Stack of T) Option of T {
+  give self.items.try_pop()
+}
+
+Stack.peek(self Stack of T) T {
+  // Read the tail. Panics on empty via the List.get out-of-
+  // range path (count - 1 = -1 when empty, which List.get
+  // routes through assert).
+  give self.items.get(self.items.len() - 1)
+}
+
+Stack.try_peek(self Stack of T) Option of T {
+  give self.items.try_get(self.items.len() - 1)
+}
+
+Stack.clear(self ref Stack of T) {
+  self.items.clear()
 }

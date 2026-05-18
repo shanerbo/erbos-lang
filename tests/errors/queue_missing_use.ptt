@@ -1,0 +1,7 @@
+// Compile-fail: using Queue of T without `use std/queue`
+// must error. Proves no hidden auto-import.
+
+spark {
+  q is Queue of int
+  q.push(1)
+}

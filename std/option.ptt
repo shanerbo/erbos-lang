@@ -1,0 +1,74 @@
+// std/option — Option of T, the optional-value type.
+//
+// Enum-backed per STDLIB_CHECKLIST.md:
+//
+//   Option of T is
+//     Some(value T)
+//     | None
+//
+// Construction:
+//   o is some of int (7)        // Some(7), via free-function factory
+//   n is none of int ()         // None, via free-function factory
+//   o is Option of int .Some(7) // direct variant constructor
+//   n is Option of int .None()  // no-arg variant; parens required
+//
+// All methods use `match` over the variants. `unwrap`'s None arm
+// calls `assert(false)`; the recursive give at the end of unwrap
+// is unreachable by construction (the assert terminates the
+// process), but Potato's must-return analyzer can't yet prove
+// that, so the recursive call stands in as a value-shaped
+// sentinel.
+
+Option of T is
+  Some(value T)
+  | None
+
+// Tag check via match: returns true on Some, false on None.
+Option.is_some(self Option of T) bool {
+  match self {
+    Some(v) => give true
+    None => give false
+  }
+  give false
+}
+
+// Tag check via match: returns true on None, false on Some.
+Option.is_none(self Option of T) bool {
+  match self {
+    Some(v) => give false
+    None => give true
+  }
+  give true
+}
+
+// Read the inner value via match. Panics on None.
+Option.unwrap(self Option of T) T {
+  match self {
+    Some(v) => give v
+    None => assert(false)
+  }
+  // Unreachable — the None arm asserts. The recursive give
+  // satisfies the must-return analyzer with a value of T.
+  give self.unwrap()
+}
+
+// Read the inner value via match, or `fallback` on None.
+Option.unwrap_or(self Option of T, fallback T) T {
+  match self {
+    Some(v) => give v
+    None => give fallback
+  }
+  give fallback
+}
+
+// Factory: returns Some(value). Per STDLIB_CHECKLIST.md:
+//   some(value T) Option of T
+some of T (value T) Option of T {
+  give Option of T .Some(value)
+}
+
+// Factory: returns None. Per STDLIB_CHECKLIST.md:
+//   none() Option of T
+none of T () Option of T {
+  give Option of T .None()
+}

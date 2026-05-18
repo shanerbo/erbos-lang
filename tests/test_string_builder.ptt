@@ -1,0 +1,52 @@
+use std/string
+use std/string_builder
+
+test "fresh StringBuilder is empty" {
+  b is StringBuilder()
+  assert(b.empty())
+  assert(b.len() eq 0)
+  assert(b.cap() eq 0)
+}
+
+test "push_byte and push_string build text in order" {
+  b is StringBuilder()
+  b.push_byte(65)
+  b.push_string("bc")
+  assert(b.to_string().equals("Abc"))
+}
+
+test "push_int appends decimal text" {
+  b is StringBuilder()
+  b.push_string("n=")
+  b.push_int(42)
+  b.push_string(",m=")
+  b.push_int(0 - 7)
+  assert(b.to_string().equals("n=42,m=-7"))
+}
+
+test "growth across many appends preserves bytes" {
+  b is StringBuilder()
+  through (i from 0 to 100 by 1) {
+    b.push_string("x")
+  }
+  assert(b.len() eq 100)
+  assert(b.to_string().len() eq 100)
+}
+
+test "clear resets length and builder is reusable" {
+  b is StringBuilder()
+  b.push_string("hello")
+  before is b.cap()
+  b.clear()
+  assert(b.empty())
+  assert(b.cap() eq before)
+  b.push_string("world")
+  assert(b.to_string().equals("world"))
+}
+
+test "with-cap factory preallocates" {
+  b is string_builder.with_cap(64)
+  assert(b.cap() eq 64)
+  b.push_string("potato")
+  assert(b.to_string().equals("potato"))
+}

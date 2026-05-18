@@ -1,0 +1,10 @@
+use std/arena
+
+touch(a Arena of int) {
+  a.add(1)
+}
+
+spark {
+  a is Arena of int
+  touch(a)
+}

@@ -24,3 +24,29 @@ test "math.pow" {
   assert(math.pow(2, 8) eq 256)
   assert(math.pow(3, 3) eq 27)
 }
+
+test "math.clamp" {
+  assert(math.clamp(5, 0, 10) eq 5)
+  assert(math.clamp(-5, 0, 10) eq 0)
+  assert(math.clamp(15, 0, 10) eq 10)
+}
+
+test "math.gcd and lcm" {
+  assert(math.gcd(54, 24) eq 6)
+  assert(math.gcd(-54, 24) eq 6)
+  assert(math.lcm(6, 8) eq 24)
+  assert(math.lcm(0, 8) eq 0)
+}
+
+test "math.pow_mod" {
+  assert(math.pow_mod(2, 10, 1000) eq 24)
+  assert(math.pow_mod(-2, 3, 5) eq 2)
+}
+
+test "math.sqrt_floor" {
+  assert(math.sqrt_floor(0) eq 0)
+  assert(math.sqrt_floor(1) eq 1)
+  assert(math.sqrt_floor(15) eq 3)
+  assert(math.sqrt_floor(16) eq 4)
+  assert(math.sqrt_floor(81) eq 9)
+}

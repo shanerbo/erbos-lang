@@ -1,0 +1,10 @@
+// Generic type arguments use comma syntax now.
+// `to` remains valid for map literals (`["k" to 1]`) and range loops,
+// but it is no longer valid in type positions.
+
+use std/map
+
+spark {
+  m is Map of String to int
+  yell(m.len())
+}

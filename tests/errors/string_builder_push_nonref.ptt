@@ -1,0 +1,10 @@
+use std/string_builder
+
+touch(b StringBuilder) {
+  b.push_string("x")
+}
+
+spark {
+  b is StringBuilder()
+  touch(b)
+}

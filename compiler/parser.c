@@ -41,6 +41,7 @@ static Node *parse_stmt(Parser *p);
 static Node *parse_block(Parser *p);
 static Node *parse_if_continuation(Parser *p, Node *first_cond, int line);
 static char *parse_type_name(Parser *p);
+static int parse_type_params(Parser *p, char ***out_names);
 
 // Parse a single call argument. If the argument is in the named form
 //   IDENT is EXPR
@@ -267,7 +268,7 @@ static Node *parse_primary(Parser *p) {
     if (at(p, TOK_IDENT)) {
         char *name = cur(p)->value;
 
-        // Parametric constructor: `Box of int ()` or `Map of str to int ()`.
+        // Parametric constructor: `Box of int ()` or `Map of String, int ()`.
         // We disambiguate from a generic non-call expression with `of`
         // inside (e.g. a hypothetical `xs is List of int` in a place
         // that expects an expression) by looking ahead: a parametric
@@ -278,7 +279,7 @@ static Node *parse_primary(Parser *p) {
         //
         // Lookahead walker: starting at peek(1), consume only
         // type-position tokens (IDENT / primitive keywords / `of` /
-        // `to`). Stop at the first token that can't be in a type
+        // comma). Stop at the first token that can't be in a type
         // position. If that token is `(`, it's a constructor call.
         if (peek_at(p, 1)->type == TOK_OF) {
             int look = 1;
@@ -286,7 +287,7 @@ static Node *parse_primary(Parser *p) {
             int saw_type_token = 0;
             while (ok) {
                 TokenType t = p->tokens[p->pos + look].type;
-                if (t == TOK_OF || t == TOK_TO) {
+                if (t == TOK_OF || t == TOK_COMMA) {
                     look++;
                     saw_type_token = 0;  // need a type ident next
                     continue;
@@ -323,6 +324,75 @@ static Node *parse_primary(Parser *p) {
                     n->call.arg_count = 0;
                     return n;
                 }
+            }
+            // Parametric-type-as-receiver: `Option of int .Some(7)`,
+            // `Option of int .None`, or future static-method calls
+            // like `List of int .with_cap(64)`. parse_type_name reads
+            // the type expression in legacy `<>` form; we emit a bare
+            // IDENT node naming that type so the existing dot-chain
+            // logic builds a NODE_METHOD_CALL with the type as the
+            // receiver. The monomorph pass mangles the IDENT name to
+            // its concrete form (e.g. `Option<int>` -> `Option__int`).
+            if (ok && saw_type_token && p->tokens[p->pos + look].type == TOK_DOT) {
+                char *full = parse_type_name(p);
+                Node *base = alloc_node(NODE_IDENT, line);
+                base->ident.name = full;
+                while (at(p, TOK_DOT) || at(p, TOK_LBRACKET)) {
+                    if (at(p, TOK_DOT)) {
+                        p->pos++;
+                        char *field = eat(p, TOK_IDENT)->value;
+                        if (at(p, TOK_LPAREN)) {
+                            p->pos++;
+                            Node *mc = alloc_node(NODE_METHOD_CALL, line);
+                            mc->method_call.object = base;
+                            mc->method_call.method = field;
+                            int mcap = 4;
+                            mc->method_call.args = malloc(mcap * sizeof(Node *));
+                            mc->method_call.arg_is_ref = malloc(mcap * sizeof(int));
+                            mc->method_call.arg_count = 0;
+                            skip_newlines(p);
+                            if (!at(p, TOK_RPAREN)) {
+                                int mis_ref = 0;
+                                if (at(p, TOK_REF)) { p->pos++; mis_ref = 1; }
+                                mc->method_call.args[mc->method_call.arg_count] = parse_expr(p);
+                                mc->method_call.arg_is_ref[mc->method_call.arg_count] = mis_ref;
+                                mc->method_call.arg_count++;
+                                skip_newlines(p);
+                                while (at(p, TOK_COMMA)) {
+                                    p->pos++;
+                                    skip_newlines(p);
+                                    if (mc->method_call.arg_count >= mcap) {
+                                        mcap *= 2;
+                                        mc->method_call.args = realloc(mc->method_call.args, mcap * sizeof(Node *));
+                                        mc->method_call.arg_is_ref = realloc(mc->method_call.arg_is_ref, mcap * sizeof(int));
+                                    }
+                                    mis_ref = 0;
+                                    if (at(p, TOK_REF)) { p->pos++; mis_ref = 1; }
+                                    mc->method_call.args[mc->method_call.arg_count] = parse_expr(p);
+                                    mc->method_call.arg_is_ref[mc->method_call.arg_count] = mis_ref;
+                                    mc->method_call.arg_count++;
+                                    skip_newlines(p);
+                                }
+                            }
+                            eat(p, TOK_RPAREN);
+                            base = mc;
+                        } else {
+                            Node *fa = alloc_node(NODE_FIELD_ACCESS, line);
+                            fa->field_access.object = base;
+                            fa->field_access.field = field;
+                            base = fa;
+                        }
+                    } else {
+                        p->pos++;
+                        Node *idx = parse_expr(p);
+                        eat(p, TOK_RBRACKET);
+                        Node *ia = alloc_node(NODE_INDEX, line);
+                        ia->index_access.object = base;
+                        ia->index_access.index = idx;
+                        base = ia;
+                    }
+                }
+                return base;
             }
             if (ok && saw_type_token && p->tokens[p->pos + look].type == TOK_LPAREN) {
                 // Parametric constructor confirmed. parse_type_name reads
@@ -846,8 +916,8 @@ static Node *parse_stmt(Parser *p) {
 
             // Explicit type. Several shapes are accepted:
             //
-            // (a) Lowercase legacy keywords (`list of T`, `map of K to V`,
-            //     `imap of int to V`, `task`) — paths through the
+            // (a) Lowercase legacy keywords (`list of T`, `map of K, V`,
+            //     `imap of int, V`, `task`) — paths through the
             //     existing branches below; auto-constructed if no value
             //     follows.
             //
@@ -895,10 +965,19 @@ static Node *parse_stmt(Parser *p) {
                         p->pos++; // skip 'of'
                         n->var_decl.key_type_name = cur(p)->value;
                         p->pos++; // skip key type
-                        if (at(p, TOK_TO)) {
-                            p->pos++; // skip 'to'
+                        if (at(p, TOK_COMMA)) {
+                            p->pos++; // skip comma
                             n->var_decl.val_type_name = cur(p)->value;
                             p->pos++; // skip val type
+                        }
+                        if (at(p, TOK_TO)) {
+                            fprintf(stderr,
+                                "error:%d: `to` is no longer used between "
+                                "generic type arguments — use a comma\n",
+                                cur(p)->line);
+                            fprintf(stderr,
+                                "  help: write `map of K, V`\n");
+                            exit(1);
                         }
                     }
                 } else {
@@ -917,7 +996,7 @@ static Node *parse_stmt(Parser *p) {
                 //
                 // Capitalised user-generic type form, no parens:
                 //   xs is List of int
-                //   m  is Map of int to int
+                //   m  is Map of int, int
                 //   sm is StringMap of int
                 // parse_type_name reads it as a single legacy
                 // <>-bracketed string for the monomorphizer ("List<int>"
@@ -933,10 +1012,12 @@ static Node *parse_stmt(Parser *p) {
                 // handle the constructor-call form.
                 int saved_pos = p->pos;
                 char *parsed_type = parse_type_name(p);
-                if (at(p, TOK_LPAREN)) {
-                    // Explicit constructor call follows; rewind so
-                    // parse_expr below sees the full
-                    // `IDENT of ... (...)` shape.
+                if (at(p, TOK_LPAREN) || at(p, TOK_DOT)) {
+                    // Explicit constructor call (`Box of int (...)`)
+                    // or parametric type used as a receiver (`Option
+                    // of int .Some(7)`, `List of int .with_cap(8)`)
+                    // follows; rewind so parse_expr below sees the
+                    // full expression.
                     p->pos = saved_pos;
                     free(parsed_type);
                 } else {
@@ -1065,11 +1146,20 @@ static int is_type_token(Parser *p) {
 static Node *parse_enum_def(Parser *p) {
     int line = cur(p)->line;
     char *name = eat(p, TOK_IDENT)->value;
+
+    // Optional generic-parameter list, mirroring parse_struct_def:
+    //   `Option of T is Some(value T) | None`
+    //   `Either of L, R is Left(value L) | Right(value R)`
+    char **type_params = NULL;
+    int type_param_count = parse_type_params(p, &type_params);
+
     eat(p, TOK_IS);
     skip_newlines(p);
 
     Node *n = alloc_node(NODE_ENUM_DEF, line);
     n->enum_def.name = name;
+    n->enum_def.type_params = type_params;
+    n->enum_def.type_param_count = type_param_count;
     int cap = 8;
     n->enum_def.variant_names = malloc(cap * sizeof(char *));
     n->enum_def.variant_field_names = malloc(cap * sizeof(char **));
@@ -1107,8 +1197,11 @@ static Node *parse_enum_def(Parser *p) {
             while (!at(p, TOK_RPAREN)) {
                 if (fc >= fcap) { fcap *= 2; n->enum_def.variant_field_names[vi] = realloc(n->enum_def.variant_field_names[vi], fcap * sizeof(char *)); n->enum_def.variant_field_types[vi] = realloc(n->enum_def.variant_field_types[vi], fcap * sizeof(char *)); }
                 n->enum_def.variant_field_names[vi][fc] = eat(p, TOK_IDENT)->value;
-                n->enum_def.variant_field_types[vi][fc] = cur(p)->value;
-                p->pos++;
+                // Use the full type-name parser so generic / nested
+                // types like `List of T`, `Map of K, V` are accepted
+                // in variant payloads. The internal <>-bracketed form
+                // is what monomorph expects.
+                n->enum_def.variant_field_types[vi][fc] = parse_type_name(p);
                 fc++;
                 if (at(p, TOK_COMMA)) p->pos++;
             }
@@ -1125,21 +1218,22 @@ static Node *parse_enum_def(Parser *p) {
 }
 
 // Read a single type expression and return it as one allocated string.
-// Handles bare names ("int", "str", "Counter") and parametric types
-// ("Box of int", "Map of str to int", "List of List of int").
+// Handles bare names ("int", "String", "Counter") and parametric types
+// ("Box of int", "Map of String, int", "List of List of int").
 //
 // Word-style generics (P3.1):
 //   - `of T` introduces a single type parameter: "Box of int".
-//   - `of K to V` introduces a key->value pair: "Map of str to int".
-//   - Both `of` and `to` are right-associative, so
+//   - `of A, B, C` introduces multiple parameters.
+//   - `of` is right-associative, so
 //     "List of List of int" parses as "List of (List of int)" and
-//     "Map of str to List of int" parses as "Map of str to (List of int)".
-//   - There are NO commas, NO parens, and NO `<>` in type position.
+//     "Map of String, List of int" parses as "Map of String, (List of int)".
+//   - There are NO `to` generic separators, NO parens, and NO `<>` in type
+//     position.
 //
 // The output uses the legacy `<>` internal representation that the
 // monomorphizer pass parses (it splits on `<`, top-level `,`, and
 // matching `>`). Word-style "Box of int" emits "Box<int>"; "Map of
-// str to int" emits "Map<str,int>"; "List of List of int" emits
+// String, int" emits "Map<String,int>"; "List of List of int" emits
 // "List<List<int>>". This keeps the monomorph + mangling code below
 // unchanged — only the surface syntax differs from the original P3.
 static char *parse_type_name(Parser *p) {
@@ -1191,12 +1285,13 @@ static char *parse_type_name(Parser *p) {
     memcpy(buf, head, len);
     buf[len] = '\0';
     p->pos++;
-    // Word-style chain: optional `of T [to V]` continuations.
+    // Word-style chain: optional `of T [, U ...]` continuations.
     //   "Box of int"          -> "Box<int>"
-    //   "Map of str to int"   -> "Map<str,int>"
+    //   "Map of String, int"  -> "Map<String,int>"
     //   "List of List of int" -> "List<List<int>>"
-    // The first `of` opens a `<...>`; subsequent `to` separators
-    // become `,`; nested `of` recurses into another bracket pair.
+    // The first `of` opens a `<...>`; subsequent top-level comma
+    // separators remain commas; nested `of` recurses into another
+    // bracket pair.
     if (at(p, TOK_OF)) {
         p->pos++; // consume `of`
         if (len + 1 < (int)sizeof(buf)) buf[len++] = '<';
@@ -1209,8 +1304,24 @@ static char *parse_type_name(Parser *p) {
             }
             free(inner);
         }
-        if (at(p, TOK_TO)) {
-            p->pos++; // consume `to`
+        while (at(p, TOK_COMMA)) {
+            // Comma is both the generic-arg separator and the surrounding
+            // syntax separator. Treat it as a type-arg separator only when
+            // the following token can start a type and does not look like
+            // the start of the next named function parameter (`name Type`).
+            TokenType nt = peek_at(p, 1)->type;
+            TokenType nt2 = peek_at(p, 2)->type;
+            int next_starts_type =
+                nt == TOK_IDENT || nt == TOK_INT || nt == TOK_BOOL ||
+                nt == TOK_VOID || nt == TOK_LIST || nt == TOK_MAP ||
+                nt == TOK_IMAP || nt == TOK_TASK || nt == TOK_STR_TYPE;
+            int looks_like_param_boundary =
+                nt == TOK_IDENT &&
+                (nt2 == TOK_IDENT || nt2 == TOK_INT || nt2 == TOK_BOOL ||
+                 nt2 == TOK_VOID || nt2 == TOK_LIST || nt2 == TOK_MAP ||
+                 nt2 == TOK_IMAP || nt2 == TOK_TASK || nt2 == TOK_STR_TYPE);
+            if (!next_starts_type || looks_like_param_boundary) break;
+            p->pos++; // consume comma
             if (len + 1 < (int)sizeof(buf)) buf[len++] = ',';
             char *vinner = parse_type_name(p);
             if (vinner) {
@@ -1222,17 +1333,25 @@ static char *parse_type_name(Parser *p) {
                 free(vinner);
             }
         }
+        if (at(p, TOK_TO)) {
+            fprintf(stderr,
+                "error:%d: `to` is no longer used between generic type "
+                "arguments — use a comma\n", cur(p)->line);
+            fprintf(stderr,
+                "  help: write `Map of K, V` or `Result of T, E`\n");
+            exit(1);
+        }
         if (len + 1 < (int)sizeof(buf)) buf[len++] = '>';
         buf[len] = '\0';
     }
     return strdup(buf);
 }
 
-// Parse an optional `of T [to V]` type-parameter list immediately
+// Parse an optional `of T [, U ...]` type-parameter list immediately
 // after a type name in a struct or method declaration head.
 // Examples:
 //   Box of T is { ... }              -> ["T"]
-//   Map of K to V is { ... }         -> ["K", "V"]
+//   Map of K, V is { ... }           -> ["K", "V"]
 //   Counter is { ... }               -> []  (no params)
 //   Box.set(self ref Box of T, ...)  -> ["T"] when called on the receiver
 //
@@ -1247,13 +1366,21 @@ static int parse_type_params(Parser *p, char ***out_names) {
     int cap = 2, count = 0;
     char **names = malloc(cap * sizeof(char *));
     names[count++] = eat(p, TOK_IDENT)->value;
-    if (at(p, TOK_TO)) {
-        p->pos++; // consume `to`
+    while (at(p, TOK_COMMA)) {
+        p->pos++; // consume comma
         if (count >= cap) {
             cap *= 2;
             names = realloc(names, cap * sizeof(char *));
         }
         names[count++] = eat(p, TOK_IDENT)->value;
+    }
+    if (at(p, TOK_TO)) {
+        fprintf(stderr,
+            "error:%d: `to` is no longer used between generic type "
+            "parameters — use a comma\n", cur(p)->line);
+        fprintf(stderr,
+            "  help: write `Map of K, V is { ... }`\n");
+        exit(1);
     }
     *out_names = names;
     return count;
@@ -1264,7 +1391,7 @@ static Node *parse_struct_def(Parser *p) {
     char *name = eat(p, TOK_IDENT)->value;
 
     // Optional generic-parameter list: word-style
-    // `Map of K to V is { ... }` (the legacy `<>` form is gone).
+    // `Map of K, V is { ... }` (the legacy `<>` form is gone).
     char **type_params = NULL;
     int type_param_count = parse_type_params(p, &type_params);
 
@@ -1316,6 +1443,22 @@ static Node *parse_func_def(Parser *p) {
     n->func_def.param_types = NULL;
     n->func_def.param_count = 0;
     n->func_def.return_type = NULL;
+    n->func_def.type_params = NULL;
+    n->func_def.type_param_count = 0;
+
+    // Optional generic-parameter list, mirroring parse_struct_def
+    // and parse_enum_def: `name of T (...)` / `name of K, V (...)`.
+    // Only fires for free functions; methods get their type-param
+    // names from the receiver type string (set by the caller after
+    // parse_func_def returns).
+    {
+        char **tp = NULL;
+        int tpc = parse_type_params(p, &tp);
+        if (tpc > 0) {
+            n->func_def.type_params = tp;
+            n->func_def.type_param_count = tpc;
+        }
+    }
 
     if (at(p, TOK_LPAREN)) {
         p->pos++;
@@ -1514,7 +1657,7 @@ Node *parser_parse(Parser *p) {
             // Extract receiver_type_args from the first param's type
             // string. parse_type_name emits the internal <>-bracketed
             // form for the monomorphizer's benefit (user-facing syntax
-            // is word-style `of T` / `of K to V`); we re-parse the
+            // is word-style `of T` / `of K, V`); we re-parse the
             // internal form here to lift the type variable names out.
             //
             // Examples (internal mangled form, NOT source syntax):
@@ -1539,7 +1682,7 @@ Node *parser_parse(Parser *p) {
                         // top-level idents, which are the type variables
                         // bound by the receiver). Nested generics never
                         // appear in a method's receiver-type clause: the
-                        // receiver is always `Type of T` or `Type of K to V`
+                        // receiver is always `Type of T` or `Type of K, V`
                         // with bare ident type variables.
                         while (p2 < gt && *p2 != ',' && *p2 != '<' && *p2 != '>') p2++;
                         int len2 = (int)(p2 - start);
@@ -1565,18 +1708,21 @@ Node *parser_parse(Parser *p) {
         else if (at(p, TOK_IDENT) && peek_at(p, 1)->type == TOK_IS && peek_at(p, 2)->type == TOK_LBRACE) {
             list_push(&program->program.structs, parse_struct_def(p));
         }
-        // Generic struct: IDENT OF IDENT [TO IDENT] IS {
+        // Generic struct: IDENT OF IDENT [, IDENT ...] IS {
         //   Box of T is { ... }            -> name="Box", params=["T"]
-        //   Map of K to V is { ... }       -> name="Map", params=["K", "V"]
+        //   Map of K, V is { ... }         -> name="Map", params=["K", "V"]
         // parse_struct_def handles the params via parse_type_params
-        // (which now consumes `of T [to V]` instead of `<T,V>`).
+        // (which now consumes `of T [, V ...]` instead of `<T,V>`).
         else if (at(p, TOK_IDENT) && peek_at(p, 1)->type == TOK_OF &&
                  peek_at(p, 2)->type == TOK_IDENT) {
-            // Look past the params to confirm `is {`. Shape:
-            //   IDENT of IDENT is {                      (1 param)
-            //   IDENT of IDENT to IDENT is {             (2 params)
+            // Shape:
+            //   IDENT of IDENT is {                       (1 param, struct)
+            //   IDENT of IDENT, IDENT is {                (2 params, struct)
+            //   IDENT of IDENT is NEWLINE IDENT           (1 param, enum)
+            //   IDENT of IDENT, IDENT is NEWLINE IDENT    (2 params, enum)
+            //   IDENT of IDENT is IDENT(                  (1 param, enum)
             int look = 3;
-            if (p->tokens[p->pos + look].type == TOK_TO) {
+            while (p->tokens[p->pos + look].type == TOK_COMMA) {
                 look++;
                 if (p->tokens[p->pos + look].type == TOK_IDENT) look++;
                 else { list_push(&program->program.funcs, parse_func_def(p)); skip_newlines(p); continue; }
@@ -1584,6 +1730,26 @@ Node *parser_parse(Parser *p) {
             if (p->tokens[p->pos + look].type == TOK_IS &&
                 p->tokens[p->pos + look + 1].type == TOK_LBRACE) {
                 list_push(&program->program.structs, parse_struct_def(p));
+            } else if (p->tokens[p->pos + look].type == TOK_IS) {
+                // Possible generic enum. Skip past newlines after `is`
+                // and look for an IDENT (variant). Same disambiguation
+                // logic as the non-generic enum path below.
+                int probe = look + 1;
+                int is_enum = 0;
+                if (p->tokens[p->pos + probe].type == TOK_NEWLINE) {
+                    while (p->tokens[p->pos + probe].type == TOK_NEWLINE) probe++;
+                    if (p->tokens[p->pos + probe].type == TOK_IDENT) is_enum = 1;
+                } else if (p->tokens[p->pos + probe].type == TOK_IDENT &&
+                           (p->tokens[p->pos + probe + 1].type == TOK_LPAREN ||
+                            p->tokens[p->pos + probe + 1].type == TOK_NEWLINE ||
+                            p->tokens[p->pos + probe + 1].type == TOK_PIPE)) {
+                    is_enum = 1;
+                }
+                if (is_enum) {
+                    list_push(&program->program.enums, parse_enum_def(p));
+                } else {
+                    list_push(&program->program.funcs, parse_func_def(p));
+                }
             } else {
                 // Shape didn't match — fall through to free-function path.
                 list_push(&program->program.funcs, parse_func_def(p));

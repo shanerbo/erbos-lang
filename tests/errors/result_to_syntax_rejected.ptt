@@ -1,0 +1,11 @@
+// Result also uses comma-separated type arguments now.
+// `Result of T to E` must stay rejected so stdlib tests do not grow
+// around two competing generic spellings.
+
+use std/result
+use std/string
+
+spark {
+  r is Result of int to String .Ok(1)
+  yell(r.unwrap())
+}

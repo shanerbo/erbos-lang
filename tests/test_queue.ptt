@@ -1,0 +1,207 @@
+// Framework tests for std/queue (Queue of T).
+//
+// Coverage:
+//   - FIFO order
+//   - wraparound push/pop with no growth
+//   - growth after wraparound (logical-order rebase to head=0)
+//   - try_pop / try_front empty behaviour
+//   - heap-shaped element type
+//   - clear preserves backing array, queue remains usable
+
+use std/string
+use std/queue
+use std/option
+
+test "fresh queue reports empty" {
+  q is Queue of int
+  assert(q.empty())
+  assert(q.len() eq 0)
+}
+
+test "FIFO order via push/pop" {
+  q is Queue of int
+  q.push(1)
+  q.push(2)
+  q.push(3)
+  assert(q.pop() eq 1)
+  assert(q.pop() eq 2)
+  assert(q.pop() eq 3)
+  assert(q.empty())
+}
+
+test "front does not consume" {
+  q is Queue of int
+  q.push(7)
+  q.push(8)
+  assert(q.front() eq 7)
+  assert(q.front() eq 7)
+  assert(q.len() eq 2)
+}
+
+test "try_pop on empty returns None" {
+  q is Queue of int
+  o is q.try_pop()
+  assert(o.is_none())
+}
+
+test "try_pop on non-empty returns Some(head)" {
+  q is Queue of int
+  q.push(11)
+  q.push(22)
+  o is q.try_pop()
+  assert(o.unwrap() eq 11)
+  assert(q.front() eq 22)
+}
+
+test "try_front on empty returns None" {
+  q is Queue of int
+  o is q.try_front()
+  assert(o.is_none())
+}
+
+test "try_front on non-empty returns Some(head) without consuming" {
+  q is Queue of int
+  q.push(33)
+  q.push(44)
+  o is q.try_front()
+  assert(o.unwrap() eq 33)
+  assert(q.len() eq 2)
+}
+
+test "clear empties the queue and it remains usable" {
+  q is Queue of int
+  q.push(1)
+  q.push(2)
+  q.push(3)
+  q.clear()
+  assert(q.empty())
+  q.push(99)
+  assert(q.front() eq 99)
+}
+
+test "wraparound: push, pop, push hits physical slot 0" {
+  // Fill exactly to cap=8, drain 4, then push 4 more. The new
+  // values wrap into physical slots 0..3. Verify FIFO order
+  // is preserved even though head crosses cap.
+  q is Queue of int
+  through (i from 0 to 8 by 1) { q.push(i) }
+  through (j from 0 to 4 by 1) {
+    expected is j
+    assert(q.pop() eq expected)
+  }
+  through (k from 8 to 12 by 1) { q.push(k) }
+  assert(q.len() eq 8)
+  // 4..7 from the original burst, then 8..11 from after wraparound.
+  through (m from 4 to 12 by 1) {
+    assert(q.pop() eq m)
+  }
+  assert(q.empty())
+}
+
+test "growth after wraparound preserves logical order" {
+  // Fill to cap=8, drain 4 (head=4), push 4 more so the buffer
+  // is full again and head is mid-array. The next push must
+  // grow and rebase to head=0 in logical order.
+  q is Queue of int
+  through (i from 0 to 8 by 1) { q.push(i) }
+  through (j from 0 to 4 by 1) { q.pop() }
+  through (k from 8 to 12 by 1) { q.push(k) }
+  // Now full at cap=8 with head=4, count=8. One more push grows.
+  q.push(100)
+  assert(q.len() eq 9)
+  // Verify FIFO order survives the rebase.
+  through (m from 4 to 12 by 1) {
+    assert(q.pop() eq m)
+  }
+  assert(q.pop() eq 100)
+  assert(q.empty())
+}
+
+test "growth across multiple capacity doublings preserves data" {
+  // Stress: push 1000 values, pop a few, push a few more,
+  // drain everything, confirm exact FIFO order.
+  q is Queue of int
+  through (i from 0 to 1000 by 1) { q.push(i) }
+  assert(q.len() eq 1000)
+  through (j from 0 to 1000 by 1) {
+    assert(q.pop() eq j)
+  }
+  assert(q.empty())
+}
+
+test "Queue of String — heap-shaped element type" {
+  q is Queue of String
+  q.push("first")
+  q.push("second")
+  q.push("third")
+  assert(q.front().equals("first"))
+  popped is q.pop()
+  assert(popped.equals("first"))
+  assert(q.front().equals("second"))
+}
+
+test "Queue of String — try_pop drains in order" {
+  q is Queue of String
+  q.push("a")
+  q.push("b")
+  o1 is q.try_pop()
+  o2 is q.try_pop()
+  o3 is q.try_pop()
+  assert(o1.unwrap().equals("a"))
+  assert(o2.unwrap().equals("b"))
+  assert(o3.is_none())
+}
+
+test "reserve pre-allocates without changing length" {
+  q is Queue of int
+  q.reserve(100)
+  assert(q.empty())
+  // Push beyond what would have grown the default cap=8 — no
+  // growth should fire because we already reserved 100.
+  through (i from 0 to 50 by 1) { q.push(i) }
+  assert(q.len() eq 50)
+  through (j from 0 to 50 by 1) {
+    assert(q.pop() eq j)
+  }
+}
+
+test "new_queue factory returns a fresh empty Queue of T" {
+  q is new_queue of int ()
+  assert(q.empty())
+  assert(q.len() eq 0)
+  q.push(7)
+  assert(q.front() eq 7)
+}
+
+test "queue_with_cap pre-allocates capacity without changing length" {
+  q is queue_with_cap of int (100)
+  assert(q.empty())
+  // Confirm pre-allocation by pushing 50 elements without
+  // triggering a regrow.
+  through (i from 0 to 50 by 1) { q.push(i) }
+  assert(q.len() eq 50)
+  through (j from 0 to 50 by 1) {
+    assert(q.pop() eq j)
+  }
+}
+
+test "new_queue of String works for heap-shaped T" {
+  q is new_queue of String ()
+  q.push("first")
+  q.push("second")
+  assert(q.front().equals("first"))
+  popped is q.pop()
+  assert(popped.equals("first"))
+  assert(q.front().equals("second"))
+}
+
+test "interleaved push/pop maintains FIFO without leaks" {
+  // Producer/consumer pattern: 5000 push/pop pairs with the
+  // queue staying small. Exercises wraparound many times.
+  q is Queue of int
+  through (i from 0 to 5000 by 1) {
+    q.push(i)
+    assert(q.pop() eq i)
+  }
+  assert(q.empty())
+}

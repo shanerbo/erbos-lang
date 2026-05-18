@@ -1,0 +1,11 @@
+// Runtime-panic test: Result.unwrap_err() on an Ok value must
+// abort cleanly via the assert(false) path. Dual of
+// result_unwrap_err_panics.ptt.
+
+use std/string
+use std/result
+
+spark {
+  r is ok of int, String (7)
+  yell(r.unwrap_err().equals("x"))    // must panic
+}

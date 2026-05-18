@@ -1,0 +1,5 @@
+use std/math
+
+spark {
+  yell(math.pow(2, -1))
+}

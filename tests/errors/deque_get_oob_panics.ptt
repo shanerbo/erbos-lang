@@ -1,0 +1,7 @@
+use std/deque
+
+spark {
+  d is Deque of int
+  d.push_back(1)
+  d.get(5)
+}

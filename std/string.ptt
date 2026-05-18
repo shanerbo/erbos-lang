@@ -10,6 +10,9 @@
 // data field points at an array-of-byte header that points at
 // the actual rodata bytes.
 
+use std/list
+use std/result
+
 String is {
   cap   int
   count int
@@ -75,6 +78,231 @@ String.concat(self String, other String) String {
   out.data be now fresh_data
   out.owned be 1
   give out
+}
+
+str_match_at(hay String, at int, needle String) bool {
+  needle.count lt 0 ?{ give false }
+  at lt 0 ?{ give false }
+  at + needle.count gt hay.count ?{ give false }
+  through (i from 0 to needle.count by 1) {
+    hay.data[at + i] ne needle.data[i] ?{ give false }
+  }
+  give true
+}
+
+str_is_ascii_space(b int) bool {
+  b eq 32 ?{ give true }
+  b eq 9 ?{ give true }
+  b eq 10 ?{ give true }
+  b eq 11 ?{ give true }
+  b eq 12 ?{ give true }
+  b eq 13 ?{ give true }
+  give false
+}
+
+String.starts_with(self String, prefix String) bool {
+  prefix.count gt self.count ?{ give false }
+  give str_match_at(self, 0, prefix)
+}
+
+String.ends_with(self String, suffix String) bool {
+  suffix.count gt self.count ?{ give false }
+  start is self.count - suffix.count
+  give str_match_at(self, start, suffix)
+}
+
+String.index_of(self String, needle String) int {
+  needle.count eq 0 ?{ give 0 }
+  needle.count gt self.count ?{ give 0 - 1 }
+  limit is self.count - needle.count
+  through (i from 0 to limit + 1 by 1) {
+    str_match_at(self, i, needle) ?{ give i }
+  }
+  give 0 - 1
+}
+
+String.contains(self String, needle String) bool {
+  give self.index_of(needle) ne 0 - 1
+}
+
+String.slice(self String, start int, end int) String {
+  start lt 0 or end lt start or end gt self.count ?{
+    assert(false)
+  }
+  size is end - start
+  size eq 0 ?{ give String() }
+  fresh is array of byte with cap size
+  through (i from 0 to size by 1) {
+    fresh[i] be self.data[start + i]
+  }
+  out is String()
+  out.cap be size
+  out.count be size
+  out.data be now fresh
+  out.owned be 1
+  give out
+}
+
+String.clone(self String) String {
+  give self.slice(0, self.count)
+}
+
+String.trim_start(self String) String {
+  i is 0
+  infi (i lt self.count) {
+    str_is_ascii_space(self.data[i]) ?{
+      i be i + 1
+      skip
+    }
+    stop
+  }
+  give self.slice(i, self.count)
+}
+
+String.trim_end(self String) String {
+  end is self.count
+  infi (end gt 0) {
+    str_is_ascii_space(self.data[end - 1]) ?{
+      end be end - 1
+      skip
+    }
+    stop
+  }
+  give self.slice(0, end)
+}
+
+String.trim(self String) String {
+  start is 0
+  end is self.count
+  infi (start lt end and str_is_ascii_space(self.data[start])) {
+    start be start + 1
+  }
+  infi (end gt start and str_is_ascii_space(self.data[end - 1])) {
+    end be end - 1
+  }
+  give self.slice(start, end)
+}
+
+String.split(self String, sep String) List of String {
+  sep.count eq 0 ?{
+    assert(false)
+  }
+  parts is List of String
+  start is 0
+  i is 0
+  infi (i le self.count - sep.count) {
+    str_match_at(self, i, sep) ?{
+      parts.push(self.slice(start, i))
+      i be i + sep.count
+      start be i
+      skip
+    }
+    i be i + 1
+  }
+  parts.push(self.slice(start, self.count))
+  give parts
+}
+
+String.replace(self String, needle String, repl String) String {
+  needle.count eq 0 ?{
+    assert(false)
+  }
+  hits is 0
+  i is 0
+  infi (i le self.count - needle.count) {
+    str_match_at(self, i, needle) ?{
+      hits be hits + 1
+      i be i + needle.count
+      skip
+    }
+    i be i + 1
+  }
+  hits eq 0 ?{ give self.clone() }
+  total is self.count + hits * (repl.count - needle.count)
+  total eq 0 ?{ give String() }
+  fresh is array of byte with cap total
+  src is 0
+  dst is 0
+  infi (src lt self.count) {
+    src le self.count - needle.count and str_match_at(self, src, needle) ?{
+      through (j from 0 to repl.count by 1) {
+        fresh[dst + j] be repl.data[j]
+      }
+      dst be dst + repl.count
+      src be src + needle.count
+      skip
+    }
+    fresh[dst] be self.data[src]
+    dst be dst + 1
+    src be src + 1
+  }
+  out is String()
+  out.cap be total
+  out.count be total
+  out.data be now fresh
+  out.owned be 1
+  give out
+}
+
+String.hash(self String) int {
+  h is 5381
+  through (i from 0 to self.count by 1) {
+    b is self.byte_at(i)
+    h be h * 33 + b + 1
+  }
+  give h
+}
+
+String.to_int(self String) Result of int, String {
+  self.count eq 0 ?{
+    give err of int, String ("invalid int")
+  }
+  neg is 0
+  i is 0
+  self.data[0] eq 45 ?{
+    neg be 1
+    i be 1
+  }
+  parse_neg is neg
+  i ge self.count ?{
+    give err of int, String ("invalid int")
+  }
+  parse_neg eq 1 ?{
+    acc is 0
+    infi (i lt self.count) {
+      b is self.byte_at(i)
+      b lt 48 or b gt 57 ?{
+        give err of int, String ("invalid int")
+      }
+      d is b - 48
+      acc lt 0 - 922337203685477580 ?{
+        give err of int, String ("int overflow")
+      }
+      acc eq 0 - 922337203685477580 and d gt 8 ?{
+        give err of int, String ("int overflow")
+      }
+      acc be acc * 10 - d
+      i be i + 1
+    }
+    give ok of int, String (acc)
+  }
+  acc is 0
+  infi (i lt self.count) {
+    b is self.byte_at(i)
+    b lt 48 or b gt 57 ?{
+      give err of int, String ("invalid int")
+    }
+    d is b - 48
+    acc gt 922337203685477580 ?{
+      give err of int, String ("int overflow")
+    }
+    acc eq 922337203685477580 and d gt 7 ?{
+      give err of int, String ("int overflow")
+    }
+    acc be acc * 10 + d
+    i be i + 1
+  }
+  give ok of int, String (acc)
 }
 
 // int.to_string — base-10 decimal representation. Pure Potato.

@@ -1,0 +1,10 @@
+use std/deque
+
+touch(d Deque of int) {
+  d.push_back(1)
+}
+
+spark {
+  d is Deque of int
+  touch(d)
+}

@@ -1,0 +1,6 @@
+use std/string_builder
+
+spark {
+  b is StringBuilder()
+  b.push_byte(300)
+}

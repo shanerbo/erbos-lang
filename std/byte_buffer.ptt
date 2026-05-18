@@ -1,0 +1,138 @@
+use std/string
+
+ByteBuffer is {
+  count int
+  data  array of byte
+}
+
+new() ByteBuffer {
+  out is ByteBuffer()
+  give out
+}
+
+with_cap(cap int) ByteBuffer {
+  out is ByteBuffer()
+  cap le 0 ?{ give out }
+  out.data be array of byte with cap cap
+  give out
+}
+
+ByteBuffer.reserve(self ref ByteBuffer, cap int) {
+  cap le 0 ?{ give }
+  self.data eq 0 ?{
+    self.data be array of byte with cap cap
+    give
+  }
+  cap le self.data.cap ?{ give }
+  fresh is array of byte with cap cap
+  through (i from 0 to self.count by 1) {
+    fresh[i] be self.data[i]
+  }
+  self.data be now fresh
+}
+
+ByteBuffer.len(self ByteBuffer) int {
+  give self.count
+}
+
+ByteBuffer.cap(self ByteBuffer) int {
+  self.data eq 0 ?{ give 0 }
+  give self.data.cap
+}
+
+ByteBuffer.empty(self ByteBuffer) bool {
+  give self.count eq 0
+}
+
+ByteBuffer.push(self ref ByteBuffer, b int) {
+  b lt 0 or b gt 255 ?{
+    assert(false)
+  }
+  self.data eq 0 ?{
+    self.data be array of byte with cap 16
+  }
+  self.count ge self.data.cap ?{
+    fresh is array of byte with cap self.data.cap * 2
+    through (i from 0 to self.count by 1) {
+      fresh[i] be self.data[i]
+    }
+    self.data be now fresh
+  }
+  self.data[self.count] be b
+  self.count be self.count + 1
+}
+
+ByteBuffer.extend(self ref ByteBuffer, other ByteBuffer) {
+  needed is self.count + other.count
+  self.data eq 0 ?{
+    cap is 16
+    infi (cap lt needed) {
+      cap be cap * 2
+    }
+    self.data be array of byte with cap cap
+  } self.data.cap lt needed ?{
+    cap is self.data.cap
+    infi (cap lt needed) {
+      cap be cap * 2
+    }
+    fresh is array of byte with cap cap
+    through (i from 0 to self.count by 1) {
+      fresh[i] be self.data[i]
+    }
+    self.data be now fresh
+  }
+  through (j from 0 to other.count by 1) {
+    self.data[self.count + j] be other.data[j]
+  }
+  self.count be needed
+}
+
+ByteBuffer.get(self ByteBuffer, i int) int {
+  i lt 0 or i ge self.count ?{
+    assert(false)
+  }
+  give self.data[i]
+}
+
+ByteBuffer.set(self ref ByteBuffer, i int, b int) {
+  i lt 0 or i ge self.count ?{
+    assert(false)
+  }
+  b lt 0 or b gt 255 ?{
+    assert(false)
+  }
+  self.data[i] be b
+}
+
+ByteBuffer.slice(self ByteBuffer, start int, end int) ByteBuffer {
+  start lt 0 or end lt start or end gt self.count ?{
+    assert(false)
+  }
+  size is end - start
+  out is ByteBuffer()
+  size eq 0 ?{ give out }
+  out.data be array of byte with cap size
+  out.count be size
+  through (i from 0 to size by 1) {
+    out.data[i] be self.data[start + i]
+  }
+  give out
+}
+
+ByteBuffer.clear(self ref ByteBuffer) {
+  self.count be 0
+}
+
+ByteBuffer.to_string(self ByteBuffer) String {
+  self.count eq 0 ?{ give String() }
+  fresh is array of byte with cap self.count
+  through (i from 0 to self.count by 1) {
+    fresh[i] be self.data[i]
+  }
+  out is String()
+  out.cap be self.count
+  out.count be self.count
+  out.data be now fresh
+  out.owned be 1
+  give out
+}

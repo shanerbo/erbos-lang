@@ -61,7 +61,7 @@ casing. `use std/...` brings them into scope.
 |------|------------|-------|
 | `String` | `std/string.ptt` | UTF-8 text, backed by `array of byte`. String literals (`"..."`) are values of this type. Requires `use std/string` (no auto-load). |
 | `List of T` | `std/list.ptt` | Dynamic, growable list. `[1, 2, 3]` literals lower to `List of int` when `std/list` is in scope. |
-| `Map of K to V` | `std/map.ptt` | Ordered key→value map. `K` may be `int`, pointer-shaped, or `String`. `["k" to v]` literals lower to `Map of String to V` when `std/map` is in scope. |
+| `Map of K, V` | `std/map.ptt` | Ordered key→value map. `K` may be `int`, pointer-shaped, or `String`. `["k" to v]` literals lower to `Map of String, V` when `std/map` is in scope. |
 
 The bundle import `use std/basics` brings in `String + List + Map` together.
 
@@ -279,8 +279,7 @@ Rules:
 ## Generics
 
 Structs and methods can be parametric. Type parameters appear after
-`of` (one parameter) or `of … to …` (two parameters) immediately
-after the type name in the declaration head:
+`of`; additional type parameters use commas:
 
 ```
 Box of T is {
@@ -295,7 +294,7 @@ Box.get(self Box of T) T {
   give self.value
 }
 
-Both of K to V is {
+Both of K, V is {
   key K
   value V
 }
@@ -310,7 +309,7 @@ spark {
   yell(bi.get())   // 42
   yell(bs.get())   // hello
 
-  p is Both of String to int
+  p is Both of String, int
   // ...
 }
 ```
@@ -328,21 +327,21 @@ Rules:
   the box with — the compiler reads it off the receiver's `of T`
   clause, so the method head doesn't repeat the parameter list.
 - Constructors at use sites carry their type arguments explicitly:
-  `Box of int ()`, `Both of String to int ()`, `Map of String to int ()`.
+  `Box of int ()`, `Both of String, int ()`, `Map of String, int ()`.
   The compiler does not currently infer type arguments from context.
 - The compiler **monomorphizes**: each unique concrete form
-  (`Box of int`, `Box of String`, `Both of String to int`, …) becomes
+  (`Box of int`, `Box of String`, `Both of String, int`, …) becomes
   its own emitted struct layout and its own emitted methods. There
   are no v-tables and no runtime type tags.
 - Symbols are mangled positionally with `__` separators:
-  `Box of int` → `_Box__int`, `Map of String to int` → `_Map__String__int`,
+  `Box of int` → `_Box__int`, `Map of String, int` → `_Map__String__int`,
   `List of List of int` → `_List__List__int`.
 - Nested generics are supported and parse right-associatively, so
-  `Map of String to List of int` reads as `Map of String to (List of int)`.
-  No commas, no parens, no `<>` in type position — anywhere.
-- Up to two type parameters per generic (via `of T` or `of K to V`).
-  Three-or-more-parameter generics are not supported; wrap
-  multiple values in a named struct instead.
+  `Map of String, List of int` reads as `Map of String, (List of int)`.
+  There is no `to` generic separator, no parens, and no `<>` in type
+  position.
+- Multi-parameter generics use the same comma form for every type:
+  `Map of K, V`, `Result of T, E`, `Pair of A, B`.
 - Instantiating an undeclared template is a compile error
   ("cannot instantiate 'Foo<int>' — no generic type named 'Foo' is in scope").
 
@@ -383,17 +382,17 @@ through (x in nums) {
 use std/map
 
 // String-keyed
-scores is Map of String to int
+scores is Map of String, int
 scores.set("alice", 95)
 yell(scores.get("alice"))     // 95
 yell(scores.len())            // 1
 
 // Int-keyed
-memo is Map of int to int
+memo is Map of int, int
 memo.set(42, 100)
 yell(memo.get(42))            // 100
 
-// Map literal — lowers to `Map of String to int` because
+// Map literal — lowers to `Map of String, int` because
 // std/map is in scope:
 m is ["name" to 1, "age" to 2]
 yell(m.get("name"))           // 1
@@ -622,7 +621,7 @@ Use `as` when two imported files have similar prefixes
 
 - `std/string` — `String`, `String.*`, `int.to_string`
 - `std/list` — `List of T`
-- `std/map` — `Map of K to V` (K = int, pointer-shaped, or String)
+- `std/map` — `Map of K, V` (K = int, pointer-shaped, or String)
 - `std/math` — `min`, `max`, `abs`, `pow`
 - `std/queue`, `std/stack` — bounded fixed-cap queues / stacks
 - `std/basics` — bundle (re-exports String + List + Map)

@@ -1,0 +1,71 @@
+use std/option
+
+RingBuffer of T is {
+  head  int
+  count int
+  data  array of T
+}
+
+ring_with_cap of T (cap int) RingBuffer of T {
+  out is RingBuffer of T
+  cap le 0 ?{ give out }
+  out.data be array of T with cap cap
+  give out
+}
+
+RingBuffer.len(self RingBuffer of T) int {
+  give self.count
+}
+
+RingBuffer.cap(self RingBuffer of T) int {
+  self.data eq 0 ?{ give 0 }
+  give self.data.cap
+}
+
+RingBuffer.empty(self RingBuffer of T) bool {
+  give self.count eq 0
+}
+
+RingBuffer.full(self RingBuffer of T) bool {
+  self.data eq 0 ?{ give false }
+  give self.count eq self.data.cap
+}
+
+RingBuffer.push(self ref RingBuffer of T, v T) bool {
+  self.data eq 0 ?{ give false }
+  self.count ge self.data.cap ?{ give false }
+  tail is (self.head + self.count) mod self.data.cap
+  self.data[tail] be v
+  self.count be self.count + 1
+  give true
+}
+
+RingBuffer.pop(self ref RingBuffer of T) T {
+  self.count le 0 ?{
+    assert(false)
+  }
+  v is self.data[self.head]
+  self.head be (self.head + 1) mod self.data.cap
+  self.count be self.count - 1
+  give v
+}
+
+RingBuffer.try_pop(self ref RingBuffer of T) Option of T {
+  self.count le 0 ?{ give none of T () }
+  v is self.data[self.head]
+  self.head be (self.head + 1) mod self.data.cap
+  self.count be self.count - 1
+  give some of T (v)
+}
+
+RingBuffer.peek(self RingBuffer of T) T {
+  self.count le 0 ?{
+    assert(false)
+  }
+  give self.data[self.head]
+}
+
+RingBuffer.clear(self ref RingBuffer of T) {
+  self.head be 0
+  self.count be 0
+}

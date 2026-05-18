@@ -50,7 +50,7 @@ through `String.concat` / `String.equals` / `int.to_string`):
 | `_str_len` | User code uses `s.len()` (resolves to `_String_len`). |
 | `_char_at` | User code uses `s.char_at(i)` (resolves to `_String_char_at`). |
 | `_yell_dispatch` (renamed `_yell`) | Compile-time resolution; shim only kept for TYPE_UNKNOWN. |
-| `_list_*` / `_map_*` / `_imap_*` | The legacy `list of T` / `map of K to V` / `imap of int to V` keyword forms were retired. User code uses `List of T` (std/list) / `Map of K to V` (std/map). |
+| `_list_*` / `_map_*` / `_imap_*` | The legacy `list of T` / `map of K, V` / `imap of int, V` keyword forms were retired. User code uses `List of T` (std/list) / `Map of K, V` (std/map). |
 
 ## Layout contracts the runtime reads
 

@@ -1,0 +1,9 @@
+// Runtime-panic test: Stack.peek on an empty stack must abort
+// cleanly via the List.get out-of-range path.
+
+use std/stack
+
+spark {
+  s is Stack of int
+  yell(s.peek())
+}

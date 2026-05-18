@@ -1,0 +1,41 @@
+use std/list
+use std/option
+
+Arena of T is {
+  items List of T
+}
+
+new_arena of T () Arena of T {
+  out is Arena of T
+  give out
+}
+
+Arena.len(self Arena of T) int {
+  give self.items.len()
+}
+
+Arena.add(self ref Arena of T, value T) int {
+  id is self.items.len()
+  self.items.push(value)
+  give id
+}
+
+Arena.get(self Arena of T, id int) T {
+  give self.items.get(id)
+}
+
+Arena.try_get(self Arena of T, id int) Option of T {
+  give self.items.try_get(id)
+}
+
+Arena.set(self ref Arena of T, id int, value T) {
+  self.items.set(id, value)
+}
+
+Arena.has(self Arena of T, id int) bool {
+  give id ge 0 and id lt self.items.len()
+}
+
+Arena.clear(self ref Arena of T) {
+  self.items.clear()
+}

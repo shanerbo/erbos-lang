@@ -2,7 +2,7 @@ use std/string
 use std/map
 
 test "string-map set and get" {
-  m is Map of String to int
+  m is Map of String, int
   m.set("a", 10)
   m.set("b", 20)
   assert(m.get("a") eq 10)
@@ -11,7 +11,7 @@ test "string-map set and get" {
 }
 
 test "string-map update" {
-  m is Map of String to int
+  m is Map of String, int
   m.set("x", 1)
   m.set("x", 99)
   assert(m.get("x") eq 99)
@@ -19,7 +19,7 @@ test "string-map update" {
 }
 
 test "map literal" {
-  // ε4: ["k" to v] now lowers to `Map of String to int` via stdlib
+  // ε4: ["k" to v] now lowers to `Map of String, int` via stdlib
   // path because `use std/map` is in scope.
   m is ["name" to 1, "age" to 2]
   assert(m.get("name") eq 1)
@@ -28,7 +28,7 @@ test "map literal" {
 }
 
 test "string-map growable" {
-  m is Map of String to int
+  m is Map of String, int
   through (i from 0 to 30 by 1) {
     m.set(i.to_string(), i)
   }
@@ -38,7 +38,7 @@ test "string-map growable" {
 }
 
 test "int-map set and get" {
-  m is Map of int to int
+  m is Map of int, int
   m.set(42, 100)
   m.set(7, 200)
   assert(m.get(42) eq 100)

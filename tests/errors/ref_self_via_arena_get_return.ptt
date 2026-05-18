@@ -1,0 +1,20 @@
+use std/arena
+
+Counter is {
+  value int
+}
+
+Counter.bump(self ref Counter) {
+  self.value be self.value + 1
+}
+
+touch(a Arena of Counter) {
+  a.get(0).bump()
+}
+
+spark {
+  a is Arena of Counter
+  a.add(Counter(value is 0))
+  touch(a)
+  yell(a.get(0).value)
+}

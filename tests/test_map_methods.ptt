@@ -1,6 +1,6 @@
 use std/string
 
-// Regression test: std/map — generic Map of K to V with
+// Regression test: std/map — generic Map of K, V with
 // set/get/len for int-comparable keys (K is `int` or any
 // pointer-shaped value).
 //
@@ -12,7 +12,7 @@ use std/string
 use std/map
 
 test "len reflects inserted count" {
-  m is Map of int to int
+  m is Map of int, int
   assert(m.len() eq 0)
   m.set(1, 10)
   assert(m.len() eq 1)
@@ -22,7 +22,7 @@ test "len reflects inserted count" {
 }
 
 test "get returns inserted values" {
-  m is Map of int to int
+  m is Map of int, int
   m.set(1, 100)
   m.set(2, 200)
   m.set(3, 300)
@@ -32,14 +32,14 @@ test "get returns inserted values" {
 }
 
 test "get on missing key returns 0" {
-  m is Map of int to int
+  m is Map of int, int
   m.set(1, 100)
   assert(m.get(99) eq 0)
   assert(m.get(0) eq 0)
 }
 
 test "re-set updates in place" {
-  m is Map of int to int
+  m is Map of int, int
   m.set(1, 100)
   m.set(2, 200)
   m.set(1, 999)
@@ -49,7 +49,7 @@ test "re-set updates in place" {
 }
 
 test "growth past initial capacity" {
-  m is Map of int to int
+  m is Map of int, int
   // Initial cap is 8 — insert 50 distinct keys to force
   // multiple doublings.
   through (i from 0 to 50 by 1) {

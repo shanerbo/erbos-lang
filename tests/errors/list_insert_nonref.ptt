@@ -1,0 +1,13 @@
+// Compile-fail: List.insert takes `ref self`. Calling it
+// through a non-ref parameter must error.
+
+use std/list
+
+bump(xs List of int) {
+  xs.insert(0, 99)
+}
+
+spark {
+  xs is List of int
+  bump(xs)
+}

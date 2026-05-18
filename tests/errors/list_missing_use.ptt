@@ -1,0 +1,10 @@
+// Compile-fail: using `List of T` without `use std/list`
+// must error. Proves no hidden auto-import for the List
+// type. The literal-list lowering (`[1, 2, 3]`) only fires
+// when std/list is in scope; the bare type spelling has
+// no special-case fallback.
+
+spark {
+  xs is List of int
+  xs.push(1)
+}

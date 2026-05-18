@@ -1,0 +1,74 @@
+// std/result — Result of T, E, the fallible-return type.
+//
+// Enum-backed per STDLIB_CHECKLIST.md:
+//
+//   Result of T, E is
+//     Ok(value T)
+//     | Err(error E)
+//
+// Construction:
+//   r is ok of int, String (7)              // Ok(7) via free-fn factory
+//   e is err of int, String ("nope")        // Err("nope") via factory
+//   r is Result of int, String .Ok(7)       // direct variant ctor
+//   e is Result of int, String .Err("e")    // direct variant ctor
+//
+// All methods use `match`; `unwrap` panics on Err and
+// `unwrap_err` panics on Ok via assert(false). The recursive
+// give at the end of each unwrap stands in for an unreachable
+// path that the must-return analyzer can't yet prove dead.
+
+Result of T, E is
+  Ok(value T)
+  | Err(error E)
+
+Result.is_ok(self Result of T, E) bool {
+  match self {
+    Ok(v) => give true
+    Err(e) => give false
+  }
+  give false
+}
+
+Result.is_err(self Result of T, E) bool {
+  match self {
+    Ok(v) => give false
+    Err(e) => give true
+  }
+  give true
+}
+
+Result.unwrap(self Result of T, E) T {
+  match self {
+    Ok(v) => give v
+    Err(e) => assert(false)
+  }
+  give self.unwrap()
+}
+
+Result.unwrap_err(self Result of T, E) E {
+  match self {
+    Ok(v) => assert(false)
+    Err(e) => give e
+  }
+  give self.unwrap_err()
+}
+
+Result.unwrap_or(self Result of T, E, fallback T) T {
+  match self {
+    Ok(v) => give v
+    Err(e) => give fallback
+  }
+  give fallback
+}
+
+// Factory: returns Ok(value). Per STDLIB_CHECKLIST.md:
+//   ok(value T) Result of T, E
+ok of T, E (value T) Result of T, E {
+  give Result of T, E .Ok(value)
+}
+
+// Factory: returns Err(error). Per STDLIB_CHECKLIST.md:
+//   err(error E) Result of T, E
+err of T, E (error E) Result of T, E {
+  give Result of T, E .Err(error)
+}

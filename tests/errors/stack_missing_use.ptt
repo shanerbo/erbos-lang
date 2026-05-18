@@ -1,0 +1,7 @@
+// Compile-fail: using Stack of T without `use std/stack`
+// must error. Proves no hidden auto-import.
+
+spark {
+  s is Stack of int
+  s.push(1)
+}

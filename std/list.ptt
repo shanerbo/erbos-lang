@@ -4,45 +4,98 @@
 // synthesises allocation, bounds-checking, and RAII for arrays;
 // nothing kernel-level is visible in this file.
 //
-// Capacity grows at 2× on push when full.
+// Capacity grows at 2x on push when full, with a minimum cap of 8.
+// Replacing self.data via `be now` drops the previous backing
+// array (see tests/test_replace_drops_old.ptt for the language-
+// level guarantee), so growth no longer leaks the old buffer.
+//
+// Several methods that take an integer index panic on out-of-
+// range access; the corresponding `try_*` methods return
+// `Option of T` so callers can avoid panics. `try_pop` and
+// `try_get` require `use std/option`.
+
+use std/option
 
 List of T is {
   count int
   data  array of T
 }
 
+// -----------------------------------------------------------------
+// Construction helpers
+// -----------------------------------------------------------------
+
+// Reserve capacity for `cap` elements without changing length.
+// If the new cap is smaller than the existing one or non-
+// positive, this is a no-op — capacity never shrinks here.
+List.reserve(self ref List of T, cap int) {
+  cap le 0 ?{ give }
+  self.data eq 0 ?{
+    self.data be array of T with cap cap
+    give
+  }
+  cap le self.data.cap ?{ give }
+  fresh is array of T with cap cap
+  through (i from 0 to self.count by 1) {
+    fresh[i] be self.data[i]
+  }
+  // `be now` drops the prior owned array — see
+  // tests/test_replace_drops_old.ptt.
+  self.data be now fresh
+}
+
+// Factory: returns a fresh empty `List of T` with capacity
+// pre-allocated to `cap`. Per STDLIB_CHECKLIST.md:
+//   with_cap(cap int) List of T
+// Idiomatic use:
+//
+//   xs is with_cap of int (64)
+with_cap of T (cap int) List of T {
+  out is List of T
+  cap le 0 ?{ give out }
+  out.data be array of T with cap cap
+  give out
+}
+
+// -----------------------------------------------------------------
+// Inspection
+// -----------------------------------------------------------------
+
 // Length / count of elements.
 List.len(self List of T) int {
   give self.count
 }
+
+// Capacity of the backing array. Zero before the first push or
+// reserve.
+List.cap(self List of T) int {
+  self.data eq 0 ?{ give 0 }
+  give self.data.cap
+}
+
+// True when the list holds no elements.
+List.empty(self List of T) bool {
+  give self.count eq 0
+}
+
+// -----------------------------------------------------------------
+// Mutation
+// -----------------------------------------------------------------
 
 // Append `v` to the end. Doubles `data`'s cap if full.
 //
 // The struct constructor zero-inits `data` (no NODE_ARRAY_NEW
 // fires for field defaults), so a freshly-built List has
 // data == 0. The first push triggers an inline allocation.
-// Subsequent grows allocate fresh and copy; the old array is
-// the previous `self.data`, which RAII frees on the parent
-// list's eventual destruction (since the field still points at
-// it until we overwrite). This particular method has no
-// owning local for the new buffer — it's stored directly into
-// the field, avoiding the move-out problem.
+// Subsequent grows allocate fresh, copy, then `be now`-replace
+// the field — `be now` drops the prior backing array, so no
+// leak across grows (see tests/test_replace_drops_old.ptt).
 List.push(self ref List of T, v T) {
   self.data eq 0 ?{
     self.data be array of T with cap 8
   }
   self.count ge self.data.cap ?{
     new_cap is self.data.cap * 2
-    // Allocate fresh and copy. We use the field directly as the
-    // destination via a temporary that we move into the field —
-    // but to avoid the "local owns array, RAII frees it" double-
-    // free, we copy element-by-element into a freshly-allocated
-    // array, then atomically replace `self.data`. The previous
-    // `self.data` becomes garbage; we don't hold a reference to
-    // it after the assign, so its memory leaks until parent
-    // List's RAII fires. Acceptable for now — true grow-with-
-    // free needs language-level support for "consume and
-    // replace" of an owning field.
     fresh is array of T with cap new_cap
     through (i from 0 to self.count by 1) {
       fresh[i] be self.data[i]
@@ -55,11 +108,10 @@ List.push(self ref List of T, v T) {
 
 // Remove and return the last element. Panics on empty.
 //
-// Codex P1-10: when count=0 the list may not have allocated its
-// data buffer yet (lazy-init in push). Indexing self.data[0]
-// then dereferences null, producing a SIGSEGV instead of a
-// clean panic. Use assert(false) for a deterministic compile-
-// time exit code; once a `panic` builtin lands this can switch.
+// Codex P1-10: when count=0 the list may not have allocated
+// its data buffer yet (lazy-init in push). Use assert(false)
+// for a deterministic non-zero exit; once a `panic` builtin
+// lands this can switch.
 List.pop(self ref List of T) T {
   self.count le 0 ?{
     assert(false)
@@ -68,25 +120,154 @@ List.pop(self ref List of T) T {
   give self.data[self.count]
 }
 
+// Remove and return the last element, or None on empty.
+List.try_pop(self ref List of T) Option of T {
+  self.count le 0 ?{ give none of T () }
+  self.count be self.count - 1
+  give some of T (self.data[self.count])
+}
+
 // Read element at `i`. Bounds-checked against `count` (not cap):
-// the user-visible length of the list is its count, even though
-// the backing storage may have headroom for more elements.
+// the user-visible length is its count, even though the backing
+// storage may have headroom.
+//
+// Codex P1-10 dual: when count=0 and the list has not been
+// pushed-into yet, `self.data` may still be null. Reading
+// `self.data.cap` would then dereference null and SIGSEGV
+// instead of producing a clean panic. Funnel both the
+// out-of-range and never-allocated cases through assert(false)
+// for a deterministic non-zero exit.
 List.get(self List of T, i int) T {
   i lt 0 or i ge self.count ?{
-    // Force a panic by indexing the backing array past its cap.
-    // The `array of T` primitive's bounds check fires regardless
-    // of how many elements `self.count` claims are live.
-    give self.data[self.data.cap]
+    assert(false)
+  }
+  self.data eq 0 ?{
+    assert(false)
   }
   give self.data[i]
 }
 
+// Read element at `i`, or None when out of range.
+List.try_get(self List of T, i int) Option of T {
+  i lt 0 or i ge self.count ?{ give none of T () }
+  give some of T (self.data[i])
+}
+
 // Write element at `i`. Bounds-checked. Caller grows the list
 // with `push` first; `set` does NOT extend.
+//
+// Same null-array guard as List.get: if `set` is called before
+// any push, `self.data` is null and we'd otherwise SIGSEGV.
 List.set(self ref List of T, i int, v T) {
   i lt 0 or i ge self.count ?{
-    junk is self.data[self.data.cap]
-    give
+    assert(false)
+  }
+  self.data eq 0 ?{
+    assert(false)
   }
   self.data[i] be v
+}
+
+// Insert `v` at position `i`, shifting later elements right.
+// `i` may equal `count` (append). Panics on i < 0 or i > count.
+List.insert(self ref List of T, i int, v T) {
+  i lt 0 or i gt self.count ?{
+    assert(false)
+  }
+  // Lazy-init or grow. Same shape as push.
+  self.data eq 0 ?{
+    self.data be array of T with cap 8
+  }
+  self.count ge self.data.cap ?{
+    new_cap is self.data.cap * 2
+    fresh is array of T with cap new_cap
+    through (k from 0 to self.count by 1) {
+      fresh[k] be self.data[k]
+    }
+    self.data be now fresh
+  }
+  // Shift right [i .. count) -> [i+1 .. count+1). Walk from the
+  // tail so we don't overwrite unread slots.
+  j is self.count
+  infi (j gt i) {
+    self.data[j] be self.data[j - 1]
+    j be j - 1
+  }
+  self.data[i] be v
+  self.count be self.count + 1
+}
+
+// Remove and return the element at `i`, shifting later elements
+// left. Panics on out-of-range.
+List.remove(self ref List of T, i int) T {
+  i lt 0 or i ge self.count ?{
+    assert(false)
+  }
+  saved is self.data[i]
+  // Shift left [i+1 .. count) -> [i .. count-1).
+  through (j from i to self.count - 1 by 1) {
+    self.data[j] be self.data[j + 1]
+  }
+  self.count be self.count - 1
+  give saved
+}
+
+// Reset count to 0. The backing array is retained for reuse.
+// Heap-shaped elements still occupy their slots until the
+// list itself drops or those slots are overwritten by push.
+List.clear(self ref List of T) {
+  self.count be 0
+}
+
+// -----------------------------------------------------------------
+// Search
+// -----------------------------------------------------------------
+
+// Linear scan: true when any element compares equal to `v`.
+// `eq` on T routes to int equality, String byte-equality, or
+// generic struct-pointer equality depending on T.
+List.contains(self List of T, v T) bool {
+  through (i from 0 to self.count by 1) {
+    self.data[i] eq v ?{ give true }
+  }
+  give false
+}
+
+// Linear scan: index of the first element equal to `v`, or
+// -1 when absent. Mirrors std/string's index_of convention.
+List.index_of(self List of T, v T) int {
+  through (i from 0 to self.count by 1) {
+    self.data[i] eq v ?{ give i }
+  }
+  give 0 - 1
+}
+
+// Reverse the list in place by two-pointer swap.
+List.reverse(self ref List of T) {
+  self.count le 1 ?{ give }
+  lo is 0
+  hi is self.count - 1
+  infi (lo lt hi) {
+    a is self.data[lo]
+    b is self.data[hi]
+    self.data[lo] be b
+    self.data[hi] be a
+    lo be lo + 1
+    hi be hi - 1
+  }
+}
+
+// Deep-clone every element into a fresh List of T. Heap-shaped
+// elements get their own independent copy via `rep` (the
+// language's deep-clone primitive); primitive elements are
+// value-copied by `rep` as a no-op. Capacity of the returned
+// list is exactly `count` — the clone is not over-provisioned.
+List.clone(self List of T) List of T {
+  out is List of T
+  out.reserve(self.count)
+  through (i from 0 to self.count by 1) {
+    el is rep self.data[i]
+    out.push(el)
+  }
+  give out
 }

@@ -1,0 +1,5 @@
+use std/string
+
+spark {
+  yell("abc".slice(1, 5))
+}

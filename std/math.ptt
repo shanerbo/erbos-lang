@@ -13,10 +13,79 @@ abs(x int) int {
   give x
 }
 
+clamp(x int, lo int, hi int) int {
+  x lt lo ?{ give lo }
+  x gt hi ?{ give hi }
+  give x
+}
+
+gcd(a int, b int) int {
+  x is abs(a)
+  y is abs(b)
+  infi (y ne 0) {
+    t is x mod y
+    x be y
+    y be t
+  }
+  give x
+}
+
+lcm(a int, b int) int {
+  a eq 0 or b eq 0 ?{ give 0 }
+  give abs((a / gcd(a, b)) * b)
+}
+
 pow(base int, exp int) int {
+  exp lt 0 ?{
+    assert(false)
+  }
   result is 1
-  through (i from 0 to exp by 1) {
-    result be result * base
+  cur is base
+  e is exp
+  infi (e gt 0) {
+    e mod 2 eq 1 ?{
+      result be result * cur
+    }
+    cur be cur * cur
+    e be e / 2
   }
   give result
+}
+
+pow_mod(base int, exp int, modv int) int {
+  exp lt 0 or modv eq 0 ?{
+    assert(false)
+  }
+  result is 1 mod modv
+  cur is base mod modv
+  cur lt 0 ?{
+    cur be cur + modv
+  }
+  e is exp
+  infi (e gt 0) {
+    e mod 2 eq 1 ?{
+      result be (result * cur) mod modv
+    }
+    cur be (cur * cur) mod modv
+    e be e / 2
+  }
+  give result
+}
+
+sqrt_floor(x int) int {
+  x lt 0 ?{
+    assert(false)
+  }
+  x le 1 ?{ give x }
+  lo is 0
+  hi is x + 1
+  infi (lo + 1 lt hi) {
+    mid is lo + (hi - lo) / 2
+    mid le x / mid ?{
+      lo be mid
+    } nah {
+      hi be mid
+    }
+  }
+  give lo
 }

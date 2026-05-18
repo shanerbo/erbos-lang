@@ -1,0 +1,7 @@
+// Compile-fail: instantiating a generic free function that
+// has no template definition must produce a clear monomorph
+// error, not silent fallthrough to the linker.
+
+spark {
+  yell(nonexistent of int (7))
+}

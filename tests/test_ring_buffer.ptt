@@ -1,0 +1,72 @@
+use std/string
+use std/ring_buffer
+use std/option
+
+test "ring buffer starts empty with fixed capacity" {
+  r is ring_with_cap of int (4)
+  assert(r.cap() eq 4)
+  assert(r.empty())
+  assert(not r.full())
+}
+
+test "push returns false when full" {
+  r is ring_with_cap of int (2)
+  assert(r.push(1))
+  assert(r.push(2))
+  assert(not r.push(3))
+  assert(r.full())
+}
+
+test "pop and peek follow FIFO order" {
+  r is ring_with_cap of int (4)
+  r.push(10)
+  r.push(20)
+  assert(r.peek() eq 10)
+  assert(r.pop() eq 10)
+  assert(r.peek() eq 20)
+  assert(r.pop() eq 20)
+  assert(r.empty())
+}
+
+test "wraparound preserves logical order" {
+  r is ring_with_cap of int (4)
+  r.push(1)
+  r.push(2)
+  r.push(3)
+  assert(r.pop() eq 1)
+  assert(r.pop() eq 2)
+  assert(r.push(4))
+  assert(r.push(5))
+  assert(r.pop() eq 3)
+  assert(r.pop() eq 4)
+  assert(r.pop() eq 5)
+  assert(r.empty())
+}
+
+test "try_pop returns None on empty and Some on data" {
+  r is ring_with_cap of int (2)
+  assert(r.try_pop().is_none())
+  r.push(7)
+  assert(r.try_pop().unwrap() eq 7)
+  assert(r.try_pop().is_none())
+}
+
+test "clear empties ring buffer and preserves fixed capacity" {
+  r is ring_with_cap of int (3)
+  r.push(1)
+  r.push(2)
+  r.clear()
+  assert(r.empty())
+  assert(r.cap() eq 3)
+  assert(r.push(9))
+  assert(r.peek() eq 9)
+}
+
+test "RingBuffer of String stores heap-shaped values" {
+  r is ring_with_cap of String (3)
+  r.push("a")
+  r.push("b")
+  assert(r.peek().equals("a"))
+  assert(r.pop().equals("a"))
+  assert(r.pop().equals("b"))
+}

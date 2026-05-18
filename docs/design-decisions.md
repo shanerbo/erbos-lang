@@ -91,7 +91,7 @@ on `&mut self`), spelled in Potato vocabulary.
    reader "compiler intrinsic"; `String` PascalCase tells the reader
    "user-greppable struct, look in `std/string.ptt`." Flattening
    either direction throws away that distinction. The visible
-   asymmetry in `Map of int to String` is the case rule *working*
+   asymmetry in `Map of int, String` is the case rule *working*
    — it's telling you the container is a different kind of thing
    from the element type.
 
@@ -137,7 +137,7 @@ the cost of changing it is high.
   for some unrelated reason, the cost of dropping it goes down,
   which changes the trade.
 - If the language ever picks up overload resolution / generic
-  inference that makes `Map of int to String` rare in practice
+  inference that makes `Map of int, String` rare in practice
   (because users don't have to spell out type args at call sites),
   the readability complaint shrinks on its own.
 
@@ -456,7 +456,7 @@ of bugs in their first thousand lines. Otherwise it doesn't ship.
 - Better error messages with caret + context (top priority for
   user feel).
 - File I/O (without it the language is a curiosity, not a tool).
-- `Result of T to E` for fallible operations (immediately useful
+- `Result of T, E` for fallible operations (immediately useful
   once I/O exists).
 - A "Potato in 10 minutes" tutorial (zero compiler cost,
   enormous adoption value).
@@ -498,7 +498,7 @@ serves cohesion over completeness).
 **Status:** decided (shipped — bug #114 fix)
 **Decision:** When a struct's field has a type that is itself a
 struct (user-defined OR stdlib generic like `List of T`,
-`Map of K to V`, `String`), the parent's `_alloc_<X>`
+`Map of K, V`, `String`), the parent's `_alloc_<X>`
 constructor recursively calls `_alloc_<FieldType>` for that
 field and stores the resulting pointer.
 

@@ -1,0 +1,83 @@
+use std/list
+
+algo_swap(xs ref List of int, i int, j int) {
+  i eq j ?{ give }
+  tmp is xs.get(i)
+  xs.set(i, xs.get(j))
+  xs.set(j, tmp)
+}
+
+algo_partition(xs ref List of int, lo int, hi int) int {
+  pivot is xs.get(hi)
+  store is lo
+  through (j from lo to hi by 1) {
+    xs.get(j) le pivot ?{
+      algo_swap(ref xs, store, j)
+      store be store + 1
+    }
+  }
+  algo_swap(ref xs, store, hi)
+  give store
+}
+
+algo_quicksort(xs ref List of int, lo int, hi int) {
+  lo ge hi ?{ give }
+  p is algo_partition(ref xs, lo, hi)
+  p gt lo ?{
+    algo_quicksort(ref xs, lo, p - 1)
+  }
+  right_hi is hi
+  p lt right_hi ?{
+    algo_quicksort(ref xs, p + 1, hi)
+  }
+}
+
+sort_ints(xs ref List of int) {
+  xs.len() le 1 ?{ give }
+  algo_quicksort(ref xs, 0, xs.len() - 1)
+}
+
+binary_search_int(xs List of int, target int) int {
+  lo is 0
+  hi is xs.len()
+  infi (lo lt hi) {
+    mid is lo + (hi - lo) / 2
+    v is xs.get(mid)
+    v lt target ?{
+      lo be mid + 1
+    } v gt target ?{
+      hi be mid
+    } nah {
+      give mid
+    }
+  }
+  give 0 - 1
+}
+
+lower_bound_int(xs List of int, target int) int {
+  lo is 0
+  hi is xs.len()
+  infi (lo lt hi) {
+    mid is lo + (hi - lo) / 2
+    xs.get(mid) lt target ?{
+      lo be mid + 1
+    } nah {
+      hi be mid
+    }
+  }
+  give lo
+}
+
+upper_bound_int(xs List of int, target int) int {
+  lo is 0
+  hi is xs.len()
+  infi (lo lt hi) {
+    mid is lo + (hi - lo) / 2
+    xs.get(mid) le target ?{
+      lo be mid + 1
+    } nah {
+      hi be mid
+    }
+  }
+  give lo
+}

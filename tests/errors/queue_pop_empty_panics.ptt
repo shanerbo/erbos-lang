@@ -1,0 +1,9 @@
+// Runtime-panic test: Queue.pop on an empty queue must abort
+// cleanly via the assert(false) path.
+
+use std/queue
+
+spark {
+  q is Queue of int
+  yell(q.pop())
+}

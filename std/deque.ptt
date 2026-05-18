@@ -1,0 +1,181 @@
+// std/deque — generic Deque of T.
+//
+// Double-ended queue backed by a circular buffer. `head` is the
+// physical slot of the logical front element, `count` is the
+// number of live elements, and `data` is the backing array.
+//
+// Logical index `i` maps to physical `(head + i) mod data.cap`.
+// Growth doubles capacity and copies elements in logical order
+// to physical index 0 of the fresh array.
+
+use std/option
+
+Deque of T is {
+  head  int
+  count int
+  data  array of T
+}
+
+new_deque of T () Deque of T {
+  out is Deque of T
+  give out
+}
+
+deque_with_cap of T (cap int) Deque of T {
+  out is Deque of T
+  cap le 0 ?{ give out }
+  out.data be array of T with cap cap
+  give out
+}
+
+Deque.reserve(self ref Deque of T, cap int) {
+  cap le 0 ?{ give }
+  self.data eq 0 ?{
+    self.data be array of T with cap cap
+    give
+  }
+  cap le self.data.cap ?{ give }
+  fresh is array of T with cap cap
+  through (i from 0 to self.count by 1) {
+    src is (self.head + i) mod self.data.cap
+    fresh[i] be self.data[src]
+  }
+  self.data be now fresh
+  self.head be 0
+}
+
+Deque.len(self Deque of T) int {
+  give self.count
+}
+
+Deque.cap(self Deque of T) int {
+  self.data eq 0 ?{ give 0 }
+  give self.data.cap
+}
+
+Deque.empty(self Deque of T) bool {
+  give self.count eq 0
+}
+
+Deque.push_back(self ref Deque of T, v T) {
+  self.data eq 0 ?{
+    self.data be array of T with cap 8
+  }
+  self.count ge self.data.cap ?{
+    new_cap is self.data.cap * 2
+    fresh is array of T with cap new_cap
+    through (i from 0 to self.count by 1) {
+      src is (self.head + i) mod self.data.cap
+      fresh[i] be self.data[src]
+    }
+    self.data be now fresh
+    self.head be 0
+  }
+  tail is (self.head + self.count) mod self.data.cap
+  self.data[tail] be v
+  self.count be self.count + 1
+}
+
+Deque.push_front(self ref Deque of T, v T) {
+  self.data eq 0 ?{
+    self.data be array of T with cap 8
+  }
+  self.count ge self.data.cap ?{
+    new_cap is self.data.cap * 2
+    fresh is array of T with cap new_cap
+    through (i from 0 to self.count by 1) {
+      src is (self.head + i) mod self.data.cap
+      fresh[i] be self.data[src]
+    }
+    self.data be now fresh
+    self.head be 0
+  }
+  cap_now is self.data.cap
+  self.head eq 0 ?{
+    self.head be cap_now
+  }
+  self.head be self.head - 1
+  self.data[self.head] be v
+  self.count be self.count + 1
+}
+
+Deque.pop_front(self ref Deque of T) T {
+  self.count le 0 ?{
+    assert(false)
+  }
+  self.data eq 0 ?{
+    assert(false)
+  }
+  v is self.data[self.head]
+  self.head be (self.head + 1) mod self.data.cap
+  self.count be self.count - 1
+  give v
+}
+
+Deque.pop_back(self ref Deque of T) T {
+  self.count le 0 ?{
+    assert(false)
+  }
+  self.data eq 0 ?{
+    assert(false)
+  }
+  idx is (self.head + self.count - 1) mod self.data.cap
+  v is self.data[idx]
+  self.count be self.count - 1
+  give v
+}
+
+Deque.try_pop_front(self ref Deque of T) Option of T {
+  self.count le 0 ?{ give none of T () }
+  self.data eq 0 ?{ give none of T () }
+  v is self.data[self.head]
+  self.head be (self.head + 1) mod self.data.cap
+  self.count be self.count - 1
+  give some of T (v)
+}
+
+Deque.try_pop_back(self ref Deque of T) Option of T {
+  self.count le 0 ?{ give none of T () }
+  self.data eq 0 ?{ give none of T () }
+  idx is (self.head + self.count - 1) mod self.data.cap
+  v is self.data[idx]
+  self.count be self.count - 1
+  give some of T (v)
+}
+
+Deque.front(self Deque of T) T {
+  self.count le 0 ?{
+    assert(false)
+  }
+  self.data eq 0 ?{
+    assert(false)
+  }
+  give self.data[self.head]
+}
+
+Deque.back(self Deque of T) T {
+  self.count le 0 ?{
+    assert(false)
+  }
+  self.data eq 0 ?{
+    assert(false)
+  }
+  idx is (self.head + self.count - 1) mod self.data.cap
+  give self.data[idx]
+}
+
+Deque.get(self Deque of T, i int) T {
+  i lt 0 or i ge self.count ?{
+    assert(false)
+  }
+  self.data eq 0 ?{
+    assert(false)
+  }
+  idx is (self.head + i) mod self.data.cap
+  give self.data[idx]
+}
+
+Deque.clear(self ref Deque of T) {
+  self.head be 0
+  self.count be 0
+}

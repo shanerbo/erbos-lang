@@ -1,0 +1,10 @@
+use std/ring_buffer
+
+touch(r RingBuffer of int) {
+  r.push(1)
+}
+
+spark {
+  r is ring_with_cap of int (4)
+  touch(r)
+}

@@ -66,13 +66,13 @@ spark {
   nums.push(20)
   yell(nums[0])
 
-  // String-keyed map literal — lowers to `Map of String to int`
+  // String-keyed map literal — lowers to `Map of String, int`
   // because `use std/map` is in scope (via std/basics).
   scores is ["alice" to 95, "bob" to 87]
   yell(scores.get("alice"))
 
   // Int-keyed map
-  memo is Map of int to int
+  memo is Map of int, int
   memo.set(1, 100)
   yell(memo.get(1))
 }
@@ -122,9 +122,9 @@ spark {
 
 ## Generics
 
-Word-style only — no `<T>` anywhere. Use `of` for one parameter
-and `of … to …` for two. See [`generics-syntax.md`](generics-syntax.md)
-for full rules.
+Word-style only — no `<T>` anywhere. Use `of` to introduce type
+arguments and commas for additional arguments. See
+[`generics-syntax.md`](generics-syntax.md) for full rules.
 
 ```
 use std/string
@@ -141,16 +141,16 @@ Box.get(self Box of T) T {
   give self.value
 }
 
-Pair of K to V is {
+Pair of K, V is {
   key K
   value V
 }
 
-Pair.set_key(self ref Pair of K to V, k K) {
+Pair.set_key(self ref Pair of K, V, k K) {
   self.key be k
 }
 
-Pair.set_value(self ref Pair of K to V, v V) {
+Pair.set_value(self ref Pair of K, V, v V) {
   self.value be v
 }
 
@@ -158,7 +158,7 @@ spark {
   // Each instantiation produces its own emitted code:
   //   Box of int            -> _Box__int
   //   Box of String         -> _Box__String
-  //   Pair of String to int -> _Pair__String__int
+  //   Pair of String, int -> _Pair__String__int
   bi is Box of int
   bi.set(42)
   yell(bi.get())   // 42
@@ -167,7 +167,7 @@ spark {
   bs.set("hello")
   yell(bs.get())   // hello
 
-  p is Pair of String to int
+  p is Pair of String, int
   p.set_key("alice")
   p.set_value(95)
 }

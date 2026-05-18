@@ -1,0 +1,9 @@
+// Compile-fail: using `Result of T, E` without
+// `use std/result` must error. Proves no hidden auto-import.
+
+use std/string
+
+spark {
+  r is Result of int, String
+  yell(r.is_err())
+}

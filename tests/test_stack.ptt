@@ -1,0 +1,134 @@
+// Framework tests for std/stack (Stack of T).
+
+use std/string
+use std/stack
+use std/option
+
+test "fresh stack reports empty" {
+  s is Stack of int
+  assert(s.empty())
+  assert(s.len() eq 0)
+}
+
+test "push grows length and exposes value via peek" {
+  s is Stack of int
+  s.push(10)
+  assert(s.len() eq 1)
+  assert(not s.empty())
+  assert(s.peek() eq 10)
+}
+
+test "LIFO order via push/pop" {
+  s is Stack of int
+  s.push(1)
+  s.push(2)
+  s.push(3)
+  assert(s.pop() eq 3)
+  assert(s.pop() eq 2)
+  assert(s.pop() eq 1)
+  assert(s.empty())
+}
+
+test "peek does not consume" {
+  s is Stack of int
+  s.push(99)
+  assert(s.peek() eq 99)
+  assert(s.peek() eq 99)
+  assert(s.len() eq 1)
+}
+
+test "try_pop on empty returns None" {
+  s is Stack of int
+  o is s.try_pop()
+  assert(o.is_none())
+}
+
+test "try_pop on non-empty returns Some(top)" {
+  s is Stack of int
+  s.push(7)
+  o is s.try_pop()
+  assert(o.unwrap() eq 7)
+  assert(s.empty())
+}
+
+test "try_peek on empty returns None" {
+  s is Stack of int
+  o is s.try_peek()
+  assert(o.is_none())
+}
+
+test "try_peek on non-empty returns Some(top) without consuming" {
+  s is Stack of int
+  s.push(11)
+  s.push(22)
+  o is s.try_peek()
+  assert(o.unwrap() eq 22)
+  assert(s.len() eq 2)
+}
+
+test "clear empties the stack but it remains usable" {
+  s is Stack of int
+  s.push(1)
+  s.push(2)
+  s.push(3)
+  s.clear()
+  assert(s.empty())
+  assert(s.len() eq 0)
+  s.push(99)
+  assert(s.peek() eq 99)
+}
+
+test "Stack of String — heap-shaped element type" {
+  s is Stack of String
+  s.push("alpha")
+  s.push("beta")
+  assert(s.len() eq 2)
+  assert(s.peek().equals("beta"))
+  popped is s.pop()
+  assert(popped.equals("beta"))
+  assert(s.peek().equals("alpha"))
+}
+
+test "Stack of String — try_pop drains correctly" {
+  s is Stack of String
+  s.push("a")
+  s.push("b")
+  o1 is s.try_pop()
+  o2 is s.try_pop()
+  o3 is s.try_pop()
+  assert(o1.unwrap().equals("b"))
+  assert(o2.unwrap().equals("a"))
+  assert(o3.is_none())
+}
+
+test "new_stack factory returns a fresh empty Stack of T" {
+  s is new_stack of int ()
+  assert(s.empty())
+  assert(s.len() eq 0)
+  s.push(7)
+  assert(s.peek() eq 7)
+}
+
+test "new_stack of String returns a usable heap-shaped stack" {
+  s is new_stack of String ()
+  assert(s.empty())
+  s.push("first")
+  s.push("second")
+  assert(s.peek().equals("second"))
+}
+
+test "growth past initial capacity" {
+  // Push 32 elements; underlying List doubles from 8 to 16 to 32.
+  s is Stack of int
+  through (i from 0 to 32 by 1) {
+    s.push(i)
+  }
+  assert(s.len() eq 32)
+  assert(s.peek() eq 31)
+  // Drain everything in reverse order.
+  through (j from 0 to 32 by 1) {
+    expected is 31 - j
+    assert(s.pop() eq expected)
+  }
+  assert(s.empty())
+}

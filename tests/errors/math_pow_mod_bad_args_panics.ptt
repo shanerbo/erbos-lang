@@ -1,0 +1,5 @@
+use std/math
+
+spark {
+  yell(math.pow_mod(2, 3, 0))
+}

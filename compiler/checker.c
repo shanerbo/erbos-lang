@@ -4,7 +4,7 @@
 #include "checker.h"
 
 #define MAX_SYMS 256
-#define MAX_FUNCS 128
+#define MAX_FUNCS 512
 
 typedef struct {
     char *name;
@@ -1051,7 +1051,7 @@ static Type check_expr(Checker *c, Node *n) {
             // and element-size 1 instead of 8.
             n->index_access.is_byte = (obj_t.kind == TYPE_ARRAY &&
                 obj_t.elem_type && obj_t.elem_type->kind == TYPE_BYTE);
-            // ε5: stdlib container types (List of T, Map of K to V,
+            // ε5: stdlib container types (List of T, Map of K, V,
             // StringMap of V) are TYPE_STRUCT in the checker. Post-
             // monomorph their struct name is mangled, e.g.
             // "List__int" or "StringMap__int". Tag the index access
@@ -1344,8 +1344,32 @@ static void check_stmt(Checker *c, Node *n) {
             }
             // `b is now a` transfers ownership: mark `a` as moved so any
             // subsequent `a` reference produces a use-after-move error.
+            //
+            // Borrow gate: a non-ref function parameter is a read-only
+            // borrow of caller-owned data. Allowing `is now <param>`
+            // would transfer the pointer into a callee-side binding
+            // whose RAII would then race the caller's RAII for the
+            // same heap block — a guaranteed double-free for nested-
+            // generic owned fields (Box of List of int, Option of
+            // List of int, etc.). The String case looks fine in
+            // practice only because the literal `owned == 0` short-
+            // circuit hides the same bug. Reject the move and tell
+            // the caller to use `ref` if they actually wanted
+            // mutation.
             if (n->var_decl.is_move && n->var_decl.value->type == NODE_IDENT) {
-                mark_moved_sym(c, n->var_decl.value->ident.name);
+                const char *src = n->var_decl.value->ident.name;
+                int src_is_ref = get_sym_is_ref(c, src);
+                if (src_is_ref == 0) {
+                    fprintf(stderr,
+                        "error:%d: cannot move out of borrowed parameter '%s'\n",
+                        n->line, src);
+                    fprintf(stderr,
+                        "  help: declare the parameter as `%s ref ...` "
+                        "if the callee should take ownership, or use "
+                        "`is rep %s` to deep-clone the borrow\n", src, src);
+                    exit(1);
+                }
+                mark_moved_sym(c, src);
             }
             // `b is rep a` deep-clones the source. Stash the source's
             // struct name (when known) into type_name so irgen can
@@ -1426,7 +1450,19 @@ static void check_stmt(Checker *c, Node *n) {
             }
             // `q be now p` marks p moved.
             if (n->assign.is_move && rhs_is_ident) {
-                mark_moved_sym(c, n->assign.value->ident.name);
+                const char *src = n->assign.value->ident.name;
+                int src_is_ref = get_sym_is_ref(c, src);
+                if (src_is_ref == 0) {
+                    fprintf(stderr,
+                        "error:%d: cannot move out of borrowed parameter '%s'\n",
+                        n->line, src);
+                    fprintf(stderr,
+                        "  help: declare the parameter as `%s ref ...` "
+                        "if the callee should take ownership, or use "
+                        "`be rep %s` to deep-clone the borrow\n", src, src);
+                    exit(1);
+                }
+                mark_moved_sym(c, src);
             }
             // `q be rep p` stashes source struct name for irgen's
             // `_clone_<X>` dispatch.
@@ -1462,7 +1498,22 @@ static void check_stmt(Checker *c, Node *n) {
             // moved (both bindings remain alive).
             if (n->field_assign.is_move &&
                 n->field_assign.value->type == NODE_IDENT) {
-                mark_moved_sym(c, n->field_assign.value->ident.name);
+                const char *src = n->field_assign.value->ident.name;
+                // Same borrow gate as the var-decl `is now`: moving
+                // out of a non-ref parameter creates two owners of
+                // the same heap block. Reject explicitly.
+                int src_is_ref = get_sym_is_ref(c, src);
+                if (src_is_ref == 0) {
+                    fprintf(stderr,
+                        "error:%d: cannot move out of borrowed parameter '%s'\n",
+                        n->line, src);
+                    fprintf(stderr,
+                        "  help: declare the parameter as `%s ref ...` "
+                        "if the callee should take ownership, or use "
+                        "`be rep %s` to deep-clone the borrow\n", src, src);
+                    exit(1);
+                }
+                mark_moved_sym(c, src);
             }
             // `field be rep src` deep-clones the source. Stash the
             // source's struct name (when known) so irgen can emit
@@ -1657,18 +1708,35 @@ static void check_stmt(Checker *c, Node *n) {
             // instead of `_int_to_string`. Surfaced by spudlock's
             // report.ptt match against ReportCase.{Success(int),
             // Failure(int, String)}.
-            check_expr(c, n->match_expr.expr);
+            Type matched_t = check_expr(c, n->match_expr.expr);
+            // Restrict variant lookup to the matched expression's
+            // declared enum type when known. Without this scope,
+            // multiple monomorphized enums sharing a variant name
+            // (e.g. `Result__int__String` and `Result__String__int`
+            // both have `Ok` and `Err`) would collide and pick the
+            // first by definition order — binding the wrong payload
+            // type to the arm parameter.
+            const char *enum_scope = NULL;
+            if (matched_t.kind == TYPE_STRUCT && matched_t.struct_name) {
+                enum_scope = matched_t.struct_name;
+                // Stash on the AST so irgen's tag-lookup uses the
+                // same scope (without it, irgen's first-match walk
+                // also collides on shared variant names).
+                n->match_expr.enum_name = (char *)matched_t.struct_name;
+            }
             for (int ai = 0; ai < n->match_expr.arm_count; ai++) {
                 const char *vname = n->match_expr.arm_variant_names[ai];
                 int saved = c->count;
                 // Look up the variant's declared field types from
-                // the program's enum table. Match by variant name
-                // — same enum may have multiple variants, distinct
-                // enums may share a variant name; we try every
-                // enum to find a matching variant.
+                // the program's enum table. When `enum_scope` is
+                // known, only consult that specific enum; otherwise
+                // fall back to the legacy first-match-wins walk so
+                // older code without typed receivers still works.
                 if (c->program) {
                     for (int ei = 0; ei < c->program->program.enums.count; ei++) {
                         Node *e = c->program->program.enums.items[ei];
+                        if (enum_scope && strcmp(e->enum_def.name, enum_scope) != 0)
+                            continue;
                         for (int vi = 0; vi < e->enum_def.variant_count; vi++) {
                             if (!vname) continue;
                             if (strcmp(e->enum_def.variant_names[vi], vname) != 0) continue;

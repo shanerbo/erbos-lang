@@ -1,0 +1,10 @@
+// Runtime-panic test: Result.unwrap() on an Err value must
+// abort cleanly via the assert(false) path.
+
+use std/string
+use std/result
+
+spark {
+  r is err of int, String ("nope")
+  yell(r.unwrap())          // must panic
+}

@@ -182,7 +182,7 @@ use std/basics                  // bundle: String + List + Map
 xs is List of int               // also: [1, 2, 3]
 xs.push(10)
 
-m is Map of String to int       // also: ["k" to 1]
+m is Map of String, int       // also: ["k" to 1]
 m.set("key", 42)
 
 // Enums + pattern matching
@@ -225,7 +225,7 @@ Helpful import-error messages (suggests `potato.toml`, etc.).
 - Green-thread runtime exists in `compiler/runtime/` but isn't
   wired into compiled output.
 
-**Roadmap.** `Result of T to E`. Caret + source-context error
+**Roadmap.** `Result of T, E`. Caret + source-context error
 messages. File I/O. Default `_<Type>_yell` for debugging.
 
 **Explicitly NOT on the roadmap** (see design-decisions log):

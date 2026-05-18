@@ -1,0 +1,10 @@
+use std/byte_buffer
+
+touch(b ByteBuffer) {
+  b.push(65)
+}
+
+spark {
+  b is ByteBuffer()
+  touch(b)
+}

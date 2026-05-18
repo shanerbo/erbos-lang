@@ -1,19 +1,19 @@
 // Generic structs + generic methods + monomorphization.
 //
 // Verifies P3 + P3.1:
-//   - parametric struct: Box of T, Both of K to V
+//   - parametric struct: Box of T, Both of K, V
 //   - parametric methods: Box.set / Box.get
 //   - the monomorphization pass clones one specialised struct per
 //     concrete instantiation and one specialised method per
 //     instantiation+template
 //   - per-instantiation symbol mangling: Box of int -> Box__int,
-//     Both of String to int -> Both__String__int
+//     Both of String, int -> Both__String__int
 //   - distinct concrete instantiations of the same template don't
 //     interfere
 //
 // Word-style generics (P3.1):
 //   - `of T` introduces a single type parameter
-//   - `of K to V` introduces a key->value pair
+//   - `of K, V` introduces a key->value pair
 //   - method-def head infers parameters from the receiver
 
 use std/string
@@ -23,34 +23,46 @@ Box of T is {
 }
 
 Box.set(self ref Box of T, v T) {
-  // For primitive T (int, bool) the move is a no-op; for
-  // heap-shaped T (String, struct) it's an explicit ownership
-  // transfer. Either way, `now` keeps the call site honest.
-  self.value be now v
+  // Primitive T is a value copy via plain `be`. Heap-shaped T
+  // arrives as a borrowed parameter and must be deep-cloned
+  // into the field with `be rep`, because:
+  //   - non-ref parameters are read-only borrows; moving out
+  //     with `be now v` is a borrowed-move (checker error,
+  //     tests/errors/move_borrowed_param.ptt), and would
+  //     produce a double-free at scope end since the caller
+  //     still owns its copy.
+  //   - plain `be v` for a heap-shaped IDENT trips the
+  //     ambiguous-alias check.
+  // `rep` produces a fresh, independent copy whose ownership
+  // belongs to the field. Primitive T's `rep` is a no-op
+  // value copy.
+  self.value be rep v
 }
 
 Box.get(self Box of T) T {
   give self.value
 }
 
-Both of K to V is {
+Both of K, V is {
   key K
   value V
 }
 
-Both.set_key(self ref Both of K to V, k K) {
-  self.key be now k
+Both.set_key(self ref Both of K, V, k K) {
+  // Same `rep` rule as Box.set: a non-ref heap-shaped
+  // parameter is borrowed and cannot be `now`-moved.
+  self.key be rep k
 }
 
-Both.set_value(self ref Both of K to V, v V) {
-  self.value be now v
+Both.set_value(self ref Both of K, V, v V) {
+  self.value be rep v
 }
 
-Both.get_key(self Both of K to V) K {
+Both.get_key(self Both of K, V) K {
   give self.key
 }
 
-Both.get_value(self Both of K to V) V {
+Both.get_value(self Both of K, V) V {
   give self.value
 }
 
@@ -77,16 +89,16 @@ test "two distinct instantiations of the same template" {
   assert(bs.get() eq "seven")
 }
 
-test "two-parameter generic Both of String to int" {
-  p is Both of String to int
+test "two-parameter generic Both of String, int" {
+  p is Both of String, int
   p.set_key("alice")
   p.set_value(95)
   assert(p.get_key() eq "alice")
   assert(p.get_value() eq 95)
 }
 
-test "two-parameter generic Both of int to int" {
-  p is Both of int to int
+test "two-parameter generic Both of int, int" {
+  p is Both of int, int
   p.set_key(10)
   p.set_value(20)
   assert(p.get_key() eq 10)

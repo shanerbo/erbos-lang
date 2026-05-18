@@ -1,0 +1,101 @@
+use std/string
+use std/arena
+use std/option
+
+Counter is {
+  value int
+}
+
+Counter.bump(self ref Counter) {
+  self.value be self.value + 1
+}
+
+touch(a ref Arena of Counter, id int) {
+  a.get(id).bump()
+}
+
+User is {
+  name String
+}
+
+Post is {
+  title String
+}
+
+App is {
+  users Arena of User
+  posts Arena of Post
+}
+
+test "fresh arena is empty" {
+  a is Arena of int
+  assert(a.len() eq 0)
+  assert(not a.has(0))
+}
+
+test "add returns stable index and get reads value" {
+  a is Arena of int
+  id0 is a.add(10)
+  id1 is a.add(20)
+  assert(id0 eq 0)
+  assert(id1 eq 1)
+  assert(a.get(id0) eq 10)
+  assert(a.get(id1) eq 20)
+}
+
+test "set overwrites existing slot" {
+  a is Arena of int
+  id is a.add(10)
+  a.set(id, 99)
+  assert(a.get(id) eq 99)
+}
+
+test "try_get returns None for invalid id" {
+  a is Arena of int
+  assert(a.try_get(0).is_none())
+  a.add(7)
+  assert(a.try_get(1).is_none())
+}
+
+test "clear empties arena and it remains reusable" {
+  a is Arena of int
+  a.add(1)
+  a.add(2)
+  a.clear()
+  assert(a.len() eq 0)
+  id is a.add(3)
+  assert(id eq 0)
+  assert(a.get(0) eq 3)
+}
+
+test "Arena of String stores heap-shaped values" {
+  a is Arena of String
+  id is a.add("alpha")
+  a.add("beta")
+  assert(a.get(id).equals("alpha"))
+  assert(a.get(1).equals("beta"))
+}
+
+test "ref arena param may mutate heap-shaped item through get" {
+  a is Arena of Counter
+  id is a.add(Counter(value is 0))
+  touch(ref a, id)
+  assert(a.get(id).value eq 1)
+}
+
+test "new_arena factory returns usable generic arena" {
+  a is new_arena of int ()
+  assert(a.len() eq 0)
+  id is a.add(5)
+  assert(id eq 0)
+}
+
+test "App with multiple arenas models long-lived shared state" {
+  app is App()
+  uid is app.users.add(User(name is "erbos"))
+  pid is app.posts.add(Post(title is "first"))
+  assert(uid eq 0)
+  assert(pid eq 0)
+  assert(app.users.get(uid).name.equals("erbos"))
+  assert(app.posts.get(pid).title.equals("first"))
+}

@@ -1,0 +1,13 @@
+// Compile-fail: Stack.push takes `ref self` and must be
+// rejected through a non-ref parameter.
+
+use std/stack
+
+bad(s Stack of int) {
+  s.push(1)
+}
+
+spark {
+  s is Stack of int
+  bad(s)
+}

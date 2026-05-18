@@ -1,0 +1,14 @@
+// Compile-fail: List.remove takes `ref self` and must be
+// rejected on a non-ref parameter receiver.
+
+use std/list
+
+drop_first(xs List of int) {
+  xs.remove(0)
+}
+
+spark {
+  xs is List of int
+  xs.push(1)
+  drop_first(xs)
+}

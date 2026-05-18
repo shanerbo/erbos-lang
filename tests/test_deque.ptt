@@ -1,0 +1,198 @@
+use std/string
+use std/deque
+use std/option
+
+Counter is {
+  value int
+}
+
+Counter.bump(self ref Counter) {
+  self.value be self.value + 1
+}
+
+touch_front(d ref Deque of Counter) {
+  d.get(0).bump()
+}
+
+test "fresh deque reports empty + zero cap" {
+  d is Deque of int
+  assert(d.empty())
+  assert(d.len() eq 0)
+  assert(d.cap() eq 0)
+}
+
+test "push_back plus pop_front is FIFO" {
+  d is Deque of int
+  d.push_back(1)
+  d.push_back(2)
+  d.push_back(3)
+  assert(d.pop_front() eq 1)
+  assert(d.pop_front() eq 2)
+  assert(d.pop_front() eq 3)
+  assert(d.empty())
+}
+
+test "push_front plus pop_front is LIFO at the front" {
+  d is Deque of int
+  d.push_front(1)
+  d.push_front(2)
+  d.push_front(3)
+  assert(d.pop_front() eq 3)
+  assert(d.pop_front() eq 2)
+  assert(d.pop_front() eq 1)
+  assert(d.empty())
+}
+
+test "push_back plus pop_back is LIFO at the back" {
+  d is Deque of int
+  d.push_back(1)
+  d.push_back(2)
+  d.push_back(3)
+  assert(d.pop_back() eq 3)
+  assert(d.pop_back() eq 2)
+  assert(d.pop_back() eq 1)
+  assert(d.empty())
+}
+
+test "front and back do not consume" {
+  d is Deque of int
+  d.push_back(7)
+  d.push_back(8)
+  d.push_front(6)
+  assert(d.front() eq 6)
+  assert(d.back() eq 8)
+  assert(d.len() eq 3)
+}
+
+test "try pops on empty deque return None" {
+  d is Deque of int
+  assert(d.try_pop_front().is_none())
+  assert(d.try_pop_back().is_none())
+}
+
+test "try pops return values from both ends" {
+  d is Deque of int
+  d.push_back(10)
+  d.push_back(20)
+  d.push_front(5)
+  assert(d.try_pop_front().unwrap() eq 5)
+  assert(d.try_pop_back().unwrap() eq 20)
+  assert(d.try_pop_front().unwrap() eq 10)
+  assert(d.empty())
+}
+
+test "get sees logical order after front pushes and back pushes" {
+  d is Deque of int
+  d.push_back(2)
+  d.push_back(3)
+  d.push_front(1)
+  d.push_front(0)
+  assert(d.get(0) eq 0)
+  assert(d.get(1) eq 1)
+  assert(d.get(2) eq 2)
+  assert(d.get(3) eq 3)
+}
+
+test "wraparound at the back preserves logical order" {
+  d is Deque of int
+  through (i from 0 to 8 by 1) { d.push_back(i) }
+  through (j from 0 to 4 by 1) { assert(d.pop_front() eq j) }
+  through (k from 8 to 12 by 1) { d.push_back(k) }
+  assert(d.len() eq 8)
+  through (m from 4 to 12 by 1) {
+    assert(d.pop_front() eq m)
+  }
+  assert(d.empty())
+}
+
+test "wraparound at the front preserves logical order" {
+  d is deque_with_cap of int (8)
+  through (i from 0 to 4 by 1) { d.push_back(i) }
+  assert(d.pop_back() eq 3)
+  assert(d.pop_back() eq 2)
+  d.push_front(100)
+  d.push_front(101)
+  d.push_front(102)
+  assert(d.front() eq 102)
+  assert(d.back() eq 1)
+  assert(d.pop_front() eq 102)
+  assert(d.pop_front() eq 101)
+  assert(d.pop_front() eq 100)
+  assert(d.pop_front() eq 0)
+  assert(d.pop_front() eq 1)
+  assert(d.empty())
+}
+
+test "growth after wraparound and push_front preserves order" {
+  d is Deque of int
+  through (i from 0 to 8 by 1) { d.push_back(i) }
+  through (j from 0 to 4 by 1) { assert(d.pop_front() eq j) }
+  through (k from 8 to 12 by 1) { d.push_back(k) }
+  d.push_front(100)
+  assert(d.len() eq 9)
+  assert(d.pop_front() eq 100)
+  through (m from 4 to 12 by 1) {
+    assert(d.pop_front() eq m)
+  }
+  assert(d.empty())
+}
+
+test "reserve pre-allocates without changing logical contents" {
+  d is Deque of int
+  d.reserve(64)
+  assert(d.cap() eq 64)
+  assert(d.empty())
+  through (i from 0 to 32 by 1) { d.push_back(i) }
+  assert(d.len() eq 32)
+  through (j from 0 to 32 by 1) {
+    assert(d.pop_front() eq j)
+  }
+}
+
+test "clear empties deque and preserves usability" {
+  d is Deque of int
+  d.push_back(1)
+  d.push_back(2)
+  before is d.cap()
+  d.clear()
+  assert(d.empty())
+  assert(d.cap() eq before)
+  d.push_front(9)
+  assert(d.front() eq 9)
+}
+
+test "new_deque factory returns a fresh empty deque" {
+  d is new_deque of int ()
+  assert(d.empty())
+  d.push_back(7)
+  assert(d.front() eq 7)
+}
+
+test "deque_with_cap pre-allocates requested capacity" {
+  d is deque_with_cap of int (32)
+  assert(d.cap() eq 32)
+  through (i from 0 to 16 by 1) { d.push_back(i) }
+  assert(d.len() eq 16)
+  assert(d.front() eq 0)
+  assert(d.back() eq 15)
+}
+
+test "Deque of String handles heap-shaped values" {
+  d is Deque of String
+  d.push_back("b")
+  d.push_front("a")
+  d.push_back("c")
+  assert(d.front().equals("a"))
+  assert(d.get(1).equals("b"))
+  assert(d.back().equals("c"))
+  assert(d.pop_back().equals("c"))
+  assert(d.pop_front().equals("a"))
+  assert(d.pop_front().equals("b"))
+}
+
+test "ref Deque param may mutate heap-shaped element through get" {
+  d is Deque of Counter
+  d.push_back(Counter(value is 0))
+  touch_front(ref d)
+  assert(d.get(0).value eq 1)
+}

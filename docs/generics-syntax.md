@@ -13,7 +13,7 @@ Box of T is {
 }
 
 // Two type parameters
-Map of K to V is {
+Map of K, V is {
   count int
   keys  array of K
   vals  array of V
@@ -28,35 +28,33 @@ Box.get(self Box of T) T {
   give self.value
 }
 
-Map.set(self ref Map of K to V, k K, v V) {
+Map.set(self ref Map of K, V, k K, v V) {
   // ...
 }
 
 // Use sites — auto-construct (no parens)
 xs is List of int
-m is Map of String to int
+m is Map of String, int
 b is Box of int
 b.value be 42
 
 // Nested — no parens needed; right-associative
 ll is List of List of int
-mml is Map of String to List of int
-deep is Map of String to Map of int to String
+mml is Map of String, List of int
+deep is Map of String, Map of int, String
 ```
 
 ## Rules
 
-1. **Two connectives:** `of` introduces a type parameter; `of … to …`
-   introduces a key→value pair. There is no `,` in type position
-   anywhere in the language.
-2. **Maximum two parameters per generic.** `T of A` (1 param) or
-   `T of A to B` (2 params). If a 3-param generic is ever needed,
-   we'll add a third connective at that point — until then, users
-   wrap multiple values in named structs.
+1. **One connective:** `of` introduces the type-argument list.
+   Additional type arguments are separated with commas:
+   `Type of A`, `Type of A, B`, `Type of A, B, C`.
+2. **Commas are the only multi-argument separator.** `to` is not valid in
+   type position. It remains valid for map literals (`["k" to 1]`) and
+   range loops (`through (i from 0 to n by 1)`).
 3. **No `<>` anywhere.** Hard cut, no transition.
-4. **No parens around type arguments.** The grammar is unambiguous
-   without them — `of` and `to` are right-associative and only
-   chain through the connectives, so `List of List of int` parses
+4. **No parens around type arguments.** Nested generic arguments are
+   parsed through the `of` chains, so `List of List of int` parses
    exactly one way.
 5. **Auto-construct on typed declaration.** `x is List of int` with
    no initializer auto-emits the constructor call.
@@ -69,45 +67,46 @@ deep is Map of String to Map of int to String
 
 - `Box of int` → `_Box__int`
 - `Box of String` → `_Box__String`
-- `Map of String to int` → `_Map__String__int`
+- `Map of String, int` → `_Map__String__int`
 - `List of List of int` → `_List__List__int`
-- `Map of String to List of int` → `_Map__String__List__int`
+- `Map of String, List of int` → `_Map__String__List__int`
 
 `to` and `of` both lower to `__` in the mangled name. The mangling
-is positional, so `Map of int to String` and `Map of String to int`
+is positional, so `Map of int, String` and `Map of String, int`
 produce different symbols.
 
-## Why no commas
+## Why commas
 
-A comma in type position introduces real ambiguity at call sites:
+Earlier Potato used `Map of K, V` for two-parameter types. That read
+nicely for maps, but it did not generalize to other two-parameter types
+such as `Result`, `Pair`, or user-defined structs. Potato now uses one
+generic spelling everywhere:
 
 ```
-// Hypothetical — NOT supported
-f(Map of K, V, x)
+Map of K, V
+Result of T, E
+Pair of A, B
 ```
 
-Is the third arg `V` or is `V` part of the map type and `x` is the
-third? Without commas the question never arises. We pay a small cost
-(only 1 and 2 parameter generics) for a major grammar simplification.
+The type's name carries the semantics. `Map` means key/value, `Result`
+means success/error, and `Pair` means first/second.
 
 ## Why no parens
 
 Same reasoning: zero parens in type position means zero precedence
-rules to memorise. The right-associative `of` / `to` chaining is
-strictly LL(1) parseable and reads naturally:
+rules to memorise. The right-associative `of` chaining reads naturally:
 
 ```
-List of Map of int to List of str
+List of Map of int, List of str
 //   parses as:
-List of (Map of int to (List of str))
+List of (Map of int, (List of str))
 ```
 
-The parser greedily consumes after `of` / `to` until it hits
-something that can't be a type continuation (newline, `is`, `=`,
-`(`, `)`, etc).
+The parser consumes comma-separated type arguments after `of` while the
+next token still looks like a type argument.
 
 ## No Pair / tuple types
 
-`Map of K to V` stores its entries as two parallel `array of K` and
+`Map of K, V` stores its entries as two parallel `array of K` and
 `array of V` fields, not as an array of `Pair<K, V>`. Users who
 want a 2-tuple define their own named struct.

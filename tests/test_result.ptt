@@ -1,0 +1,101 @@
+// Framework tests for std/result (Result of T, E).
+//
+// Coverage: ok/err branches, unwrap success, unwrap_err success,
+// unwrap panic on Err (covered by tests/errors/result_unwrap_err_panics.ptt),
+// unwrap_err panic on Ok (covered by tests/errors/result_unwrap_err_on_ok_panics.ptt),
+// heap-shaped T and E payloads.
+//
+// Construction: bare-factory call (`ok of int, String (...)`,
+// `err of int, String (...)`) and direct variant construction
+// (`Result of int, String .Ok(...)`, `... .Err(...)`).
+
+use std/string
+use std/result
+
+test "ok factory returns Ok(value)" {
+  r is ok of int, String (7)
+  assert(r.is_ok())
+  assert(not r.is_err())
+  assert(r.unwrap() eq 7)
+}
+
+test "err factory returns Err(error)" {
+  r is err of int, String ("nope")
+  assert(r.is_err())
+  assert(not r.is_ok())
+  assert(r.unwrap_err().equals("nope"))
+}
+
+test "Result of int, String .Ok direct variant constructor" {
+  r is Result of int, String .Ok(42)
+  assert(r.is_ok())
+  assert(r.unwrap() eq 42)
+}
+
+test "Result of int, String .Err direct variant constructor" {
+  r is Result of int, String .Err("boom")
+  assert(r.is_err())
+  assert(r.unwrap_err().equals("boom"))
+}
+
+test "unwrap_or returns inner Ok value" {
+  r is ok of int, String (11)
+  assert(r.unwrap_or(0) eq 11)
+}
+
+test "unwrap_or returns fallback on Err" {
+  r is err of int, String ("nope")
+  assert(r.unwrap_or(99) eq 99)
+}
+
+test "Result of String, int — heap-shaped Ok payload" {
+  r is ok of String, int ("payload")
+  assert(r.is_ok())
+  assert(r.unwrap().equals("payload"))
+}
+
+test "Result of String, String — both branches heap-shaped, Ok side" {
+  r is ok of String, String ("good")
+  assert(r.unwrap().equals("good"))
+}
+
+test "Result of String, String — both branches heap-shaped, Err side" {
+  r is err of String, String ("bad")
+  assert(r.unwrap_err().equals("bad"))
+}
+
+test "ok factory deep-clones a heap-shaped value" {
+  src is "owned " + "ok"
+  r is ok of String, int (src)
+  assert(r.is_ok())
+  assert(r.unwrap().equals("owned ok"))
+  // src is independent: the variant constructor `.Ok(src)`
+  // (called inside the factory) copies the reference into its
+  // own freshly-allocated enum block; the caller still owns
+  // `src` and can read it.
+  assert(src.equals("owned ok"))
+}
+
+test "err factory deep-clones a heap-shaped value" {
+  src is "owned " + "err"
+  r is err of int, String (src)
+  assert(r.is_err())
+  assert(r.unwrap_err().equals("owned err"))
+  assert(src.equals("owned err"))
+}
+
+test "stress: 256 alternations of Ok / Err" {
+  through (i from 0 to 256 by 1) {
+    r is ok of int, String (i)
+    assert(r.is_ok())
+    assert(r.unwrap() eq i)
+    e is err of int, String ("e")
+    assert(e.is_err())
+    assert(e.unwrap_err().equals("e"))
+  }
+}
+
+test "unwrap_or on Result of int, String with literal-derived fallback" {
+  r is err of int, String ("ignored")
+  assert(r.unwrap_or(123) eq 123)
+}

@@ -68,8 +68,8 @@ static TokenType keyword_type(const char *word) {
     if (!strcmp(word, "false"))   return TOK_FALSE;
     if (!strcmp(word, "nil"))     return TOK_NIL;
     // ε1: `list` / `map` / `imap` are no longer reserved keywords.
-    // The legacy `list of T` / `map of K to V` / `imap of int to V`
-    // forms are gone — users now write `List of T` / `Map of K to V`
+    // The legacy `list of T` / `map of K, V` / `imap of int, V`
+    // forms are gone — users now write `List of T` / `Map of K, V`
     // / `StringMap of V` (stdlib types from std/list / std/map /
     // std/string_map). The TOK_LIST / TOK_MAP / TOK_IMAP tokens
     // survive in token.h for cosmetic compatibility with old switch

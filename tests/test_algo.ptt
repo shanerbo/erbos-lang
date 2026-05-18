@@ -1,0 +1,41 @@
+use std/list
+use std/algo
+
+test "sort_ints handles empty and single-element lists" {
+  xs is List of int
+  algo.sort_ints(ref xs)
+  assert(xs.len() eq 0)
+  xs.push(7)
+  algo.sort_ints(ref xs)
+  assert(xs.get(0) eq 7)
+}
+
+test "sort_ints orders duplicates and reverse-sorted data" {
+  xs is List of int
+  xs.push(5)
+  xs.push(1)
+  xs.push(4)
+  xs.push(1)
+  xs.push(3)
+  algo.sort_ints(ref xs)
+  assert(xs.get(0) eq 1)
+  assert(xs.get(1) eq 1)
+  assert(xs.get(2) eq 3)
+  assert(xs.get(3) eq 4)
+  assert(xs.get(4) eq 5)
+}
+
+test "binary search and bounds over sorted ints" {
+  xs is List of int
+  xs.push(1)
+  xs.push(2)
+  xs.push(2)
+  xs.push(4)
+  xs.push(7)
+  assert(algo.binary_search_int(xs, 4) eq 3)
+  assert(algo.binary_search_int(xs, 3) eq 0 - 1)
+  assert(algo.lower_bound_int(xs, 2) eq 1)
+  assert(algo.upper_bound_int(xs, 2) eq 3)
+  assert(algo.lower_bound_int(xs, 3) eq 3)
+  assert(algo.upper_bound_int(xs, 7) eq 5)
+}
