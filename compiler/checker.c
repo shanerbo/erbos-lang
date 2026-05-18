@@ -197,6 +197,15 @@ static int is_struct(Checker *c, const char *name) {
     return 0;
 }
 
+static int is_enum_type(Checker *c, const char *name) {
+    if (!c->program) return 0;
+    for (int i = 0; i < c->program->program.enums.count; i++) {
+        Node *e = c->program->program.enums.items[i];
+        if (!strcmp(e->enum_def.name, name)) return 1;
+    }
+    return 0;
+}
+
 static StructInfo *find_struct(Checker *c, const char *name) {
     for (int i = 0; i < c->struct_count; i++)
         if (!strcmp(c->structs[i].name, name)) return &c->structs[i];
@@ -652,14 +661,26 @@ static Type check_expr(Checker *c, Node *n) {
             // would lose its statically-known result type.
             if (n->method_call.object->type == NODE_IDENT) {
                 const char *obj_name = n->method_call.object->ident.name;
-                if (is_struct(c, obj_name)) {
-                    // It's a known struct or enum name. If it has an enum
-                    // entry registered, treat this as an enum constructor:
-                    // type-check the args (best effort) and return the
-                    // enum's named struct type.
+                Type sym_t = get_sym(c, obj_name);
+                if (sym_t.kind == TYPE_UNKNOWN && is_enum_type(c, obj_name)) {
+                    // It's a known enum name used as a variant
+                    // constructor receiver. Type-check the args
+                    // (best effort) and return the enum's named
+                    // struct type.
                     for (int j = 0; j < n->method_call.arg_count; j++)
                         check_expr(c, n->method_call.args[j]);
                     return make_struct(obj_name);
+                }
+                if (sym_t.kind == TYPE_UNKNOWN && is_struct(c, obj_name)) {
+                    fprintf(stderr,
+                        "error:%d: type-receiver method calls are not allowed here\n",
+                        n->line);
+                    fprintf(stderr,
+                        "  help: construct a value first, then call `%s(...)` on that value\n",
+                        m);
+                    fprintf(stderr,
+                        "  help: only enum variants support the `Type.method(...)` form\n");
+                    exit(1);
                 }
             }
 

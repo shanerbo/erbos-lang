@@ -325,10 +325,9 @@ static Node *parse_primary(Parser *p) {
                     return n;
                 }
             }
-            // Parametric-type-as-receiver: `Option of int .Some(7)`,
-            // `Option of int .None`, or future static-method calls
-            // like `List of int .with_cap(64)`. parse_type_name reads
-            // the type expression in legacy `<>` form; we emit a bare
+            // Parametric-type-as-receiver: `Option of int .Some(7)`
+            // or `Option of int .None()`. parse_type_name reads the
+            // type expression in legacy `<>` form; we emit a bare
             // IDENT node naming that type so the existing dot-chain
             // logic builds a NODE_METHOD_CALL with the type as the
             // receiver. The monomorph pass mangles the IDENT name to
@@ -1014,10 +1013,10 @@ static Node *parse_stmt(Parser *p) {
                 char *parsed_type = parse_type_name(p);
                 if (at(p, TOK_LPAREN) || at(p, TOK_DOT)) {
                     // Explicit constructor call (`Box of int (...)`)
-                    // or parametric type used as a receiver (`Option
-                    // of int .Some(7)`, `List of int .with_cap(8)`)
-                    // follows; rewind so parse_expr below sees the
-                    // full expression.
+                    // or parametric type used as an enum-variant
+                    // receiver (`Option of int .Some(7)`) follows;
+                    // rewind so parse_expr below sees the full
+                    // expression.
                     p->pos = saved_pos;
                     free(parsed_type);
                 } else {

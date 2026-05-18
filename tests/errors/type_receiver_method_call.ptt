@@ -1,0 +1,6 @@
+use std/list
+
+spark {
+  xs is List of int .reserve(64)
+  yell(xs.len())
+}
