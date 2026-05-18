@@ -451,6 +451,63 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
             return dst;
         }
         case NODE_BINARY: {
+            // Short-circuit `and` / `or`. The right operand
+            // must NOT be evaluated when the left already
+            // determines the outcome — this is what user code
+            // relies on for guards like
+            //   `i gt 0 and arr.byte_at(i - 1) eq 47`
+            // and
+            //   `arr.empty() or arr.get(0) eq 0`
+            // Without short-circuit, the right operand fires
+            // its `_panic_oob` even though the guard already
+            // refused the access. (Documented in
+            // CLAUDE.md / docs/keywords.md as short-circuit;
+            // the previous emit was straight-line.)
+            //
+            // Lowering: stash the result into a hidden stack
+            // slot; if the left operand short-circuits the
+            // result, jump past the right-operand evaluation.
+            //
+            //   AND: result = left
+            //        if result != 0 jump eval_right
+            //                       else jump end
+            //   eval_right: result = right
+            //   end: ... result is the final answer
+            //
+            //   OR:  result = left
+            //        if result != 0 jump end
+            //                       else jump eval_right
+            //   eval_right: result = right
+            //   end:
+            if (n->binary.op == TOK_AND || n->binary.op == TOK_OR) {
+                int slot = c->slot_next++;
+                VReg left = gen_expr(c, n->binary.left);
+                emit(c, (IRInst){.op = IR_STORE_LOCAL, .a = left, .imm = slot});
+                int eval_right_lbl = new_label(c);
+                int end_lbl = new_label(c);
+                if (n->binary.op == TOK_AND) {
+                    // left != 0 → eval right; left == 0 → end (result = left = 0)
+                    emit(c, (IRInst){.op = IR_BR_COND, .a = left,
+                                     .label = eval_right_lbl, .label2 = end_lbl});
+                } else {
+                    // left != 0 → end (result = left = truthy);
+                    // left == 0 → eval right
+                    emit(c, (IRInst){.op = IR_BR_COND, .a = left,
+                                     .label = end_lbl, .label2 = eval_right_lbl});
+                }
+                IRBlock *eval_right_b = new_block(c);
+                eval_right_b->label = eval_right_lbl;
+                switch_block(c, eval_right_b);
+                VReg right = gen_expr(c, n->binary.right);
+                emit(c, (IRInst){.op = IR_STORE_LOCAL, .a = right, .imm = slot});
+                emit(c, (IRInst){.op = IR_BR, .label = end_lbl});
+                IRBlock *end_b = new_block(c);
+                end_b->label = end_lbl;
+                switch_block(c, end_b);
+                VReg result = new_vreg(c);
+                emit(c, (IRInst){.op = IR_LOAD_LOCAL, .dst = result, .imm = slot});
+                return result;
+            }
             VReg a = gen_expr(c, n->binary.left);
             VReg b = gen_expr(c, n->binary.right);
             // String operators: `+` -> _str_concat, `eq`/`ne` -> _str_eq

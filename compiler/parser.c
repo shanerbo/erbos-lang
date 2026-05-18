@@ -794,9 +794,31 @@ static Node *parse_if_continuation(Parser *p, Node *first_cond, int line) {
     n->if_stmt.branch_count = 1;
     while (1) {
         int saved = p->pos;
-        skip_newlines(p);
+        // A new statement on its own line is NOT an else-if of the
+        // previous if. Two consecutive `cond ?{ ... }` statements
+        // separated by a newline must parse as two independent
+        // ifs. The previous heuristic peeked across the newline
+        // gap looking for a `?` and incorrectly attached the next
+        // statement as an else-if, so the body only ran when the
+        // first cond was false. (Codex audit: this silently broke
+        // any function that had two guarded blocks back to back —
+        // the second one was running in the else of the first.)
+        //
+        // Detect the boundary: if there is at least one TOK_NEWLINE
+        // between the current position (which should still be the
+        // closing `}` of the previous body) and the next non-newline
+        // token, the next thing is a fresh statement. Without a
+        // newline, keep the legacy heuristic for inline else-if
+        // chains like `} cond ?{ } nah { }` that some tests use.
+        int saw_newline_gap = 0;
+        while (p->tokens[p->pos].type == TOK_NEWLINE) {
+            saw_newline_gap = 1;
+            p->pos++;
+        }
         if (at(p, TOK_NAH)) { p->pos++; n->if_stmt.nah_body = parse_block(p); break; }
         if (at(p, TOK_EOF) || at(p, TOK_RBRACE)) { p->pos = saved; break; }
+        // Newline gap → next is a fresh statement, not an else-if.
+        if (saw_newline_gap) { p->pos = saved; break; }
         // Heuristic: this is an else-if only if a `?` appears before the next newline
         int test_pos = p->pos;
         int found_q = 0;

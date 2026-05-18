@@ -380,24 +380,40 @@ Tests in place:
 - heap-shaped value type (`Map of int, String`) survives growth
 - negative-key hash bucket index stays in range
 
-### `Set of T`
+### `Set of T` — implemented
 
-Purpose: unique-value collection.
+Purpose: unique-value collection. Same open-addressed hash
+table machinery as `Map`, no value array.
 
-Required API:
+Shipped API (all required entries present in `std/set.ptt`,
+covered by `tests/test_set.ptt`):
 
-- zero-value formation: `s is Set of T()`
-- `Set.reserve(self ref Set of T, cap int)`
-- `Set.len(self Set of T) int`
-- `Set.empty(self Set of T) bool`
-- `Set.add(self ref Set of T, v T) bool`
-- `Set.has(self Set of T, v T) bool`
-- `Set.remove(self ref Set of T, v T) bool`
-- `Set.clear(self ref Set of T)`
-- `Set.values(self Set of T) List of T`
-- `Set.union(self Set of T, other Set of T) Set of T`
-- `Set.intersect(self Set of T, other Set of T) Set of T`
-- `Set.difference(self Set of T, other Set of T) Set of T`
+- zero-value formation: `s is Set of T()` ✓
+- `Set.reserve(self ref Set of T, cap int)` ✓
+- `Set.len(self Set of T) int` ✓
+- `Set.cap(self Set of T) int` ✓ (additional, parallels Map)
+- `Set.empty(self Set of T) bool` ✓
+- `Set.add(self ref Set of T, v T) bool` ✓ (deep-clones v)
+- `Set.has(self Set of T, v T) bool` ✓
+- `Set.remove(self ref Set of T, v T) bool` ✓ (tombstone)
+- `Set.clear(self ref Set of T)` ✓
+- `Set.values(self Set of T) List of T` ✓
+- `Set.union(self Set of T, other Set of T) Set of T` ✓
+- `Set.intersect(self Set of T, other Set of T) Set of T` ✓
+  (iterates the smaller side for fewer hash probes)
+- `Set.difference(self Set of T, other Set of T) Set of T` ✓
+
+Compiler/runtime fix landed alongside Set: the parser's
+if-continuation heuristic was greedily attaching the next
+statement as an else-if when the gap had been newline-only.
+Two consecutive guarded blocks
+`a.data ne 0 ?{ ... }\n other.data ne 0 ?{ ... }` were
+parsing as a single if/else-if chain, so the second block ran
+only when the first failed. Fixed in
+`compiler/parser.c::parse_if_continuation`: a newline gap
+terminates the if. Without this fix, every Set algebra
+operation that uses two guards in sequence (e.g. `union`)
+silently dropped half its work.
 
 Algorithm / representation:
 
@@ -554,21 +570,42 @@ Tests:
 - heap-shaped items
 - example showing `App` struct with multiple arenas
 
-### `Pool of T`
+### `Pool of T` — implemented
 
 Purpose: arena with deletion and slot reuse.
 
-Required API:
+Shipped API (all required entries present in `std/pool.ptt`,
+covered by `tests/test_pool.ptt`):
 
-- zero-value formation: `p is Pool of T()`
-- `Pool.reserve(self ref Pool of T, cap int)`
-- `Pool.insert(self ref Pool of T, value T) int`
-- `Pool.remove(self ref Pool of T, id int) bool`
-- `Pool.has(self Pool of T, id int) bool`
-- `Pool.get(self Pool of T, id int) T`
-- `Pool.try_get(self Pool of T, id int) Option of T`
-- `Pool.set(self ref Pool of T, id int, value T)`
-- `Pool.clear(self ref Pool of T)`
+- zero-value formation: `p is Pool of T()` ✓
+- `Pool.reserve(self ref Pool of T, cap int)` ✓
+- `Pool.len(self Pool of T) int` ✓ (live slots)
+- `Pool.slot_count(self Pool of T) int` ✓ (high-water mark)
+- `Pool.empty(self Pool of T) bool` ✓
+- `Pool.insert(self ref Pool of T, value T) int` ✓ (reuses freed)
+- `Pool.remove(self ref Pool of T, id int) bool` ✓
+- `Pool.has(self Pool of T, id int) bool` ✓
+- `Pool.get(self Pool of T, id int) T` ✓ (panics on stale id)
+- `Pool.try_get(self Pool of T, id int) Option of T` ✓
+- `Pool.set(self ref Pool of T, id int, value T)` ✓
+- `Pool.clear(self ref Pool of T)` ✓
+
+Generational handles are not part of the first version; a
+stale handle whose slot has been reused silently addresses
+the new occupant. Future upgrade per the spec:
+generation-tagged ids that reject stale reads.
+
+Tests in place:
+
+- happy-path insert/get/set/has/try_get/remove/clear/reserve
+- monotonically increasing ids when freelist is empty
+- freelist reuse: remove slot, insert reuses same id, slot
+  count doesn't grow
+- panic on `get` of a removed slot
+  (`tests/errors/pool_get_stale_panics.ptt`)
+- heap-shaped T (Pool of String): mass insert + remove evens +
+  re-insert; high-water mark stays fixed
+- live count vs slot count after partial removes
 
 Algorithm / representation:
 
@@ -689,32 +726,54 @@ Tests:
 
 ## Phase 6: Files and Paths
 
-### `Path`
+### `Path` — implemented (free-function module)
 
 Purpose: pure path string manipulation, no filesystem access.
 
-Required API:
+Shape decision: Potato has no static methods, so the spec's
+`Path.join(...)` / `Path.basename(...)` lower to module-prefixed
+free-function calls — `use std/path` then `path.join(base, child)`
+etc. The functions live at top level of `std/path.ptt`.
 
-- `Path.join(base String, child String) String`
-- `Path.basename(path String) String`
-- `Path.dirname(path String) String`
-- `Path.extension(path String) String`
-- `Path.normalize(path String) String`
-- `Path.is_absolute(path String) bool`
+Shipped API (all required entries present in `std/path.ptt`,
+covered by `tests/test_path.ptt`):
 
-Algorithm / representation:
+- `path.join(base String, child String) String` ✓
+- `path.basename(p String) String` ✓
+- `path.dirname(p String) String` ✓
+- `path.extension(p String) String` ✓
+- `path.normalize(p String) String` ✓
+- `path.is_absolute(p String) bool` ✓
 
-- operate on `String`
-- scan for `/`
-- normalize with stack of path segments
-- no syscalls
+Compiler/runtime fixes that landed alongside Path:
 
-Tests:
+1. Short-circuit `and` / `or`. The previous emit was straight
+   line — both operands always evaluated, even when the left
+   already determined the result. Path's basename / dirname /
+   normalize all guard with patterns like
+   `i gt 0 and arr.byte_at(i - 1) eq 47`, which crash without
+   short-circuit. Fixed in `compiler/irgen.c::NODE_BINARY` to
+   stash the left-operand result into a hidden stack slot,
+   conditionally evaluate the right operand, and load back the
+   slot for the final result.
+2. `_String_yell` now treats `count == 0` (or `data == 0`) as
+   a no-op write before emitting the trailing newline. Without
+   this, `yell(String())` (a freshly allocated empty String,
+   produced for example by `path.basename("/")`) crashed
+   dereferencing the null `data` pointer.
 
-- absolute and relative paths
-- repeated slashes
-- `.` and `..`
-- empty path
+Tests in place (~24 cases):
+
+- absolute / relative path detection
+- join: simple, trailing-slash collapse, absolute-child wins,
+  empty operands
+- basename: typical, trailing slash collapsed, root, empty
+- dirname: typical, no-slash relative, trailing slash, root,
+  absolute-root
+- extension: typical, no-extension, hidden file, trailing dot
+- normalize: redundant slashes, dot / dotdot segments,
+  dotdot-at-root, leading dotdot in relative paths preserved,
+  trailing slash dropped, empty, absolute root
 
 ### `File`
 
@@ -878,14 +937,17 @@ Completed:
 6. `ByteBuffer`
 7. `RingBuffer`
 8. int-first sorting/search helpers and current `std/math`
+9. open-addressed hash `Map` (replaces the linear-scan map)
+10. `Set of T`
+11. `Pool of T`
+12. `Path` (free-function module)
 
 Remaining before calling the stdlib consolidated:
 
-1. hash `Map`
-2. `Set`
-3. `Path`
-4. `Pool`
-5. `File`, `Reader`, `Writer`
+1. `File`, `Reader`, `Writer` — requires runtime syscall support;
+   kernel-side primitives (`open`/`read`/`write`/`close`) and
+   the IR-level fallible-call story still need to land before
+   user-facing I/O can ship.
 
 Optional later, only if a concrete workload justifies them:
 
@@ -895,10 +957,5 @@ Optional later, only if a concrete workload justifies them:
 
 Do not claim stdlib completion while:
 
-- `Map.get` uses `0` as the only missing-key signal
-- `Map` remains the only serious associative container
-- `Set` is missing
-- `Path` is missing
-- `Pool` is missing if deletion/reuse is part of the target story
 - user-facing file I/O is missing
 - `make test` fails

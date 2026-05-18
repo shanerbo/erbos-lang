@@ -1,0 +1,138 @@
+// Framework tests for std/path — pure-string path manipulation.
+//
+// API surface: free functions module-prefixed via `path.<name>`
+// since Potato has no static methods. All operations work on
+// `String`; nothing touches the filesystem.
+
+use std/string
+use std/path
+
+test "is_absolute" {
+  assert(path.is_absolute("/"))
+  assert(path.is_absolute("/a"))
+  assert(path.is_absolute("/a/b"))
+  assert(not path.is_absolute(""))
+  assert(not path.is_absolute("a"))
+  assert(not path.is_absolute("a/b"))
+  assert(not path.is_absolute("./a"))
+}
+
+test "join: simple cases" {
+  assert(path.join("a", "b").equals("a/b"))
+  assert(path.join("a/b", "c").equals("a/b/c"))
+}
+
+test "join: collapses an existing trailing slash" {
+  assert(path.join("a/", "b").equals("a/b"))
+  assert(path.join("a/b/", "c").equals("a/b/c"))
+}
+
+test "join: absolute child wins" {
+  assert(path.join("a", "/b").equals("/b"))
+  assert(path.join("a/b", "/c").equals("/c"))
+}
+
+test "join: empty operands" {
+  assert(path.join("", "a").equals("a"))
+  assert(path.join("a", "").equals("a"))
+  assert(path.join("", "").equals(""))
+}
+
+test "basename: typical" {
+  assert(path.basename("a").equals("a"))
+  assert(path.basename("a/b").equals("b"))
+  assert(path.basename("a/b/c.txt").equals("c.txt"))
+  assert(path.basename("/a/b/c").equals("c"))
+}
+
+test "basename: trailing slash collapsed" {
+  assert(path.basename("a/b/").equals("b"))
+  assert(path.basename("a/b///").equals("b"))
+}
+
+test "basename: empty / root" {
+  assert(path.basename("").equals(""))
+  assert(path.basename("/").equals(""))
+}
+
+test "dirname: typical" {
+  assert(path.dirname("a/b").equals("a"))
+  assert(path.dirname("a/b/c").equals("a/b"))
+  assert(path.dirname("/a/b").equals("/a"))
+}
+
+test "dirname: no slash → empty" {
+  assert(path.dirname("a").equals(""))
+}
+
+test "dirname: trailing slash collapsed" {
+  assert(path.dirname("a/b/").equals("a"))
+}
+
+test "dirname: empty / root" {
+  assert(path.dirname("").equals(""))
+  assert(path.dirname("/").equals("/"))
+  assert(path.dirname("/a").equals("/"))
+}
+
+test "extension: typical" {
+  assert(path.extension("foo.txt").equals("txt"))
+  assert(path.extension("a/b.tar.gz").equals("gz"))
+  assert(path.extension("dir/file.md").equals("md"))
+}
+
+test "extension: no extension" {
+  assert(path.extension("Makefile").equals(""))
+  assert(path.extension("a/b/Makefile").equals(""))
+  assert(path.extension("").equals(""))
+}
+
+test "extension: hidden file (leading dot, no other)" {
+  assert(path.extension(".hidden").equals(""))
+  assert(path.extension("a/.hidden").equals(""))
+}
+
+test "extension: trailing dot is empty extension" {
+  assert(path.extension("x.").equals(""))
+}
+
+test "normalize: collapses redundant slashes" {
+  assert(path.normalize("a//b").equals("a/b"))
+  assert(path.normalize("a///b//c").equals("a/b/c"))
+}
+
+test "normalize: drops dot segments" {
+  assert(path.normalize("a/./b").equals("a/b"))
+  assert(path.normalize("./a/./b/.").equals("a/b"))
+}
+
+test "normalize: resolves dotdot segments" {
+  assert(path.normalize("a/b/../c").equals("a/c"))
+  assert(path.normalize("a/b/c/../../d").equals("a/d"))
+  assert(path.normalize("a/../b").equals("b"))
+}
+
+test "normalize: dotdot at root" {
+  assert(path.normalize("/..").equals("/"))
+  assert(path.normalize("/a/../..").equals("/"))
+}
+
+test "normalize: leading dotdot in relative paths is preserved" {
+  // Relative paths can refer above their starting point.
+  assert(path.normalize("../a").equals("../a"))
+  assert(path.normalize("a/../..").equals(".."))
+  assert(path.normalize("../../a").equals("../../a"))
+}
+
+test "normalize: trailing slash dropped" {
+  assert(path.normalize("a/b/").equals("a/b"))
+  assert(path.normalize("/a/b/").equals("/a/b"))
+}
+
+test "normalize: empty" {
+  assert(path.normalize("").equals(""))
+}
+
+test "normalize: absolute root" {
+  assert(path.normalize("/").equals("/"))
+}

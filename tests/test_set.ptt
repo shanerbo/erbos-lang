@@ -1,0 +1,217 @@
+// Framework tests for std/set — generic Set of T backed by an
+// open-addressed hash table. Mirrors the Map shape: same
+// hashing (int.hash / String.hash), same probing, no value
+// array.
+//
+// Coverage:
+//   - happy-path add/has/remove/len/empty
+//   - idempotent add (already-present returns false, len unchanged)
+//   - growth across cap doublings
+//   - tombstone reuse after remove
+//   - String values: identity by content, not rodata pointer
+//   - heap-shaped T survives growth
+//   - set algebra: union / intersect / difference
+
+use std/string
+use std/set
+use std/list
+use std/option
+
+test "fresh Set is empty" {
+  s is Set of int()
+  assert(s.empty())
+  assert(s.len() eq 0)
+  assert(not s.has(0))
+  assert(s.cap() eq 0)
+}
+
+test "add returns true for new, false for duplicate" {
+  s is Set of int()
+  assert(s.add(1))
+  assert(s.add(2))
+  assert(s.add(3))
+  assert(not s.add(1))
+  assert(not s.add(2))
+  assert(s.len() eq 3)
+}
+
+test "has reflects membership" {
+  s is Set of int()
+  s.add(10)
+  s.add(20)
+  s.add(30)
+  assert(s.has(10))
+  assert(s.has(20))
+  assert(s.has(30))
+  assert(not s.has(99))
+}
+
+test "remove decrements len and forgets the value" {
+  s is Set of int()
+  s.add(1)
+  s.add(2)
+  s.add(3)
+  assert(s.remove(2))
+  assert(s.len() eq 2)
+  assert(not s.has(2))
+  // Other entries untouched.
+  assert(s.has(1))
+  assert(s.has(3))
+  // Removing an absent value returns false, len unchanged.
+  assert(not s.remove(99))
+  assert(s.len() eq 2)
+}
+
+test "tombstone reuse: remove then re-add at same value" {
+  s is Set of int()
+  s.add(7)
+  assert(s.remove(7))
+  // Re-add slots into the now-DELETED bucket; len goes back to 1.
+  assert(s.add(7))
+  assert(s.len() eq 1)
+  assert(s.has(7))
+}
+
+test "growth past initial capacity" {
+  s is Set of int()
+  // Initial cap is 8 — insert 200 distinct ints to force multiple
+  // doublings. The test asserts every value remains discoverable.
+  through (i from 0 to 200 by 1) {
+    s.add(i * 7)
+  }
+  assert(s.len() eq 200)
+  assert(s.cap() ge 256)
+  through (i from 0 to 200 by 1) {
+    assert(s.has(i * 7))
+  }
+}
+
+test "clear empties the set" {
+  s is Set of int()
+  s.add(1)
+  s.add(2)
+  s.add(3)
+  s.clear()
+  assert(s.empty())
+  assert(s.len() eq 0)
+  assert(not s.has(1))
+  // Re-use after clear works.
+  s.add(99)
+  assert(s.has(99))
+}
+
+test "reserve preallocates without changing semantics" {
+  s is Set of int()
+  s.reserve(100)
+  initial_cap is s.cap()
+  assert(initial_cap ge 256)
+  through (i from 0 to 100 by 1) {
+    s.add(i)
+  }
+  // No further resize at this point.
+  assert(s.cap() eq initial_cap)
+  assert(s.len() eq 100)
+}
+
+test "values() returns every present element" {
+  s is Set of int()
+  s.add(10)
+  s.add(20)
+  s.add(30)
+  vs is s.values()
+  assert(vs.len() eq 3)
+  // Order is hash-table layout, so don't assert sequence; just
+  // confirm presence.
+  saw_10 is false
+  saw_20 is false
+  saw_30 is false
+  through (v in vs) {
+    v eq 10 ?{ saw_10 be true }
+    v eq 20 ?{ saw_20 be true }
+    v eq 30 ?{ saw_30 be true }
+  }
+  assert(saw_10)
+  assert(saw_20)
+  assert(saw_30)
+}
+
+test "union: every element of either input appears once" {
+  a is Set of int()
+  a.add(1)
+  a.add(2)
+  a.add(3)
+  b is Set of int()
+  b.add(3)
+  b.add(4)
+  b.add(5)
+  u is a.union(b)
+  assert(u.len() eq 5)
+  assert(u.has(1))
+  assert(u.has(2))
+  assert(u.has(3))
+  assert(u.has(4))
+  assert(u.has(5))
+}
+
+test "intersect: only elements in both" {
+  a is Set of int()
+  a.add(1)
+  a.add(2)
+  a.add(3)
+  b is Set of int()
+  b.add(2)
+  b.add(3)
+  b.add(4)
+  i is a.intersect(b)
+  assert(i.len() eq 2)
+  assert(i.has(2))
+  assert(i.has(3))
+  assert(not i.has(1))
+  assert(not i.has(4))
+}
+
+test "difference: elements of self absent from other" {
+  a is Set of int()
+  a.add(1)
+  a.add(2)
+  a.add(3)
+  b is Set of int()
+  b.add(2)
+  d is a.difference(b)
+  assert(d.len() eq 2)
+  assert(d.has(1))
+  assert(d.has(3))
+  assert(not d.has(2))
+}
+
+test "Set of String: identity by content not pointer" {
+  s is Set of String()
+  assert(s.add("foo"))
+  // Two `"foo"` literals from different rodata sites must
+  // hash and compare equal — no second insert.
+  assert(not s.add("foo"))
+  assert(s.len() eq 1)
+  assert(s.has("foo"))
+}
+
+test "Set of String: heap payloads survive growth" {
+  s is Set of String()
+  through (i from 0 to 50 by 1) {
+    s.add("v_" + i.to_string())
+  }
+  assert(s.len() eq 50)
+  through (i from 0 to 50 by 1) {
+    expected is "v_" + i.to_string()
+    assert(s.has(expected))
+  }
+}
+
+test "Set of int — negative-key bucket index stays in range" {
+  s is Set of int()
+  s.add(0 - 1)
+  s.add(0 - 100)
+  s.add(0 - 999999999999)
+  assert(s.has(0 - 1))
+  assert(s.has(0 - 100))
+  assert(s.has(0 - 999999999999))
+}

@@ -1,0 +1,220 @@
+// std/path — pure-string path manipulation.
+//
+// No filesystem access; every helper is a function over `String`.
+// Paths use `/` as separator (POSIX-style); Windows-shaped paths
+// are out of scope for now.
+//
+// API shape: free functions (Potato has no static methods, so
+// the spec's `Path.join` lowering is a module-prefixed call —
+// `use std/path` then `path.join(base, child)`).
+//
+// Allocation discipline: every operation that returns a String
+// allocates a fresh owned String unless explicitly noted; no
+// returned String aliases an input.
+
+use std/string
+use std/string_builder
+
+// is_absolute(path) — true iff `path` starts with `/`.
+//
+// "" → false. "/" → true. "/a" → true. "a" → false. "./a" → false.
+is_absolute(p String) bool {
+  p.count eq 0 ?{ give false }
+  give p.byte_at(0) eq 47   // '/'
+}
+
+// join(base, child) — concatenate `base` and `child` with at
+// most one separator between them. The result owns its bytes.
+//
+// Cases:
+//   - child is absolute → child wins (drops base entirely)
+//   - base is empty → child wins
+//   - base ends with `/` → use base + child verbatim
+//   - otherwise → base + "/" + child
+//
+// child being empty is allowed; the result is base unchanged
+// (allocated as a fresh String).
+join(base String, child String) String {
+  is_absolute(child) ?{ give child.clone() }
+  base.count eq 0 ?{ give child.clone() }
+  child.count eq 0 ?{ give base.clone() }
+  base_ends_slash is base.byte_at(base.count - 1) eq 47
+  base_ends_slash ?{
+    give base + child
+  }
+  give base + "/" + child
+}
+
+// basename(path) — last segment after the final `/`, or the
+// whole path if there is no `/`.
+//
+// Trailing `/`: a path that ends with a slash and has at least
+// one prior segment treats the last *non-empty* segment as the
+// base. So `basename("a/b/")` → "b".
+//
+// "" → "". "/" → "". "/a" → "a". "a/b" → "b". "a/b/" → "b".
+basename(p String) String {
+  p.count eq 0 ?{ give String() }
+  // Find the last non-trailing-slash byte, then walk back to
+  // the previous slash.
+  end is p.count
+  infi (end gt 0 and p.byte_at(end - 1) eq 47) {
+    end be end - 1
+  }
+  end eq 0 ?{ give String() }
+  start is end
+  infi (start gt 0 and p.byte_at(start - 1) ne 47) {
+    start be start - 1
+  }
+  give p.slice(start, end)
+}
+
+// dirname(path) — everything before the final `/`, or "" if
+// there is no `/`.
+//
+// "" → "". "/" → "/". "/a" → "/". "a" → "". "a/b" → "a".
+// "a/b/c" → "a/b". Trailing `/` is treated like one collapsed
+// separator: "a/b/" → "a".
+dirname(p String) String {
+  p.count eq 0 ?{ give String() }
+  // Walk from the end past any trailing `/`s.
+  end is p.count
+  infi (end gt 0 and p.byte_at(end - 1) eq 47) {
+    end be end - 1
+  }
+  // Now find the previous `/`.
+  i is end
+  infi (i gt 0 and p.byte_at(i - 1) ne 47) {
+    i be i - 1
+  }
+  i eq 0 ?{
+    // No slash at all; if the original starts with `/` (i.e.
+    // root), preserve it; otherwise empty.
+    p.byte_at(0) eq 47 ?{ give "/" }
+    give String()
+  }
+  // Drop the trailing slash itself unless it's the root slash.
+  i eq 1 and p.byte_at(0) eq 47 ?{ give "/" }
+  give p.slice(0, i - 1)
+}
+
+// extension(path) — substring after the last `.` in the
+// basename, or "" if there is none.
+//
+// Examples:
+//   "foo.txt"     → "txt"
+//   "a/b.tar.gz"  → "gz"
+//   "Makefile"    → ""
+//   ".hidden"     → ""    (leading dot is not an extension)
+//   "x."          → ""    (empty extension)
+//   ""            → ""
+extension(p String) String {
+  base is basename(p)
+  base.count eq 0 ?{ give String() }
+  // Find the last `.` in base.
+  i is base.count
+  infi (i gt 0) {
+    i be i - 1
+    base.byte_at(i) eq 46 ?{
+      // Position of the dot. If it's the first byte, treat as
+      // hidden file with no extension.
+      i eq 0 ?{ give String() }
+      // If the dot is the last char, extension is empty.
+      i eq base.count - 1 ?{ give String() }
+      give base.slice(i + 1, base.count)
+    }
+  }
+  give String()
+}
+
+// normalize(path) — collapse `.` segments, resolve `..`, and
+// remove redundant `/`s. Pure string operation; doesn't touch
+// the filesystem.
+//
+// Examples:
+//   "a/./b"        → "a/b"
+//   "a//b"         → "a/b"
+//   "a/b/../c"     → "a/c"
+//   "/a/b/../"     → "/a"
+//   "/.."          → "/"
+//   "../a"         → "../a"      (can't resolve — leading)
+//   "a/../.."      → ".."
+//   ""             → ""
+normalize(p String) String {
+  p.count eq 0 ?{ give String() }
+  abs is is_absolute(p)
+  // Split into segments by '/' and process.
+  parts is List of String()
+  i is 0
+  start is 0
+  abs ?{
+    start be 1
+    i be 1
+  }
+  infi (i lt p.count) {
+    p.byte_at(i) eq 47 ?{
+      i gt start ?{
+        seg is p.slice(start, i)
+        seg.equals("..") ?{
+          // Pop the previous segment if possible.
+          parts.len() gt 0 ?{
+            top is parts.get(parts.len() - 1)
+            top.equals("..") ?{
+              parts.push(seg)
+            } nah {
+              parts.remove(parts.len() - 1)
+            }
+          } nah {
+            // No previous; keep `..` only for relative paths.
+            not abs ?{ parts.push(seg) }
+          }
+        } nah {
+          seg.equals(".") ?{
+            // Skip `.` segments.
+          } nah {
+            parts.push(seg)
+          }
+        }
+      }
+      i be i + 1
+      start be i
+      skip
+    }
+    i be i + 1
+  }
+  // Trailing segment after the last separator (or the entire
+  // path if there were no separators).
+  i gt start ?{
+    seg is p.slice(start, i)
+    seg.equals("..") ?{
+      parts.len() gt 0 ?{
+        top is parts.get(parts.len() - 1)
+        top.equals("..") ?{
+          parts.push(seg)
+        } nah {
+          parts.remove(parts.len() - 1)
+        }
+      } nah {
+        not abs ?{ parts.push(seg) }
+      }
+    } nah {
+      seg.equals(".") ?{
+        // skip
+      } nah {
+        parts.push(seg)
+      }
+    }
+  }
+  // Re-assemble.
+  parts.len() eq 0 ?{
+    abs ?{ give "/" }
+    give String()
+  }
+  out is StringBuilder()
+  abs ?{ out.push_byte(47) }
+  through (k from 0 to parts.len() by 1) {
+    k gt 0 ?{ out.push_byte(47) }
+    out.push_string(parts.get(k))
+  }
+  give out.to_string()
+}

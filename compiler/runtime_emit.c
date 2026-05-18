@@ -61,11 +61,21 @@ static void emit_String_yell(FILE *out) {
     fprintf(out, "// built-in: _String_yell (x0 = String header ptr)\n");
     fprintf(out, ".globl _String_yell\n.globl _yell_str\n.p2align 2\n_String_yell:\n_yell_str:\n");
     fprintf(out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
+    // Empty-String guard: a freshly-allocated `String()` has
+    // count=0 and data=NULL. Skip the byte-buffer write but
+    // still emit the trailing newline so `yell(String())`
+    // produces a blank line rather than dereferencing NULL.
+    // Without this, every Path / String stdlib helper that
+    // returns a fresh empty String crashes when piped through
+    // `yell`.
     fprintf(out, "    ldr x2, [x0, #8]\n");      // count -> x2
+    fprintf(out, "    cbz x2, _Sy_newline\n");
     fprintf(out, "    ldr x1, [x0, #16]\n");     // array-of-byte hdr -> x1
+    fprintf(out, "    cbz x1, _Sy_newline\n");
     fprintf(out, "    ldr x1, [x1, #8]\n");      // byte ptr -> x1
     fprintf(out, "    mov x0, #1\n");            // fd=stdout
     fprintf(out, "    mov x16, #4\n    svc #0x80\n");
+    fprintf(out, "_Sy_newline:\n");
     // Trailing newline.
     fprintf(out, "    sub sp, sp, #16\n    mov w4, #10\n    strb w4, [sp]\n");
     fprintf(out, "    mov x16, #4\n    mov x0, #1\n    mov x1, sp\n    mov x2, #1\n    svc #0x80\n");

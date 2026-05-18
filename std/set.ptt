@@ -1,0 +1,270 @@
+// std/set — generic Set of T backed by an open-addressed
+// hash table (same machinery as Map, no value array).
+//
+// Layout:
+//   count    int           // number of FULL entries
+//   occupied int           // FULL + DELETED (probe must walk past tombstones)
+//   data     array of T
+//   states   array of byte  // 0 = EMPTY, 1 = FULL, 2 = DELETED
+//
+// `T = int` uses Knuth multiplicative hashing (`int.hash` in
+// std/math); `T = String` uses the djb2-shaped hash already
+// shipping in std/string. Generic code calls `t.hash()` and
+// `eq`; the compiler resolves both per-monomorph.
+//
+// `add` deep-clones the value before storing it, so the caller's
+// local can go out of scope without leaving dangling pointers in
+// the set. Primitive T collapses `is rep` to a value copy and
+// `arr[i] be now` to a plain store.
+
+use std/list
+use std/option
+use std/math
+
+INITIAL_SET_CAP() int {
+  give 8
+}
+
+set_probe_index(h int, cap int) int {
+  r is h mod cap
+  r lt 0 ?{ r be r + cap }
+  give r
+}
+
+Set of T is {
+  count    int
+  occupied int
+  data     array of T
+  states   array of byte
+}
+
+Set.len(self Set of T) int {
+  give self.count
+}
+
+Set.cap(self Set of T) int {
+  self.data eq 0 ?{ give 0 }
+  give self.data.cap
+}
+
+Set.empty(self Set of T) bool {
+  give self.count eq 0
+}
+
+// has() — true iff `v` is a member.
+Set.has(self Set of T, v T) bool {
+  self.data eq 0 ?{ give false }
+  cap is self.data.cap
+  start is set_probe_index(v.hash(), cap)
+  through (off from 0 to cap by 1) {
+    i is set_probe_index(start + off, cap)
+    s is self.states[i]
+    s eq 0 ?{ give false }
+    s eq 1 ?{
+      self.data[i] eq v ?{ give true }
+    }
+    // s eq 2 — keep probing
+  }
+  give false
+}
+
+// add() returns true if a new element was inserted, false if
+// `v` was already present (idempotent insert).
+Set.add(self ref Set of T, v T) bool {
+  self.data eq 0 ?{
+    cap is INITIAL_SET_CAP()
+    self.data be array of T with cap cap
+    self.states be array of byte with cap cap
+  }
+  threshold is (self.data.cap * 7) / 10
+  self.occupied ge threshold ?{
+    self.resize_to(self.data.cap * 2)
+  }
+  cap is self.data.cap
+  start is set_probe_index(v.hash(), cap)
+  found_deleted is 0 - 1
+  through (off from 0 to cap by 1) {
+    i is set_probe_index(start + off, cap)
+    s is self.states[i]
+    s eq 1 ?{
+      self.data[i] eq v ?{
+        // Already present — no-op.
+        give false
+      }
+    }
+    s eq 2 ?{
+      found_deleted lt 0 ?{ found_deleted be i }
+    }
+    s eq 0 ?{
+      slot is i
+      reuse is 0
+      found_deleted ge 0 ?{
+        slot be found_deleted
+        reuse be 1
+      }
+      v_clone is rep v
+      self.data[slot] be now v_clone
+      self.states[slot] be 1
+      self.count be self.count + 1
+      reuse eq 0 ?{
+        self.occupied be self.occupied + 1
+      }
+      give true
+    }
+  }
+  // Same unreachable-but-must-return guard as Map.set.
+  assert(false)
+  give false
+}
+
+// remove() returns true iff a value was removed.
+Set.remove(self ref Set of T, v T) bool {
+  self.data eq 0 ?{ give false }
+  cap is self.data.cap
+  start is set_probe_index(v.hash(), cap)
+  through (off from 0 to cap by 1) {
+    i is set_probe_index(start + off, cap)
+    s is self.states[i]
+    s eq 0 ?{ give false }
+    s eq 1 ?{
+      self.data[i] eq v ?{
+        self.states[i] be 2
+        self.count be self.count - 1
+        give true
+      }
+    }
+  }
+  give false
+}
+
+Set.clear(self ref Set of T) {
+  self.data eq 0 ?{ give }
+  through (i from 0 to self.states.cap by 1) {
+    self.states[i] be 0
+  }
+  self.count be 0
+  self.occupied be 0
+}
+
+Set.reserve(self ref Set of T, cap_request int) {
+  cap_request le 0 ?{ give }
+  needed is (cap_request * 10) / 7 + 1
+  pow2 is INITIAL_SET_CAP()
+  infi (pow2 lt needed) {
+    pow2 be pow2 * 2
+  }
+  self.data eq 0 ?{
+    self.data be array of T with cap pow2
+    self.states be array of byte with cap pow2
+    give
+  }
+  pow2 le self.data.cap ?{ give }
+  self.resize_to(pow2)
+}
+
+// values() — every present element in undefined order. Each
+// emitted element is a deep clone, so the returned List owns
+// its values independently of the set.
+Set.values(self Set of T) List of T {
+  out is List of T()
+  self.data eq 0 ?{ give out }
+  through (i from 0 to self.data.cap by 1) {
+    self.states[i] eq 1 ?{
+      el is rep self.data[i]
+      out.push(el)
+    }
+  }
+  give out
+}
+
+// union(self, other) — fresh Set containing every element of
+// self or other. Both inputs are read-only; the result owns
+// its own clones.
+Set.union(self Set of T, other Set of T) Set of T {
+  out is Set of T()
+  out.reserve(self.count + other.count)
+  // Add self's elements first, then other's; `add` is
+  // idempotent so duplicates between the two are absorbed.
+  self.data ne 0 ?{
+    through (i from 0 to self.data.cap by 1) {
+      self.states[i] eq 1 ?{
+        out.add(self.data[i])
+      }
+    }
+  }
+  other.data ne 0 ?{
+    through (i from 0 to other.data.cap by 1) {
+      other.states[i] eq 1 ?{
+        out.add(other.data[i])
+      }
+    }
+  }
+  give out
+}
+
+// intersect(self, other) — fresh Set with only elements present
+// in both inputs.
+Set.intersect(self Set of T, other Set of T) Set of T {
+  out is Set of T()
+  self.data eq 0 ?{ give out }
+  other.data eq 0 ?{ give out }
+  // Walk the smaller side for fewer hash probes.
+  self.count le other.count ?{
+    through (i from 0 to self.data.cap by 1) {
+      self.states[i] eq 1 ?{
+        other.has(self.data[i]) ?{
+          out.add(self.data[i])
+        }
+      }
+    }
+    give out
+  }
+  through (i from 0 to other.data.cap by 1) {
+    other.states[i] eq 1 ?{
+      self.has(other.data[i]) ?{
+        out.add(other.data[i])
+      }
+    }
+  }
+  give out
+}
+
+// difference(self, other) — fresh Set with elements of self
+// that are NOT in other.
+Set.difference(self Set of T, other Set of T) Set of T {
+  out is Set of T()
+  self.data eq 0 ?{ give out }
+  through (i from 0 to self.data.cap by 1) {
+    self.states[i] eq 1 ?{
+      not other.has(self.data[i]) ?{
+        out.add(self.data[i])
+      }
+    }
+  }
+  give out
+}
+
+// Internal: re-hash every FULL entry into a freshly-sized table.
+Set.resize_to(self ref Set of T, new_cap int) {
+  fresh_data is array of T with cap new_cap
+  fresh_states is array of byte with cap new_cap
+  old_cap is self.data.cap
+  through (i from 0 to old_cap by 1) {
+    self.states[i] eq 1 ?{
+      h is self.data[i].hash()
+      start is set_probe_index(h, new_cap)
+      through (off from 0 to new_cap by 1) {
+        j is set_probe_index(start + off, new_cap)
+        fresh_states[j] eq 0 ?{
+          v is rep self.data[i]
+          fresh_data[j] be now v
+          fresh_states[j] be 1
+          off be new_cap
+        }
+      }
+    }
+  }
+  self.data be now fresh_data
+  self.states be now fresh_states
+  self.occupied be self.count
+}

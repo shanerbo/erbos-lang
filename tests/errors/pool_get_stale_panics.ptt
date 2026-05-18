@@ -1,0 +1,12 @@
+// Pool.get on a removed slot must panic. The non-panicking
+// path is `try_get` returning Option of T.
+
+use std/string
+use std/pool
+
+spark {
+  p is Pool of int()
+  a is p.insert(10)
+  p.remove(a)
+  yell(p.get(a))
+}

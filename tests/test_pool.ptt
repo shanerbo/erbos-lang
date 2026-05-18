@@ -1,0 +1,154 @@
+// Framework tests for std/pool — arena + slot reuse.
+//
+// Coverage: insert/remove/has/get/try_get/set/clear, freelist
+// reuse, panic on stale handle, heap-shaped T survives growth,
+// stale-handle hazard documentation, mass insert/remove cycles.
+
+use std/string
+use std/pool
+use std/option
+use std/list
+
+test "fresh Pool is empty" {
+  p is Pool of int()
+  assert(p.empty())
+  assert(p.len() eq 0)
+  assert(p.slot_count() eq 0)
+}
+
+test "insert returns increasing ids when no free slots" {
+  p is Pool of int()
+  a is p.insert(10)
+  b is p.insert(20)
+  c is p.insert(30)
+  assert(a eq 0)
+  assert(b eq 1)
+  assert(c eq 2)
+  assert(p.len() eq 3)
+}
+
+test "get returns the inserted value" {
+  p is Pool of int()
+  a is p.insert(100)
+  b is p.insert(200)
+  assert(p.get(a) eq 100)
+  assert(p.get(b) eq 200)
+}
+
+test "try_get returns Option of T" {
+  p is Pool of int()
+  a is p.insert(42)
+  o is p.try_get(a)
+  assert(o.is_some())
+  assert(o.unwrap() eq 42)
+  // Out-of-range id → None.
+  oob is p.try_get(99)
+  assert(oob.is_none())
+  // Negative id → None.
+  neg is p.try_get(0 - 1)
+  assert(neg.is_none())
+}
+
+test "remove forgets the slot and frees the id" {
+  p is Pool of int()
+  a is p.insert(10)
+  b is p.insert(20)
+  assert(p.remove(a))
+  assert(not p.has(a))
+  assert(p.len() eq 1)
+  // try_get on a removed id is None.
+  o is p.try_get(a)
+  assert(o.is_none())
+  // Other entries untouched.
+  assert(p.has(b))
+  assert(p.get(b) eq 20)
+  // Removing again is a no-op (returns false).
+  assert(not p.remove(a))
+}
+
+test "insert reuses freed slots before appending" {
+  p is Pool of int()
+  a is p.insert(1)
+  b is p.insert(2)
+  c is p.insert(3)
+  // Remove the middle slot.
+  assert(p.remove(b))
+  // Next insert should reuse slot b (= 1), not append a new
+  // slot 3.
+  d is p.insert(99)
+  assert(d eq b)
+  // Slot count (high-water mark) didn't grow.
+  assert(p.slot_count() eq 3)
+  assert(p.len() eq 3)
+  assert(p.get(d) eq 99)
+  // Other slots unchanged.
+  assert(p.get(a) eq 1)
+  assert(p.get(c) eq 3)
+}
+
+test "set overwrites a live slot's value" {
+  p is Pool of int()
+  a is p.insert(10)
+  p.set(a, 999)
+  assert(p.get(a) eq 999)
+  assert(p.len() eq 1)
+}
+
+test "clear empties everything; subsequent ids start at 0 again" {
+  p is Pool of int()
+  p.insert(1)
+  p.insert(2)
+  p.insert(3)
+  p.clear()
+  assert(p.empty())
+  assert(p.slot_count() eq 0)
+  // Re-use after clear.
+  a is p.insert(99)
+  assert(a eq 0)
+  assert(p.len() eq 1)
+}
+
+test "Pool of String — heap payloads, growth, slot reuse" {
+  p is Pool of String()
+  // Insert enough to grow past initial cap.
+  ids is List of int()
+  through (i from 0 to 50 by 1) {
+    s is "v_" + i.to_string()
+    id is p.insert(s)
+    ids.push(id)
+  }
+  assert(p.len() eq 50)
+  // Every value retrievable.
+  through (i from 0 to 50 by 1) {
+    expected is "v_" + i.to_string()
+    actual is p.get(ids.get(i))
+    assert(actual.equals(expected))
+  }
+  // Remove evens; len drops to 25.
+  through (i from 0 to 50 by 1) {
+    i mod 2 eq 0 ?{
+      assert(p.remove(ids.get(i)))
+    }
+  }
+  assert(p.len() eq 25)
+  // Re-insert; the ids should reuse freed slots.
+  through (i from 0 to 25 by 1) {
+    p.insert("re_" + i.to_string())
+  }
+  assert(p.len() eq 50)
+  // Slot count didn't grow past 50 (every reuse hit the freelist).
+  assert(p.slot_count() eq 50)
+}
+
+test "len reflects only live slots" {
+  p is Pool of int()
+  a is p.insert(1)
+  b is p.insert(2)
+  c is p.insert(3)
+  d is p.insert(4)
+  assert(p.len() eq 4)
+  p.remove(b)
+  p.remove(d)
+  assert(p.len() eq 2)
+  assert(p.slot_count() eq 4)
+}

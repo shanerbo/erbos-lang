@@ -1,0 +1,129 @@
+// std/pool — generic Pool of T (arena with deletion + slot reuse).
+//
+// Like Arena (append-only with integer handles) but supports
+// `remove(id)` so freed slots can be reused for later inserts.
+// Handles are dense slot indexes; there is no generational
+// component yet, so a stale handle to a slot that has since
+// been reused will silently address the new occupant. Future
+// upgrade: pack a per-slot generation count into the handle.
+//
+// Layout:
+//   items List of T          // dense storage; items.len() is the
+//                            // physical slot count (high-water mark)
+//   alive List of bool       // parallel to items; true if the slot
+//                            // currently holds a live value
+//   free  List of int        // LIFO stack of free slot indexes
+//
+// All three lists grow together. `insert` prefers a slot from
+// `free` when one is available; otherwise it pushes onto items
+// and alive in lockstep.
+
+use std/list
+use std/option
+
+Pool of T is {
+  items List of T
+  alive List of bool
+  free  List of int
+}
+
+Pool.len(self Pool of T) int {
+  // Live entries only — deleted slots and free-listed slots
+  // don't count.
+  count is 0
+  through (i from 0 to self.items.len() by 1) {
+    self.alive.get(i) ?{
+      count be count + 1
+    }
+  }
+  give count
+}
+
+// Slot count, not live count. Equal to the high-water mark of
+// `items`.
+Pool.slot_count(self Pool of T) int {
+  give self.items.len()
+}
+
+Pool.empty(self Pool of T) bool {
+  give self.len() eq 0
+}
+
+Pool.reserve(self ref Pool of T, cap int) {
+  cap le 0 ?{ give }
+  self.items.reserve(cap)
+  self.alive.reserve(cap)
+  // Don't pre-grow `free`; it tracks freed slots, not capacity.
+}
+
+// insert(v) returns the id (slot index). If a slot is on the
+// free list, it's popped and reused; otherwise a new slot is
+// appended.
+Pool.insert(self ref Pool of T, value T) int {
+  self.free.len() gt 0 ?{
+    id is self.free.pop()
+    // alive[id] should be false because it was placed on free.
+    self.items.set(id, value)
+    self.alive.set(id, true)
+    give id
+  }
+  // Append a fresh slot.
+  id is self.items.len()
+  self.items.push(value)
+  self.alive.push(true)
+  give id
+}
+
+// remove(id) marks the slot dead and adds it to the free list.
+// Returns true iff the id was a live slot.
+Pool.remove(self ref Pool of T, id int) bool {
+  id lt 0 ?{ give false }
+  id ge self.items.len() ?{ give false }
+  self.alive.get(id) ?{
+    self.alive.set(id, false)
+    self.free.push(id)
+    give true
+  }
+  give false
+}
+
+Pool.has(self Pool of T, id int) bool {
+  id lt 0 ?{ give false }
+  id ge self.items.len() ?{ give false }
+  give self.alive.get(id)
+}
+
+// get(id) returns the value at slot `id`. Panics if `id` is
+// out of range or the slot is dead. Use `try_get` for the
+// non-panicking variant.
+Pool.get(self Pool of T, id int) T {
+  self.has(id) ?{
+    give self.items.get(id)
+  }
+  assert(false)
+  give self.items.get(0)
+}
+
+Pool.try_get(self Pool of T, id int) Option of T {
+  self.has(id) ?{ give some of T (self.items.get(id)) }
+  give none of T ()
+}
+
+// set(id, v) overwrites the value at a live slot. Panics if
+// `id` is out of range or the slot is dead.
+Pool.set(self ref Pool of T, id int, value T) {
+  self.has(id) ?{
+    self.items.set(id, value)
+    give
+  }
+  assert(false)
+}
+
+// clear() empties every slot and the free list. items / alive
+// lists shrink back to length 0; subsequent inserts start at
+// id 0 again.
+Pool.clear(self ref Pool of T) {
+  self.items.clear()
+  self.alive.clear()
+  self.free.clear()
+}
