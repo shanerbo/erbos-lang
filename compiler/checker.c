@@ -288,7 +288,11 @@ static Type parse_type_str(Checker *c, const char *t) {
 static const char *type_name(Type t) {
     switch (t.kind) {
         case TYPE_INT: return "int";
-        case TYPE_STR: return "str";
+        // P2-16: TYPE_STR is fossil; nothing in the source path
+        // produces it now. If we ever surface one in an error
+        // message, show the user-facing name `String` rather than
+        // the retired `str`.
+        case TYPE_STR: return "String";
         case TYPE_BOOL: return "bool";
         case TYPE_VOID: return "void";
         case TYPE_LIST: return "list";
