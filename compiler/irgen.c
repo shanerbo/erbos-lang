@@ -1422,6 +1422,18 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
             // dispatches to <Type>_set(obj, idx, val) instead.
             // This sits in gen_stmt (statement context) so we just
             // emit the call and break; no value is returned.
+            //
+            // Heap-shaped element ownership (mirrors NODE_FIELD_ASSIGN):
+            //   `arr[i] be now src`  -> mark src moved so RAII at
+            //                            scope end skips it (the slot
+            //                            now owns the pointer);
+            //   `arr[i] be rep src`  -> emit `bl _clone_<X>` and
+            //                            store the cloned pointer.
+            // The plain `arr[i] be src` form keeps the legacy
+            // pointer-store semantics for primitives and same-array
+            // re-stores; storing a borrowed heap-shaped value through
+            // it is the user's responsibility (a future checker pass
+            // will reject it).
             if (n->index_assign.method_struct) {
                 VReg obj = gen_expr(c, n->index_assign.object);
                 VReg idx = gen_expr(c, n->index_assign.index);
@@ -1438,7 +1450,28 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
                     .str = strdup(sym), .args = args, .arg_count = 3});
                 break;
             }
-            VReg val = gen_expr(c, n->index_assign.value);
+            // Mark the source local moved before evaluating the
+            // value. For `is_rep` we *don't* mark moved — clone
+            // leaves the original alive.
+            if (n->index_assign.is_move &&
+                n->index_assign.value->type == NODE_IDENT) {
+                mark_moved_local(c, n->index_assign.value->ident.name);
+            }
+            VReg val;
+            if (n->index_assign.is_rep && n->index_assign.src_struct_name) {
+                VReg src = gen_expr(c, n->index_assign.value);
+                val = new_vreg(c);
+                char clone_sym[256];
+                snprintf(clone_sym, sizeof(clone_sym),
+                    "clone_%s", n->index_assign.src_struct_name);
+                VReg *args = malloc(sizeof(VReg));
+                args[0] = src;
+                emit(c, (IRInst){.op = IR_CALL, .dst = val,
+                                 .str = strdup(clone_sym),
+                                 .args = args, .arg_count = 1});
+            } else {
+                val = gen_expr(c, n->index_assign.value);
+            }
             VReg obj = gen_expr(c, n->index_assign.object);
             VReg idx = gen_expr(c, n->index_assign.index);
 

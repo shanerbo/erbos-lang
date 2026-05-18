@@ -381,6 +381,21 @@ static Node *clone_node(Node *n) {
             c->index_access.object = clone_node(n->index_access.object);
             c->index_access.index = clone_node(n->index_access.index);
             break;
+        case NODE_INDEX_ASSIGN:
+            // (Previously missing — the shallow copy aliased the
+            // child nodes between monomorphic instantiations,
+            // which silently broke type-substitution for any
+            // generic function body whose loop wrote to an array
+            // slot.) Deep-clone the children and carry the
+            // ownership-modifier flags through every clone.
+            c->index_assign.object = clone_node(n->index_assign.object);
+            c->index_assign.index = clone_node(n->index_assign.index);
+            c->index_assign.value = clone_node(n->index_assign.value);
+            c->index_assign.method_struct = xstrdup(n->index_assign.method_struct);
+            c->index_assign.is_move = n->index_assign.is_move;
+            c->index_assign.is_rep = n->index_assign.is_rep;
+            c->index_assign.src_struct_name = xstrdup(n->index_assign.src_struct_name);
+            break;
         case NODE_VAR_DECL:
             c->var_decl.name = xstrdup(n->var_decl.name);
             c->var_decl.type_name = xstrdup(n->var_decl.type_name);

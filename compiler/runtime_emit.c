@@ -125,9 +125,28 @@ static void emit_heap_alloc(FILE *out) {
     // Free list: singly-linked list of freed blocks.
     // Each free block: [next_ptr(8) | size(8) | unused space ...]
     // _heap_free_list points to the first free block (or 0).
+    //
+    // Important invariant: every freed block must be at least
+    // 16 bytes so the (next_ptr, size) metadata fits without
+    // corrupting adjacent memory. _heap_alloc rounds requests
+    // up to a 16-byte multiple (see below), so the *physical*
+    // block always satisfies that. _heap_free's `size` argument
+    // is whatever the caller passed — typically computed as
+    // `cap * elem_size` in the array-drop path, which can be
+    // < 16 (e.g. `array of byte with cap 8` → 8 bytes). Round
+    // up here to match the allocator's rounding so the metadata
+    // never overflows the block. Without this, a small byte-
+    // array drop wrote 16 bytes into an 8-byte slot and clobbered
+    // free-list links downstream.
     fprintf(out, "// built-in: _heap_free(ptr=x0, size=x1)\n");
     fprintf(out, ".globl _heap_free\n.p2align 2\n_heap_free:\n");
     fprintf(out, "    cbz x0, _hf_ret\n");
+    fprintf(out, "    add x1, x1, #15\n");
+    fprintf(out, "    and x1, x1, #-16\n");
+    fprintf(out, "    cmp x1, #16\n");
+    fprintf(out, "    b.ge _hf_meta\n");
+    fprintf(out, "    mov x1, #16\n");
+    fprintf(out, "_hf_meta:\n");
     fprintf(out, "    adrp x2, _heap_free_list@PAGE\n");
     fprintf(out, "    add x2, x2, _heap_free_list@PAGEOFF\n");
     fprintf(out, "    ldr x3, [x2]\n");
@@ -159,6 +178,21 @@ static void emit_heap_alloc(FILE *out) {
     fprintf(out, "    ldr x14, [x11]\n");
     fprintf(out, "    str x14, [x12]\n");
     fprintf(out, "    mov x0, x11\n");
+    // Zero-fill the returned block. Free-list reuse hands back
+    // memory that previously held heap metadata (next/size) and
+    // user data, so without this every fresh-shaped allocation
+    // (struct, array) has to remember to zero its own slots.
+    // The bump path also routes through here so a single
+    // zero-fill loop covers both. Cost: one stp per 16 bytes.
+    // x9 holds the rounded-up size (multiple of 16).
+    fprintf(out, "    mov x15, x0\n");
+    fprintf(out, "    mov x16, x9\n");
+    fprintf(out, "_ha_zero:\n");
+    fprintf(out, "    cbz x16, _ha_zero_done\n");
+    fprintf(out, "    stp xzr, xzr, [x15], #16\n");
+    fprintf(out, "    sub x16, x16, #16\n");
+    fprintf(out, "    b _ha_zero\n");
+    fprintf(out, "_ha_zero_done:\n");
     fprintf(out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n");
     fprintf(out, "_ha_bump:\n");
     fprintf(out, "    adrp x10, _heap_ptr@PAGE\n");
@@ -185,6 +219,18 @@ static void emit_heap_alloc(FILE *out) {
     fprintf(out, "    mov x0, x11\n");
     fprintf(out, "    str x14, [x10]\n");
     fprintf(out, "    str x13, [x12]\n");
+    // Bump path: mmap returns zeroed memory (MAP_ANON), but
+    // the bump pointer slides over the same region we already
+    // returned from before, so zeroing here is also correct.
+    // Reuse the same loop as the free-list path.
+    fprintf(out, "    mov x15, x0\n");
+    fprintf(out, "    mov x16, x9\n");
+    fprintf(out, "_hb_zero:\n");
+    fprintf(out, "    cbz x16, _hb_zero_done\n");
+    fprintf(out, "    stp xzr, xzr, [x15], #16\n");
+    fprintf(out, "    sub x16, x16, #16\n");
+    fprintf(out, "    b _hb_zero\n");
+    fprintf(out, "_hb_zero_done:\n");
     fprintf(out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 }
 

@@ -1229,6 +1229,26 @@ static Type check_expr(Checker *c, Node *n) {
                     obj_t.elem_type ? type_name(*obj_t.elem_type) : "null",
                     type_name(val_t));
             }
+            // `arr[i] be now src` / `arr[i] be rep src`: the source
+            // must be a bare identifier (the parser already enforces
+            // this), and for `is_rep` we stash the source's static
+            // struct name so irgen can emit `bl _clone_<X>`. Mirrors
+            // the NODE_FIELD_ASSIGN handling.
+            if (n->index_assign.is_rep && val_t.kind == TYPE_STRUCT &&
+                val_t.struct_name && !n->index_assign.src_struct_name) {
+                n->index_assign.src_struct_name = strdup(val_t.struct_name);
+            }
+            if (n->index_assign.is_move && n->index_assign.value->type == NODE_IDENT) {
+                // Mark the source local moved so RAII at scope end
+                // does not re-free what now lives in the array slot.
+                const char *src_name = n->index_assign.value->ident.name;
+                for (int si = c->count - 1; si >= 0; si--) {
+                    if (!strcmp(c->syms[si].name, src_name)) {
+                        c->syms[si].is_moved = 1;
+                        break;
+                    }
+                }
+            }
             // Element type compat (best-effort)
             if (obj_t.elem_type && val_t.kind != TYPE_UNKNOWN &&
                 obj_t.elem_type->kind != TYPE_UNKNOWN &&

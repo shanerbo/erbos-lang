@@ -1158,8 +1158,35 @@ static Node *parse_stmt(Parser *p) {
                     Node *n = alloc_node(NODE_INDEX_ASSIGN, line);
                     n->index_assign.object = expr->index_access.object;
                     n->index_assign.index = expr->index_access.index;
-                    n->index_assign.value = parse_expr(p);
                     n->index_assign.is_array = 0; // checker fills in
+                    n->index_assign.is_move = 0;
+                    n->index_assign.is_rep = 0;
+                    // Optional `now` / `rep` modifiers, mirroring
+                    // var-decl and field-assign. `arr[i] be now src`
+                    // moves ownership of src into the slot;
+                    // `arr[i] be rep src` deep-clones src into the
+                    // slot. Both restrict src to a bare identifier
+                    // (irgen marks it moved or emits _clone_<X>).
+                    if (at(p, TOK_NOW)) {
+                        p->pos++;
+                        n->index_assign.is_move = 1;
+                        if (!at(p, TOK_IDENT)) {
+                            fprintf(stderr,
+                                "%s:%d: error: can only move a variable into an array slot, not a value\n",
+                                p->filename, line);
+                            exit(1);
+                        }
+                    } else if (at(p, TOK_REP)) {
+                        p->pos++;
+                        n->index_assign.is_rep = 1;
+                        if (!at(p, TOK_IDENT)) {
+                            fprintf(stderr,
+                                "%s:%d: error: can only clone a variable into an array slot, not a value\n",
+                                p->filename, line);
+                            exit(1);
+                        }
+                    }
+                    n->index_assign.value = parse_expr(p);
                     return n;
                 }
                 fprintf(stderr, "%s:%d: error: invalid assignment target\n", p->filename, line);

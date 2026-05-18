@@ -72,6 +72,29 @@ pow_mod(base int, exp int, modv int) int {
   give result
 }
 
+// Knuth multiplicative hash for `int` keys.
+//
+// The constant 2654435769 is `floor(2^32 * (sqrt(5) - 1) / 2)`,
+// the 32-bit golden-ratio multiplier from Knuth Vol.3 §6.4.
+// Multiplying any integer by an odd constant of similar magnitude
+// scrambles the low bits enough that consecutive `0, 1, 2, ...`
+// inputs do not collide modulo a power-of-two bucket count.
+//
+// Potato has no shift / xor operators, so the avalanche is
+// pure multiplication; that is weaker than splitmix64-style
+// finalizers but more than adequate for the open-addressed
+// map used in the stdlib (collisions are absorbed by linear
+// probing, and the table grows at 70% occupancy). The
+// multiplication wraps modulo 2^64, which is what 64-bit
+// signed int does in this language.
+//
+// The result is treated as a bit pattern by `Map`: the probe
+// uses `(h mod cap + cap) mod cap` to keep the bucket index in
+// `[0, cap)` even when the wrapped product comes back negative.
+int.hash(self int) int {
+  give self * 2654435769
+}
+
 sqrt_floor(x int) int {
   x lt 0 ?{
     assert(false)

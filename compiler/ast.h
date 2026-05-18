@@ -339,6 +339,19 @@ struct Node {
         // Same shape as NODE_INDEX but with a value to write.
         // method_struct (ε5): if set, `obj[i] be v` dispatches to
         // `<method_struct>_set(obj, i, v)`.
+        //
+        // is_move / is_rep (heap-shaped element ownership):
+        //   `arr[i] be now src`  -> transfer ownership of src into
+        //                            arr[i] (source becomes dead).
+        //   `arr[i] be rep src`  -> deep-clone src into arr[i]
+        //                            (independent block, both alive).
+        // src_struct_name is the source's static struct name when
+        // is_rep is set, so irgen can lower to `bl _clone_<X>`. Both
+        // flags are 0 for plain `arr[i] be src`, which is allowed
+        // for primitives and read-only re-stores of the same heap
+        // pointer; the checker enforces that storing a borrowed
+        // heap-shaped value through plain `be` would alias and
+        // require an explicit `now` or `rep`.
         struct {
             Node *object;
             Node *index;
@@ -346,6 +359,9 @@ struct Node {
             int is_array;
             int is_byte;
             char *method_struct;
+            int is_move;
+            int is_rep;
+            char *src_struct_name;
         } index_assign;
 
         // NODE_ENUM_DEF

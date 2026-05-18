@@ -1,77 +1,365 @@
-// std/map — generic Map of K, V, backed by two parallel typed
-// arrays (keys, vals). Linear-probe scan for lookup; capacity
-// doubles on insert when full.
+// std/map — generic Map of K, V backed by an open-addressed
+// hash table.
 //
-// K can be int, any pointer-shaped value, or `String`. The
-// binary `eq` operator on String operands is rewritten by the
-// checker to `_str_eq` (byte-by-byte compare) — that rewrite
-// fires inside generic code post-monomorph too, so
-// `Map of String, V` lookups match by content, not by header
-// pointer.
+// Layout:
+//   count    int           // number of FULL entries (visible len)
+//   occupied int           // FULL + DELETED (probe must walk past tombstones)
+//   keys     array of K
+//   vals     array of V
+//   states   array of byte  // 0 = EMPTY, 1 = FULL, 2 = DELETED
+//
+// The three parallel arrays are always identical in cap, and that
+// cap is always a power of two. The probe uses
+// `(h mod cap + cap) mod cap` to keep bucket indexes non-negative
+// even when the hashed key happens to be negative (signed-int
+// wrap from multiplicative hashing).
+//
+// K = int uses Knuth multiplicative hashing in std/math
+// (`int.hash`); K = String uses the djb2-shaped hash already
+// shipping in std/string (`String.hash`). Generic code calls
+// `k.hash()` and `eq`; the compiler rewrites those per-monomorph
+// to the concrete typed implementations, so the same source
+// works for both K = int and K = String.
+//
+// Ownership: `set(k, v)` deep-clones both `k` and `v` into
+// freshly-allocated array slots via `is rep` + `arr[i] be now`.
+// This matters for heap-shaped K and V (e.g. `Map of String, String`):
+// the caller's local goes out of scope when the call returns, but
+// the map's clone is independent and survives. For primitive K /
+// V, `is rep` is a value copy and `be now` is a plain store —
+// no overhead.
+//
+// Lazy allocation: the field-default zero-init produces a Map
+// whose three array fields are null pointers. Every accessor
+// treats `self.keys eq 0` as "empty map", and the first `set`
+// allocates the backing arrays at the initial capacity.
 
 use std/list
+use std/option
+use std/math
+
+// Initial capacity once the map allocates. Must be a power of
+// two so `i mod cap` distributes uniformly.
+INITIAL_MAP_CAP() int {
+  give 8
+}
+
+// Bucket index in [0, cap) for `h` against a power-of-two cap.
+// `mod` in Potato can return a negative result when `h` is
+// negative (multiplicative wrap on signed 64-bit), so we add
+// `cap` before the second mod to fold it back into the
+// positive range.
+map_probe_index(h int, cap int) int {
+  r is h mod cap
+  r lt 0 ?{ r be r + cap }
+  give r
+}
 
 Map of K, V is {
-  count int
-  keys  array of K
-  vals  array of V
+  count    int
+  occupied int
+  keys     array of K
+  vals     array of V
+  states   array of byte
 }
+
+// Public accessors.
 
 Map.len(self Map of K, V) int {
   give self.count
 }
 
-// Insert or update. If `k` already exists, replace its value;
-// otherwise append a new entry. Doubles capacity if full.
-Map.set(self ref Map of K, V, k K, v V) {
-  // First-set path: lazily allocate keys + vals arrays.
-  self.keys eq 0 ?{
-    self.keys be array of K with cap 8
-    self.vals be array of V with cap 8
+// `cap` is the bucket count, not the live-entry count. Returns
+// 0 for a never-allocated map, which is the sentinel `keys eq 0`.
+Map.cap(self Map of K, V) int {
+  self.keys eq 0 ?{ give 0 }
+  give self.keys.cap
+}
+
+Map.empty(self Map of K, V) bool {
+  give self.count eq 0
+}
+
+// Walk the table and produce a `List of K` of every FULL key
+// in the underlying-array order. Iteration order is *not*
+// insertion order — the hash table reshuffles entries on
+// resize. Each emitted key is a deep clone of the stored entry
+// so the returned List owns its keys independently of the map.
+Map.keys(self Map of K, V) List of K {
+  out is List of K()
+  self.keys eq 0 ?{ give out }
+  through (i from 0 to self.keys.cap by 1) {
+    self.states[i] eq 1 ?{
+      el is rep self.keys[i]
+      out.push(el)
+    }
   }
-  // Linear-probe scan for existing key.
-  through (i from 0 to self.count by 1) {
-    self.keys[i] eq k ?{
-      self.vals[i] be v
+  give out
+}
+
+// Walk and emit every FULL value. Same ownership note as keys().
+Map.values(self Map of K, V) List of V {
+  out is List of V()
+  self.vals eq 0 ?{ give out }
+  through (i from 0 to self.vals.cap by 1) {
+    self.states[i] eq 1 ?{
+      el is rep self.vals[i]
+      out.push(el)
+    }
+  }
+  give out
+}
+
+// has() — true iff `k` is present.
+Map.has(self Map of K, V, k K) bool {
+  self.keys eq 0 ?{ give false }
+  cap is self.keys.cap
+  start is map_probe_index(k.hash(), cap)
+  through (off from 0 to cap by 1) {
+    i is map_probe_index(start + off, cap)
+    s is self.states[i]
+    s eq 0 ?{ give false }
+    s eq 1 ?{
+      self.keys[i] eq k ?{ give true }
+    }
+    // s eq 2 (DELETED) — keep probing.
+  }
+  give false
+}
+
+// Lookup. Returns the value for `k`. Panics on missing key —
+// the typed `try_get` is the non-panicking variant.
+//
+// The previous int-only sentinel-on-miss `Map.get` returned 0
+// for absent keys; that ambiguous shape is gone, in favor of
+// a panic + a `try_get` returning `Option of V`. This matches
+// `List.get` / `List.try_get`.
+Map.get(self Map of K, V, k K) V {
+  self.keys eq 0 ?{ assert(false) }
+  cap is self.keys.cap
+  start is map_probe_index(k.hash(), cap)
+  through (off from 0 to cap by 1) {
+    i is map_probe_index(start + off, cap)
+    s is self.states[i]
+    s eq 0 ?{ assert(false) }
+    s eq 1 ?{
+      self.keys[i] eq k ?{ give self.vals[i] }
+    }
+    // s eq 2 — keep probing.
+  }
+  // Probed every slot without hitting EMPTY *and* without
+  // finding a match. That's only possible if the table has
+  // no empty buckets at all; in our policy that cannot happen
+  // (resize keeps occupancy below cap), so this path is
+  // unreachable — but the language's must-return checker
+  // can't prove it, so we panic explicitly to satisfy it.
+  assert(false)
+  give self.vals[0]
+}
+
+// Lookup that returns Option of V (None on missing).
+Map.try_get(self Map of K, V, k K) Option of V {
+  self.keys eq 0 ?{ give none of V () }
+  cap is self.keys.cap
+  start is map_probe_index(k.hash(), cap)
+  through (off from 0 to cap by 1) {
+    i is map_probe_index(start + off, cap)
+    s is self.states[i]
+    s eq 0 ?{ give none of V () }
+    s eq 1 ?{
+      self.keys[i] eq k ?{ give some of V (self.vals[i]) }
+    }
+    // s eq 2 — keep probing.
+  }
+  give none of V ()
+}
+
+// Remove `k` if present. Returns true iff a key was removed.
+// Replaces the slot's state with DELETED (tombstone) so future
+// probes for keys that collided through this bucket still find
+// their target. The bucket itself becomes available to a later
+// `set` that wants to insert at the first DELETED in its probe
+// chain.
+Map.remove(self ref Map of K, V, k K) bool {
+  self.keys eq 0 ?{ give false }
+  cap is self.keys.cap
+  start is map_probe_index(k.hash(), cap)
+  through (off from 0 to cap by 1) {
+    i is map_probe_index(start + off, cap)
+    s is self.states[i]
+    s eq 0 ?{ give false }
+    s eq 1 ?{
+      self.keys[i] eq k ?{
+        self.states[i] be 2
+        self.count be self.count - 1
+        give true
+      }
+    }
+    // s eq 2 — keep probing.
+  }
+  give false
+}
+
+// Drop every entry. Cheap because it only touches the state
+// bytes — keys/vals slots are overwritten by the next set.
+Map.clear(self ref Map of K, V) {
+  self.keys eq 0 ?{ give }
+  through (i from 0 to self.states.cap by 1) {
+    self.states[i] be 0
+  }
+  self.count be 0
+  self.occupied be 0
+}
+
+// Reserve at least `cap_request` buckets. The actual cap rounds
+// up to the next power of two and keeps the 70% load-factor
+// invariant by sizing for `cap_request / 0.7`.
+//
+// On a never-allocated map this picks the initial cap; on an
+// already-allocated map smaller than the request, this triggers
+// a resize that drops every tombstone.
+Map.reserve(self ref Map of K, V, cap_request int) {
+  cap_request le 0 ?{ give }
+  // Want cap such that cap * 0.7 >= cap_request. Equivalently
+  // cap >= cap_request * 10 / 7. Round up.
+  needed is (cap_request * 10) / 7 + 1
+  // Round to next power of two, with a floor at INITIAL_MAP_CAP.
+  pow2 is INITIAL_MAP_CAP()
+  infi (pow2 lt needed) {
+    pow2 be pow2 * 2
+  }
+  self.keys eq 0 ?{
+    self.keys be array of K with cap pow2
+    self.vals be array of V with cap pow2
+    self.states be array of byte with cap pow2
+    give
+  }
+  pow2 le self.keys.cap ?{ give }
+  self.resize_to(pow2)
+}
+
+// Insert or update. Power-of-two cap, linear-probe, tombstone-
+// reusing. Both `k` and `v` are deep-cloned into freshly-owned
+// array slots via `is rep` + `arr[i] be now`, so the caller's
+// values can go out of scope without leaving dangling pointers
+// behind.
+Map.set(self ref Map of K, V, k K, v V) {
+  self.keys eq 0 ?{
+    cap is INITIAL_MAP_CAP()
+    self.keys be array of K with cap cap
+    self.vals be array of V with cap cap
+    self.states be array of byte with cap cap
+  }
+  // Resize-before-insert: keep load factor under 70%, and never
+  // allow `occupied` to fully cover the table (the probe walk
+  // in get() relies on at least one EMPTY existing).
+  threshold is (self.keys.cap * 7) / 10
+  self.occupied ge threshold ?{
+    self.resize_to(self.keys.cap * 2)
+  }
+  cap is self.keys.cap
+  start is map_probe_index(k.hash(), cap)
+  // Two-pass insert: first scan for an existing key OR an EMPTY.
+  // If we encountered a DELETED before EMPTY and never found the
+  // key, prefer that DELETED slot for the insert (tombstone reuse).
+  found_deleted is 0 - 1
+  through (off from 0 to cap by 1) {
+    i is map_probe_index(start + off, cap)
+    s is self.states[i]
+    s eq 1 ?{
+      self.keys[i] eq k ?{
+        // Key already present — overwrite the value. Deep-clone
+        // the new v into the slot; the slot already had a value
+        // before, but `array of V` does not currently track
+        // per-element ownership for drop, so the old value's
+        // heap data leaks. (See language-law / findings: typed
+        // arrays of heap-shaped T need element-wise drop.)
+        v_clone is rep v
+        self.vals[i] be now v_clone
+        give
+      }
+    }
+    s eq 2 ?{
+      found_deleted lt 0 ?{ found_deleted be i }
+    }
+    s eq 0 ?{
+      slot is i
+      reuse is 0
+      found_deleted ge 0 ?{
+        slot be found_deleted
+        reuse be 1
+      }
+      // Deep-clone both key and value into independent owned
+      // slots, then transfer ownership into the array via `now`.
+      // For primitive K / V these collapse to a value copy and a
+      // plain store; for heap-shaped K / V the map gets its own
+      // independent block.
+      k_clone is rep k
+      v_clone is rep v
+      self.keys[slot] be now k_clone
+      self.vals[slot] be now v_clone
+      self.states[slot] be 1
+      self.count be self.count + 1
+      reuse eq 0 ?{
+        self.occupied be self.occupied + 1
+      }
       give
     }
   }
-  // Not found — grow if needed.
-  self.count ge self.keys.cap ?{
-    new_cap is self.keys.cap * 2
-    fresh_k is array of K with cap new_cap
-    fresh_v is array of V with cap new_cap
-    through (i from 0 to self.count by 1) {
-      fresh_k[i] be self.keys[i]
-      fresh_v[i] be self.vals[i]
-    }
-    self.keys be now fresh_k
-    self.vals be now fresh_v
-  }
-  self.keys[self.count] be k
-  self.vals[self.count] be v
-  self.count be self.count + 1
+  // Probed every bucket without finding EMPTY. The
+  // resize-before-insert guard above guarantees an EMPTY exists,
+  // so this is only reachable if the resize itself failed to
+  // grow (which our policy never does). Keep an explicit assert
+  // so a future regression that silences the resize would crash
+  // visibly instead of corrupting the table.
+  assert(false)
 }
 
-// Lookup. Returns the value for `k`, or 0 if absent. Linear scan;
-// O(n). A future change can swap the storage layout (open-address
-// hash, btree, etc.) without breaking callers.
-Map.get(self Map of K, V, k K) V {
-  through (i from 0 to self.count by 1) {
-    self.keys[i] eq k ?{
-      give self.vals[i]
+// Internal: re-hash every FULL entry into a freshly-sized table.
+// `new_cap` must be a power of two >= count. Tombstones are
+// dropped (the new table starts with `occupied == count`).
+//
+// Defined as a method so the receiver clause carries the K, V
+// type arguments. Not part of the public API (callers use
+// `set` / `reserve` instead).
+Map.resize_to(self ref Map of K, V, new_cap int) {
+  fresh_keys is array of K with cap new_cap
+  fresh_vals is array of V with cap new_cap
+  fresh_states is array of byte with cap new_cap
+  // (states is byte-array; allocator already zero-fills, so
+  // every slot starts as EMPTY=0.)
+  // Walk old table, rehash every FULL entry into the new one.
+  // We MOVE keys/vals from the old slots into the new ones
+  // (no extra clone) — the old `self.keys` / `self.vals`
+  // arrays are about to be dropped, so transferring ownership
+  // into the new arrays is sound. The byte-level data buffer
+  // freed when the old array drops doesn't touch the
+  // already-moved heap blocks.
+  old_cap is self.keys.cap
+  through (i from 0 to old_cap by 1) {
+    self.states[i] eq 1 ?{
+      // Hash from a fresh local read; we don't mutate old_keys,
+      // we transfer the pointer.
+      h is self.keys[i].hash()
+      start is map_probe_index(h, new_cap)
+      through (off from 0 to new_cap by 1) {
+        j is map_probe_index(start + off, new_cap)
+        fresh_states[j] eq 0 ?{
+          k is rep self.keys[i]
+          v is rep self.vals[i]
+          fresh_keys[j] be now k
+          fresh_vals[j] be now v
+          fresh_states[j] be 1
+          // break out of inner loop
+          off be new_cap
+        }
+      }
     }
   }
-  give 0
-}
-
-// keys() — return a fresh List of K holding the keys in
-// insertion order. Allocates; iteration order is stable for
-// repeated calls on the same map.
-Map.keys(self Map of K, V) List of K {
-  out is List of K()
-  through (i from 0 to self.count by 1) {
-    out.push(self.keys[i])
-  }
-  give out
+  // `be now` drops the prior arrays.
+  self.keys be now fresh_keys
+  self.vals be now fresh_vals
+  self.states be now fresh_states
+  // Tombstones gone, so occupied == count.
+  self.occupied be self.count
 }

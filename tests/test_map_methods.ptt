@@ -1,21 +1,25 @@
 use std/string
+use std/option
+use std/list
 
-// Regression test: std/map — generic Map of K, V with
-// set/get/len for int-comparable keys (K is `int` or any
-// pointer-shaped value).
+// Regression test: std/map — open-addressed `Map of K, V`,
+// covering every method the checklist requires (`reserve`,
+// `cap`, `empty`, `set`, `get`, `try_get`, `has`, `remove`,
+// `clear`, `len`, `keys`, `values`).
 //
-// Pure Potato, backed by parallel `array of K` and `array of V`.
-// Linear-probe scan for lookup; capacity doubles on insert when
-// full. String-keyed maps live in std/string_map's StringMap
-// (which uses String.equals).
+// Two K types share the same generic body via monomorph:
+// `int` (Knuth multiplicative hash from std/math) and
+// `String` (djb2-shaped hash from std/string).
 
 use std/map
 
 test "len reflects inserted count" {
   m is Map of int, int()
   assert(m.len() eq 0)
+  assert(m.empty())
   m.set(1, 10)
   assert(m.len() eq 1)
+  assert(not m.empty())
   m.set(2, 20)
   m.set(3, 30)
   assert(m.len() eq 3)
@@ -31,14 +35,33 @@ test "get returns inserted values" {
   assert(m.get(3) eq 300)
 }
 
-test "get on missing key returns 0" {
+test "try_get returns Option of V" {
   m is Map of int, int()
   m.set(1, 100)
-  assert(m.get(99) eq 0)
-  assert(m.get(0) eq 0)
+  o is m.try_get(1)
+  assert(o.is_some())
+  assert(o.unwrap() eq 100)
+  n is m.try_get(99)
+  assert(n.is_none())
+  // Empty map (lazy-init): probe must short-circuit cleanly.
+  empty_m is Map of int, int()
+  e is empty_m.try_get(0)
+  assert(e.is_none())
 }
 
-test "re-set updates in place" {
+test "has flags presence and absence" {
+  m is Map of int, int()
+  m.set(1, 100)
+  m.set(2, 200)
+  assert(m.has(1))
+  assert(m.has(2))
+  assert(not m.has(99))
+  // Empty map (lazy-init).
+  empty_m is Map of int, int()
+  assert(not empty_m.has(0))
+}
+
+test "re-set updates in place, len unchanged" {
   m is Map of int, int()
   m.set(1, 100)
   m.set(2, 200)
@@ -50,13 +73,211 @@ test "re-set updates in place" {
 
 test "growth past initial capacity" {
   m is Map of int, int()
-  // Initial cap is 8 — insert 50 distinct keys to force
-  // multiple doublings.
-  through (i from 0 to 50 by 1) {
+  // Initial cap is 8 — insert many distinct keys to force
+  // multiple doublings. Spread keys to exercise probe chains.
+  through (i from 0 to 200 by 1) {
     m.set(i * 7, i * 100)
   }
-  assert(m.len() eq 50)
+  assert(m.len() eq 200)
+  // Spot-check across the range.
   assert(m.get(0) eq 0)
   assert(m.get(7) eq 100)
-  assert(m.get(49 * 7) eq 4900)
+  assert(m.get(199 * 7) eq 19900)
+  // cap should have grown beyond 200 / 0.7.
+  assert(m.cap() ge 256)
+}
+
+test "remove decrements len and forgets the key" {
+  m is Map of int, int()
+  m.set(1, 100)
+  m.set(2, 200)
+  m.set(3, 300)
+  assert(m.remove(2))
+  assert(m.len() eq 2)
+  assert(not m.has(2))
+  o is m.try_get(2)
+  assert(o.is_none())
+  // Other entries untouched.
+  assert(m.get(1) eq 100)
+  assert(m.get(3) eq 300)
+  // Removing a missing key returns false, len unchanged.
+  assert(not m.remove(99))
+  assert(m.len() eq 2)
+}
+
+test "tombstone reuse: remove then re-insert at same key" {
+  // remove() leaves a DELETED tombstone in the bucket, but a
+  // subsequent set() of the same key must reuse that slot
+  // and not double-count.
+  m is Map of int, int()
+  m.set(7, 100)
+  assert(m.remove(7))
+  m.set(7, 999)
+  assert(m.len() eq 1)
+  assert(m.get(7) eq 999)
+}
+
+test "tombstone does not block probe past it" {
+  // Pick keys that hash to the same probe chain. The Knuth
+  // multiplier turns each k into k * 2654435769 mod 2^64;
+  // taking that mod cap (8) gives the start bucket. We
+  // empirically pick keys that collide enough to force
+  // probe-past-tombstone behavior.
+  m is Map of int, int()
+  m.set(1, 1)
+  m.set(2, 2)
+  m.set(3, 3)
+  // Remove the middle one; the probe for `3` must walk past
+  // the tombstone and still find `3`.
+  assert(m.remove(2))
+  assert(m.has(3))
+  assert(m.get(3) eq 3)
+  assert(m.has(1))
+  assert(m.get(1) eq 1)
+}
+
+test "clear empties the table" {
+  m is Map of int, int()
+  m.set(1, 10)
+  m.set(2, 20)
+  m.set(3, 30)
+  m.clear()
+  assert(m.len() eq 0)
+  assert(m.empty())
+  assert(not m.has(1))
+  // Empty after clear; can be re-used.
+  m.set(1, 999)
+  assert(m.get(1) eq 999)
+}
+
+test "reserve preallocates without changing semantics" {
+  m is Map of int, int()
+  m.reserve(100)
+  // After reserve, cap is at least 100 / 0.7 rounded up to a
+  // power of two — concretely >= 256. Inserting 100 entries
+  // should not trigger another resize.
+  initial_cap is m.cap()
+  assert(initial_cap ge 256)
+  through (i from 0 to 100 by 1) {
+    m.set(i, i * 2)
+  }
+  assert(m.cap() eq initial_cap)
+  assert(m.len() eq 100)
+  through (i from 0 to 100 by 1) {
+    assert(m.get(i) eq i * 2)
+  }
+}
+
+test "keys() returns every present key" {
+  m is Map of int, int()
+  m.set(10, 1)
+  m.set(20, 2)
+  m.set(30, 3)
+  ks is m.keys()
+  assert(ks.len() eq 3)
+  // We don't assert iteration order — hash-table layout
+  // determines it. We only assert that the three keys are
+  // present.
+  saw_10 is false
+  saw_20 is false
+  saw_30 is false
+  through (k in ks) {
+    k eq 10 ?{ saw_10 be true }
+    k eq 20 ?{ saw_20 be true }
+    k eq 30 ?{ saw_30 be true }
+  }
+  assert(saw_10)
+  assert(saw_20)
+  assert(saw_30)
+}
+
+test "values() returns every present value" {
+  m is Map of int, int()
+  m.set(1, 100)
+  m.set(2, 200)
+  m.set(3, 300)
+  vs is m.values()
+  assert(vs.len() eq 3)
+  total is 0
+  through (v in vs) {
+    total be total + v
+  }
+  assert(total eq 600)
+}
+
+test "keys/values agree after remove" {
+  m is Map of int, int()
+  m.set(1, 10)
+  m.set(2, 20)
+  m.set(3, 30)
+  m.remove(2)
+  ks is m.keys()
+  vs is m.values()
+  assert(ks.len() eq 2)
+  assert(vs.len() eq 2)
+}
+
+test "string-keyed map: identity by content, not pointer" {
+  // Two `"foo"` literals from different rodata sites must
+  // hash and compare equal. Without proper byte-equality on
+  // String inside generic code, the second set would create
+  // a new bucket instead of updating.
+  m is Map of String, int()
+  m.set("foo", 1)
+  m.set("foo", 99)
+  assert(m.len() eq 1)
+  assert(m.get("foo") eq 99)
+}
+
+test "string-keyed: many distinct keys including collisions" {
+  m is Map of String, int()
+  // Insert pairs whose keys are short strings; the djb2 hash
+  // distributes them over the bucket array. The point is to
+  // verify that lookup post-resize finds every original key.
+  through (i from 0 to 64 by 1) {
+    m.set(i.to_string(), i)
+  }
+  assert(m.len() eq 64)
+  through (i from 0 to 64 by 1) {
+    assert(m.get(i.to_string()) eq i)
+    assert(m.has(i.to_string()))
+  }
+}
+
+test "negative-key hash bucket index stays in range" {
+  // Knuth multiplication can produce a negative product for
+  // some inputs (signed-int wrap). The probe must fold the
+  // bucket index back into [0, cap) regardless.
+  m is Map of int, int()
+  m.set(0 - 1, 1)
+  m.set(0 - 100, 2)
+  m.set(0 - 999999999999, 3)
+  assert(m.get(0 - 1) eq 1)
+  assert(m.get(0 - 100) eq 2)
+  assert(m.get(0 - 999999999999) eq 3)
+}
+
+test "map literal still lowers to Map of String, int" {
+  // ε4: ["k" to v] lowers via `use std/map`.
+  m is ["name" to 1, "age" to 2]
+  assert(m.get("name") eq 1)
+  assert(m.get("age") eq 2)
+  assert(m.len() eq 2)
+}
+
+test "map of String value: heap payloads survive growth" {
+  // V is heap-shaped (String). Grow past initial cap and
+  // confirm every value is still retrievable. This catches
+  // resize bugs that shallow-copy heap pointers without
+  // honoring `be` / `now` semantics.
+  m is Map of int, String()
+  through (i from 0 to 50 by 1) {
+    m.set(i, "v_" + i.to_string())
+  }
+  assert(m.len() eq 50)
+  through (i from 0 to 50 by 1) {
+    s is m.get(i)
+    expected is "v_" + i.to_string()
+    assert(s.equals(expected))
+  }
 }

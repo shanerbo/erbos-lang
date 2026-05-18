@@ -6,15 +6,16 @@
 use std/string
 use std/map
 use std/list
+use std/option
 
 solve(nums List of int, size int, target int) int {
   seen is Map of String, int()
   through (i from 0 to size by 1) {
     complement is target - nums[i]
     key is complement.to_string()
-    found is seen.get(key)
-    found ne 0 ?{
-      give (found - 1) * 100 + i
+    o is seen.try_get(key)
+    o.is_some() ?{
+      give (o.unwrap() - 1) * 100 + i
     }
     val_key is nums[i].to_string()
     seen.set(val_key, i + 1)

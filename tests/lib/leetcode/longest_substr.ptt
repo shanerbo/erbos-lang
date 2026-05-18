@@ -4,6 +4,7 @@
 
 use std/string
 use std/map
+use std/option
 
 longest(s String, n int) int {
   seen is Map of String, int()
@@ -11,8 +12,9 @@ longest(s String, n int) int {
   max_len is 0
   through (i from 0 to n by 1) {
     ch is s.char_at(i)
-    prev is seen.get(ch)
-    prev ne 0 ?{
+    o is seen.try_get(ch)
+    o.is_some() ?{
+      prev is o.unwrap()
       prev - 1 ge start ?{
         start be prev
       }

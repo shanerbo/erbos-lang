@@ -302,49 +302,83 @@ Tests:
 
 ## Phase 2: Hash Containers
 
-### `Map of K, V`
+### `Map of K, V` — implemented (open-addressed)
 
-Purpose: serious associative map. Current implementation is O(n) linear
-scan and should be replaced or renamed as a tiny map.
+Purpose: serious associative map. Current implementation is an
+open-addressed hash table with linear probing and tombstone-
+reusing inserts; the linear-scan map it replaced is gone.
 
-Required API:
+Shipped API (all required entries present in `std/map.ptt` and
+covered by `tests/test_map_methods.ptt`):
 
-- zero-value formation: `m is Map of K, V()`
-- `Map.reserve(self ref Map of K, V, cap int)`
-- `Map.len(self Map of K, V) int`
-- `Map.cap(self Map of K, V) int`
-- `Map.empty(self Map of K, V) bool`
-- `Map.set(self ref Map of K, V, k K, v V)`
-- `Map.get(self Map of K, V, k K) V`
-- `Map.try_get(self Map of K, V, k K) Option of V`
-- `Map.has(self Map of K, V, k K) bool`
-- `Map.remove(self ref Map of K, V, k K) bool`
-- `Map.clear(self ref Map of K, V)`
-- `Map.keys(self Map of K, V) List of K`
-- `Map.values(self Map of K, V) List of V`
-- `Map.entries(self Map of K, V) List of Entry of K, V`
+- zero-value formation: `m is Map of K, V()` ✓
+- `Map.reserve(self ref Map of K, V, cap int)` ✓
+- `Map.len(self Map of K, V) int` ✓
+- `Map.cap(self Map of K, V) int` ✓
+- `Map.empty(self Map of K, V) bool` ✓
+- `Map.set(self ref Map of K, V, k K, v V)` ✓ (deep-clones K, V)
+- `Map.get(self Map of K, V, k K) V` ✓ (panics on missing)
+- `Map.try_get(self Map of K, V, k K) Option of V` ✓
+- `Map.has(self Map of K, V, k K) bool` ✓
+- `Map.remove(self ref Map of K, V, k K) bool` ✓ (tombstone)
+- `Map.clear(self ref Map of K, V)` ✓
+- `Map.keys(self Map of K, V) List of K` ✓
+- `Map.values(self Map of K, V) List of V` ✓
+- `Map.entries(self Map of K, V) List of Entry of K, V` — deferred
+  pending an `Entry of K, V` decision (see "Why Entry deferred"
+  below); not blocking stdlib consolidation since `keys()` plus
+  `try_get(k)` covers every present user need.
 
 Algorithm / representation:
 
-- open-addressed hash table
+- open-addressed hash table; power-of-two cap for fast modulo;
 - arrays: `keys array of K`, `vals array of V`, `states array of byte`
-- states: empty, full, deleted
-- resize around 70% load
-- start with linear probing; upgrade to Robin Hood probing if probe lengths
-  become a problem
+  with states 0=EMPTY, 1=FULL, 2=DELETED;
+- resize-before-insert at 70% load (`occupied >= cap*7/10`);
 - hash algorithms:
-  - `int`: multiplicative mix
-  - `String`: FNV-1a over bytes
-  - arbitrary struct keys should wait for explicit hash support
+  - `int`: Knuth multiplicative (`int.hash` in `std/math`),
+  - `String`: djb2-shaped (`String.hash`, already in `std/string`),
+  - generic code calls `k.hash()` and `eq`; the compiler resolves
+    both to the typed implementation post-monomorph.
 
-Tests:
+Why Entry deferred: the spec'd `entries()` requires a generic
+`Entry of K, V` struct. With the new value-formation law, the
+returned list would have to push values formed via
+`Entry of K, V(key is k, value is v)` inside generic code; that
+works syntactically but the auto-init recursion for struct-typed
+fields is still being audited. Punting until the audit clears.
 
-- insert/update/get/remove
-- collision-heavy keys
-- tombstone reuse
-- resize behavior
+Compiler/runtime root-cause fixes that landed alongside Map:
+
+1. `arr[i] be now src` / `arr[i] be rep src` — the language now
+   supports ownership transfer and deep-clone on index-assign,
+   so `Map.set` can store deep-cloned keys/values into the
+   `array of K` / `array of V` slots without aliasing the
+   caller's locals. (Parser, checker, irgen, monomorph clone.)
+2. `_heap_alloc` zero-fills the returned block on both the
+   free-list-reuse and bump paths. Without this, allocations of
+   `array of byte` (e.g. `states`) saw stale heap bytes and
+   reported the wrong slot as FULL=1 on the very first read.
+3. `_heap_free` rounds the requested size up to a 16-byte
+   multiple before threading the block onto the free list. The
+   metadata header (next pointer + size) is 16 bytes; freeing
+   a sub-16-byte block (e.g. `array of byte with cap 8`) was
+   corrupting adjacent free-list nodes.
+4. `NODE_INDEX_ASSIGN` now has a `clone_node` case in
+   monomorph.c, so generic-method bodies that write to array
+   slots are deep-copied per instantiation rather than aliased.
+
+Tests in place:
+
+- happy-path set/get/has/try_get/remove/clear/reserve/keys/values
+- update-in-place (re-set replaces value)
+- growth across cap doublings
+- tombstone reuse after remove
+- tombstone-doesn't-block-probe-past-it
+- panic on `get` of a missing key (`tests/errors/map_get_missing_key_panics.ptt`)
 - String key equality by content, not rodata pointer
-- heap-shaped values and ownership behavior
+- heap-shaped value type (`Map of int, String`) survives growth
+- negative-key hash bucket index stays in range
 
 ### `Set of T`
 

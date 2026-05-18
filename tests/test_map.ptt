@@ -1,5 +1,6 @@
 use std/string
 use std/map
+use std/option
 
 test "string-map set and get" {
   m is Map of String, int()
@@ -43,5 +44,10 @@ test "int-map set and get" {
   m.set(7, 200)
   assert(m.get(42) eq 100)
   assert(m.get(7) eq 200)
-  assert(m.get(99) eq 0)
+  // The `0`-on-missing sentinel is gone: `get` panics on a
+  // missing key now, and `try_get` is the non-panicking
+  // variant. Existence check goes through `has`.
+  assert(not m.has(99))
+  o is m.try_get(99)
+  assert(o.is_none())
 }

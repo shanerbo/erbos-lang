@@ -1,0 +1,13 @@
+// Map.get panics on a missing key. The previous int-only
+// sentinel-on-miss return-0 contract is gone; user code that
+// wants to handle missing keys without panicking must use
+// `try_get` (Option) or `has`.
+
+use std/string
+use std/map
+
+spark {
+  m is Map of String, int()
+  m.set("known", 1)
+  yell(m.get("missing"))
+}
