@@ -25,8 +25,19 @@ INITIAL_SET_CAP() int {
   give 8
 }
 
+// F-005: see map_probe_index in std/map.ptt for the full
+// rationale. Same fix shape: combine `h mod cap` (low-bit
+// window) with `(h / cap) mod cap` (high-bit window) via a
+// modular sum so the bucket depends on at least 2*log2(cap)
+// bits of `h`. Patterned-low-bit inputs no longer collide on
+// the same bucket regardless of their high bits. Both
+// intermediate values are bounded in `[-(cap-1), cap-1]`, so
+// the sum is overflow-safe even for hashes near INT_MIN /
+// INT_MAX (djb2-shaped String.hash routinely wraps).
 set_probe_index(h int, cap int) int {
-  r is h mod cap
+  low is h mod cap
+  high is (h / cap) mod cap
+  r is (low + high) mod cap
   r lt 0 ?{ r be r + cap }
   give r
 }
@@ -52,18 +63,21 @@ Set.empty(self Set of T) bool {
 }
 
 // has() — true iff `v` is a member.
+//
+// F-005: linear probe via cursor-with-wrap, mirroring Map.has.
 Set.has(self Set of T, v T) bool {
   self.data eq 0 ?{ give false }
   cap is self.data.cap
-  start is set_probe_index(v.hash(), cap)
+  i is set_probe_index(v.hash(), cap)
   through (off from 0 to cap by 1) {
-    i is set_probe_index(start + off, cap)
     s is self.states[i]
     s eq 0 ?{ give false }
     s eq 1 ?{
       self.data[i] eq v ?{ give true }
     }
     // s eq 2 — keep probing
+    i be i + 1
+    i ge cap ?{ i be i - cap }
   }
   give false
 }
@@ -81,10 +95,9 @@ Set.add(self ref Set of T, v T) bool {
     self.resize_to(self.data.cap * 2)
   }
   cap is self.data.cap
-  start is set_probe_index(v.hash(), cap)
+  i is set_probe_index(v.hash(), cap)
   found_deleted is 0 - 1
   through (off from 0 to cap by 1) {
-    i is set_probe_index(start + off, cap)
     s is self.states[i]
     s eq 1 ?{
       self.data[i] eq v ?{
@@ -111,6 +124,8 @@ Set.add(self ref Set of T, v T) bool {
       }
       give true
     }
+    i be i + 1
+    i ge cap ?{ i be i - cap }
   }
   // Same unreachable-but-must-return guard as Map.set.
   assert(false)
@@ -121,9 +136,8 @@ Set.add(self ref Set of T, v T) bool {
 Set.remove(self ref Set of T, v T) bool {
   self.data eq 0 ?{ give false }
   cap is self.data.cap
-  start is set_probe_index(v.hash(), cap)
+  i is set_probe_index(v.hash(), cap)
   through (off from 0 to cap by 1) {
-    i is set_probe_index(start + off, cap)
     s is self.states[i]
     s eq 0 ?{ give false }
     s eq 1 ?{
@@ -133,6 +147,8 @@ Set.remove(self ref Set of T, v T) bool {
         give true
       }
     }
+    i be i + 1
+    i ge cap ?{ i be i - cap }
   }
   give false
 }
@@ -269,15 +285,18 @@ Set.resize_to(self ref Set of T, new_cap int) {
   through (i from 0 to old_cap by 1) {
     self.states[i] eq 1 ?{
       h is self.data[i].hash()
-      start is set_probe_index(h, new_cap)
+      // F-005: linear-probe cursor-with-wrap, same shape as
+      // the lookup paths above.
+      j is set_probe_index(h, new_cap)
       through (off from 0 to new_cap by 1) {
-        j is set_probe_index(start + off, new_cap)
         fresh_states[j] eq 0 ?{
           v is rep self.data[i]
           fresh_data[j] be now v
           fresh_states[j] be 1
           off be new_cap
         }
+        j be j + 1
+        j ge new_cap ?{ j be j - new_cap }
       }
     }
   }

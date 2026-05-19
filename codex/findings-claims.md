@@ -64,13 +64,15 @@ If another implementation batch starts before audit:
 ## Header
 
 - `State`: IDLE
-- `Claim ID`: (none — C-008 was consumed and accepted for F-007;
-  batch remains on HOLD because F-005 is still open against the
-  post-C-008 working tree)
-- `Against findings revision`: 13
-- `Target commit`: 7650e2e + working tree
-- `Claimed fixed`: (none pending; next claim will target F-005)
-- `Last updated`: 2026-05-19T01:37:05+00:00
+- `Claim ID`: (none — C-009 was consumed by Codex against findings
+  revision 14 and accepted with `Conclusion: ALL_CLEAR` /
+  `Release action: COMMIT_AND_PUSH`; the audited optimization
+  batch (C-008 + C-009) was landed as two commits in dependency
+  order: C-008 in 8ea71a5 and C-009 in this commit)
+- `Against findings revision`: 14
+- `Target commit`: 8ea71a5 + this commit
+- `Claimed fixed`: (none pending)
+- `Last updated`: 2026-05-19T02:07:04+00:00
 
 ## Claim C-001
 - State: READY_FOR_AUDIT
@@ -1000,6 +1002,121 @@ If another implementation batch starts before audit:
     primitive against silent regressions in any of the four
     public APIs.
 
+## Claim C-009
+- State: READY_FOR_AUDIT
+- Against findings revision: 13
+- Target commit: 7650e2e + working tree (uncommitted; Codex can
+  verify against `git diff` for the listed files)
+- Claimed fixed: F-005
+- Last updated: 2026-05-19T01:56:04+00:00
+- Bug class (recap from findings.md F-005):
+  Pre-fix `Map` and `Set` reduced the key hash with plain
+  `h mod cap`, so the bucket depended only on the bottom
+  log2(cap) bits of `h`. For Knuth-multiplicative `int.hash`
+  (the only mixing pre-step) the constant `golden_ratio mod
+  cap` is small and odd, so `(key * golden_ratio) mod cap`
+  reduced to `key * (golden_ratio mod cap) mod cap` — and any
+  inputs that share the bottom log2(cap) bits collided on the
+  same bucket regardless of how their high bits differed
+  (e.g. `{1, 1+cap, 1+2*cap, ...}` all hashed to the same
+  bucket as 1). On top of that, every probe step recomputed
+  `(start + off) mod cap`, so each collision walk paid an
+  unconditional modulo per step instead of using a cursor.
+- Root-cause fix:
+  Pure stdlib change. Two parts, applied identically to Map
+  and Set so the probe shape is single-source between them.
+  - **Stronger start-bucket selection.** `map_probe_index` and
+    `set_probe_index` now combine two windows of `h` before
+    finalising the bucket: `low = h mod cap` and `high =
+    (h / cap) mod cap`, then `(low + high) mod cap` (with the
+    final negative-fold). `h / cap` is the "shift right by
+    log2(cap)" equivalent for a power-of-two cap; folding it
+    into the low bits forces the bucket to depend on at least
+    2 * log2(cap) bits of `h`. Both intermediate values are
+    bounded in `[-(cap-1), cap-1]`, so the combining sum is
+    overflow-safe even when `h` itself is near INT_MIN /
+    INT_MAX (djb2-shaped String.hash routinely wraps signed
+    64-bit). Patterned-low-bit inputs that previously
+    collapsed into a single bucket now fan out across the
+    table because their high-bit windows differ.
+  - **Linear-probe cursor.** Every probe loop in Map.has /
+    Map.get / Map.try_get / Map.remove / Map.set /
+    Map.resize_to (and the matching Set methods) now mixes
+    once into a start bucket via `_probe_index`, then advances
+    via `i be i + 1; i ge cap ?{ i be i - cap }`. The branch-
+    and-subtract step is constant-cost and predicts well; the
+    pre-fix `_probe_index(start + off, cap)` paid a modulo
+    per step.
+  Public semantics are unchanged. All pre-existing
+  `tests/test_map_methods.ptt` and `tests/test_set.ptt` cases
+  pass identically; the new tests below explicitly exercise
+  adversarial keys that pre-fix would still have routed
+  through the multiplicative hash but post-fix demonstrably
+  spread.
+- Files changed:
+  - `std/map.ptt` (probe formula + cursor pattern across
+    has / get / try_get / remove / set / resize_to)
+  - `std/set.ptt` (matching changes for has / add / remove /
+    resize_to)
+  - `tests/test_hash_distribution.ptt` (new, 14 framework
+    cases)
+  - `tests/bench/hash_probe_bench.ptt` (new bench file)
+  - `tests/bench/BASELINE.md` (added a section documenting
+    the new bench)
+- Tests added (`tests/test_hash_distribution.ptt`, all pass at
+  `-O0`/`-O1`/`-O2`):
+  - **Map of int, int adversarial keys** (6): multiples-of-
+    cap keys (4096 entries forced through cap=8192),
+    multiples-of-256 keys (4096 entries), powers-of-two keys
+    (60 entries with single-bit-set-at-unique-position),
+    same-low-bits-different-high keys (2048 entries with
+    keys like `1 + i * 1024`), negative adversarial keys
+    (1024 entries), and interleaved positive + negative
+    adversarial (2048 entries total).
+  - **Set of int adversarial keys** (2): multiples-of-cap
+    keys at scale (4096 entries), same-low-bits-different-
+    high keys (2048 entries).
+  - **Lookup-miss correctness under collision pressure** (2):
+    `Map miss correctly returns None`, `Set miss correctly
+    returns false` — verifies the probe walk visits an EMPTY
+    slot to terminate even when the table is filled with
+    adversarial keys.
+  - **Tombstone reuse under adversarial keys** (2): Map and
+    Set both. Removes alternate keys, re-inserts a different
+    adversarial set, verifies both surviving and re-inserted
+    keys are retrievable. Exercises the probe walk across
+    DELETED tombstones with the new cursor pattern.
+  - **String-keyed Map under shared-prefix keys** (1): 1024
+    strings with a long shared prefix, verifying that
+    djb2-shaped String.hash + the new bucket function still
+    yields a distribution that satisfies the lookup contract
+    even when `h` magnitudes wrap signed 64-bit.
+  - **Pre-existing tests unchanged**: all
+    `tests/test_map_methods.ptt` and `tests/test_set.ptt`
+    cases still pass.
+- Bench coverage added (`tests/bench/`, stand-alone `spark`
+  program):
+  - `hash_probe_bench.ptt`: builds a `Map of int, int` with
+    2048 adversarial keys (multiples of 8), then runs four
+    phases: bulk insert, hit lookup with sum, miss lookup
+    via try_get, and tombstone-reuse round-trip with a spot
+    check. Output: `2048 / 14672896 / 2048 / 3072 / 49 / 0`.
+  - `tests/bench/BASELINE.md` extended with a
+    `hash_probe_bench.ptt` section.
+- Verification context:
+  - `make clean && make test` ends with `All tests passed.`
+    from a cold rebuild.
+  - `tests/test_hash_distribution.ptt` (14 cases) passes at
+    `-O0`, `-O1`, `-O2`.
+  - The new bench produces deterministic output across
+    repeated runs, locking the bucket function and probe
+    shape against silent regressions.
+  - Pre-existing `tests/test_string_search.ptt` (F-007, 19
+    cases), `tests/test_string_builder.ptt` (F-008, 18
+    cases), `tests/test_collection_materializers.ptt`
+    (F-006, 14 cases), `tests/test_map_methods.ptt`, and
+    `tests/test_set.ptt` all still pass.
+
 ## Claim Template
 
 ```md
@@ -1123,3 +1240,38 @@ If another implementation batch starts before audit:
   accepted for F-007. Batch stays on HOLD because F-005 is still
   open against the post-C-008 working tree; that needs its own
   claim before the batch can land. Header reset to `IDLE`.
+- Claim C-009 submitted: F-005 fix (hash-table probe quality).
+  Pure stdlib change. Stronger start-bucket selection
+  (`map_probe_index` / `set_probe_index` fold the high-bit
+  window of `h` into the low bits via `low = h mod cap;
+  high = (h / cap) mod cap; (low + high) mod cap` — overflow-
+  safe for djb2 String.hash wraparound). Linear-probe cursor
+  with branch-and-subtract wrap replaces per-step modular
+  reduction in every Map and Set probe loop (has, get,
+  try_get, remove, set/add, resize_to). 14 new framework
+  cases verify correctness under multiples-of-cap keys (up to
+  4096), powers-of-two keys, same-low-bits-different-high
+  keys, negative adversarial keys, interleaved sign,
+  miss-under-collision-pressure, and tombstone-reuse. New
+  bench `hash_probe_bench.ptt` exercises the four phases on
+  N=2048 multiples-of-8 keys (bulk insert / hit / miss /
+  tombstone reuse). Cold-rebuild `make test` green; new file
+  passes at -O0/-O1/-O2.
+- Claim C-009 consumed by Codex against findings revision 14 and
+  accepted with `Conclusion: ALL_CLEAR` /
+  `Release action: COMMIT_AND_PUSH`. The audited optimization
+  batch covers both C-008 (F-007, accepted earlier but held
+  pending F-005) and C-009 (F-005). Landing as two separate
+  commits in dependency order: C-008 first (the shared
+  string-search primitive that doesn't depend on hash-table
+  changes), then C-009 (Map / Set probe quality). Header
+  reset to `IDLE`.
+- Claim C-005 consumed by Codex against findings revision 9 and
+  accepted with `Conclusion: ALL_CLEAR` /
+  `Release action: COMMIT_AND_PUSH`. The audited batch covers
+  both C-004 (F-002, accepted earlier but held pending F-003 /
+  F-004) and C-005 (F-003 + F-004). Landing as two separate
+  commits in dependency order: C-004 first (F-002 compiler +
+  List stdlib changes that C-005 builds on), then C-005
+  (Queue / Deque stdlib changes plus their tests). Header reset
+  to `IDLE`.

@@ -44,13 +44,37 @@ INITIAL_MAP_CAP() int {
   give 8
 }
 
-// Bucket index in [0, cap) for `h` against a power-of-two cap.
-// `mod` in Potato can return a negative result when `h` is
-// negative (multiplicative wrap on signed 64-bit), so we add
-// `cap` before the second mod to fold it back into the
-// positive range.
+// F-005: stronger start-bucket selection than plain
+// `h mod cap`. The previous reduction took only the bottom
+// log2(cap) bits of `h`, so any inputs that share low bits —
+// e.g. keys `{k, k+cap, k+2*cap, ...}` — collided on the same
+// bucket regardless of how the key's high bits differed.
+// Knuth multiplicative pre-mix `(key * golden_ratio)` doesn't
+// rescue this: `(key * golden_ratio) mod cap` reduces to
+// `key * (golden_ratio mod cap) mod cap`, and for
+// power-of-two cap the constant `golden_ratio mod cap` is odd
+// but small — patterned-low-bit inputs still alias.
+//
+// The fix folds a higher-bit window of `h` into the low bits
+// before the bucket is finalised. Potato has no shift / xor,
+// so we use `h / cap` as a "shift right by log2(cap)"
+// equivalent (cap is a power of two; division by it shifts
+// the top bits of h down into the bottom). Combining the two
+// windows via modular sum is overflow-safe even for signed
+// 64-bit wrapping hashes (djb2-shaped String.hash can produce
+// values near INT_MIN/INT_MAX): we take `low = h mod cap` and
+// `high = (h / cap) mod cap` first, both bounded in
+// `[-(cap-1), cap-1]`, then add and re-fold. The sum's
+// magnitude never exceeds `2 * (cap - 1)`, well inside int
+// range.
+//
+// `mod` in Potato follows truncated division, so it can return
+// a negative remainder when `h` is negative. The final
+// `r lt 0` fold maps any negative result back into `[0, cap)`.
 map_probe_index(h int, cap int) int {
-  r is h mod cap
+  low is h mod cap
+  high is (h / cap) mod cap
+  r is (low + high) mod cap
   r lt 0 ?{ r be r + cap }
   give r
 }
@@ -121,18 +145,27 @@ Map.values(self Map of K, V) List of V {
 }
 
 // has() — true iff `k` is present.
+//
+// F-005: linear probe via a cursor that increments by 1 and
+// wraps via subtraction at the cap boundary, instead of
+// recomputing `map_probe_index(start + off, cap)` each step.
+// The start bucket is mixed once via map_probe_index; every
+// subsequent step is a single increment-and-conditional-
+// subtract, which the compiler lowers to a branch the
+// hardware predicts well.
 Map.has(self Map of K, V, k K) bool {
   self.keys eq 0 ?{ give false }
   cap is self.keys.cap
-  start is map_probe_index(k.hash(), cap)
+  i is map_probe_index(k.hash(), cap)
   through (off from 0 to cap by 1) {
-    i is map_probe_index(start + off, cap)
     s is self.states[i]
     s eq 0 ?{ give false }
     s eq 1 ?{
       self.keys[i] eq k ?{ give true }
     }
     // s eq 2 (DELETED) — keep probing.
+    i be i + 1
+    i ge cap ?{ i be i - cap }
   }
   give false
 }
@@ -147,15 +180,16 @@ Map.has(self Map of K, V, k K) bool {
 Map.get(self Map of K, V, k K) V {
   self.keys eq 0 ?{ assert(false) }
   cap is self.keys.cap
-  start is map_probe_index(k.hash(), cap)
+  i is map_probe_index(k.hash(), cap)
   through (off from 0 to cap by 1) {
-    i is map_probe_index(start + off, cap)
     s is self.states[i]
     s eq 0 ?{ assert(false) }
     s eq 1 ?{
       self.keys[i] eq k ?{ give self.vals[i] }
     }
     // s eq 2 — keep probing.
+    i be i + 1
+    i ge cap ?{ i be i - cap }
   }
   // Probed every slot without hitting EMPTY *and* without
   // finding a match. That's only possible if the table has
@@ -171,15 +205,16 @@ Map.get(self Map of K, V, k K) V {
 Map.try_get(self Map of K, V, k K) Option of V {
   self.keys eq 0 ?{ give none of V () }
   cap is self.keys.cap
-  start is map_probe_index(k.hash(), cap)
+  i is map_probe_index(k.hash(), cap)
   through (off from 0 to cap by 1) {
-    i is map_probe_index(start + off, cap)
     s is self.states[i]
     s eq 0 ?{ give none of V () }
     s eq 1 ?{
       self.keys[i] eq k ?{ give some of V (self.vals[i]) }
     }
     // s eq 2 — keep probing.
+    i be i + 1
+    i ge cap ?{ i be i - cap }
   }
   give none of V ()
 }
@@ -193,9 +228,8 @@ Map.try_get(self Map of K, V, k K) Option of V {
 Map.remove(self ref Map of K, V, k K) bool {
   self.keys eq 0 ?{ give false }
   cap is self.keys.cap
-  start is map_probe_index(k.hash(), cap)
+  i is map_probe_index(k.hash(), cap)
   through (off from 0 to cap by 1) {
-    i is map_probe_index(start + off, cap)
     s is self.states[i]
     s eq 0 ?{ give false }
     s eq 1 ?{
@@ -206,6 +240,8 @@ Map.remove(self ref Map of K, V, k K) bool {
       }
     }
     // s eq 2 — keep probing.
+    i be i + 1
+    i ge cap ?{ i be i - cap }
   }
   give false
 }
@@ -268,13 +304,12 @@ Map.set(self ref Map of K, V, k K, v V) {
     self.resize_to(self.keys.cap * 2)
   }
   cap is self.keys.cap
-  start is map_probe_index(k.hash(), cap)
+  i is map_probe_index(k.hash(), cap)
   // Two-pass insert: first scan for an existing key OR an EMPTY.
   // If we encountered a DELETED before EMPTY and never found the
   // key, prefer that DELETED slot for the insert (tombstone reuse).
   found_deleted is 0 - 1
   through (off from 0 to cap by 1) {
-    i is map_probe_index(start + off, cap)
     s is self.states[i]
     s eq 1 ?{
       self.keys[i] eq k ?{
@@ -315,6 +350,8 @@ Map.set(self ref Map of K, V, k K, v V) {
       }
       give
     }
+    i be i + 1
+    i ge cap ?{ i be i - cap }
   }
   // Probed every bucket without finding EMPTY. The
   // resize-before-insert guard above guarantees an EMPTY exists,
@@ -351,18 +388,23 @@ Map.resize_to(self ref Map of K, V, new_cap int) {
       // Hash from a fresh local read; we don't mutate old_keys,
       // we transfer the pointer.
       h is self.keys[i].hash()
-      start is map_probe_index(h, new_cap)
+      // F-005: linear-probe cursor with subtract-on-overflow
+      // wrap; same shape as the lookup paths above. The break
+      // condition still drives `off be new_cap`, but the
+      // bucket index is now an explicit cursor `j` instead of
+      // a per-step modular reduction.
+      j is map_probe_index(h, new_cap)
       through (off from 0 to new_cap by 1) {
-        j is map_probe_index(start + off, new_cap)
         fresh_states[j] eq 0 ?{
           k is rep self.keys[i]
           v is rep self.vals[i]
           fresh_keys[j] be now k
           fresh_vals[j] be now v
           fresh_states[j] be 1
-          // break out of inner loop
           off be new_cap
         }
+        j be j + 1
+        j ge new_cap ?{ j be j - new_cap }
       }
     }
   }

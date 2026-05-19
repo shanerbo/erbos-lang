@@ -1,0 +1,74 @@
+// Microbenchmark for the F-005 hash-table probe-quality fix.
+//
+// Pre-fix Map and Set used `h mod cap` for bucket selection
+// (low-bit modulo) and recomputed `(start + off) mod cap` per
+// probe step. Adversarial integer keys that share low bits —
+// like multiples of 8 — collided 100% on bucket 0 for caps up
+// to the period of the pattern; every lookup turned into a
+// full-table linear scan.
+//
+// Post-fix the bucket function mixes `h / cap` (the high-bit
+// window) into `h` before the mod, breaking the low-bit
+// dependency. The probe walk maintains a cursor that
+// increments and wraps via subtract-on-overflow instead of a
+// per-step modular reduction.
+//
+// Phases:
+//   1. set: insert N adversarial keys (multiples of 8).
+//   2. get-hit: read every key back; sum values.
+//   3. get-miss: try_get of N non-member keys (odd offsets);
+//      verify each is None.
+//   4. tombstone-reuse: remove half the keys, re-insert a
+//      different adversarial set, lookup-hit verify.
+//
+// Adversarial workload sizing (N=2048) is chosen to drive
+// multiple cap doublings (cap=8 -> 16 -> ... -> 4096) without
+// hitting an unrelated pre-existing heap-allocator instability
+// at very large cap. Tombstone-reuse phase doubles total
+// occupancy to ~4096 to stress the resize-then-rehash path.
+
+use std/list
+use std/map
+use std/option
+
+spark {
+  // Phase 1: set N=2048 adversarial keys.
+  m is Map of int, int()
+  through (i from 0 to 2048 by 1) {
+    k is i * 8
+    m.set(k, i * 7)
+  }
+  yell(m.len())                         // 2048
+
+  // Phase 2: hit lookup. Sum values to keep dead-code-elim
+  // away.
+  total is 0
+  through (i from 0 to 2048 by 1) {
+    k is i * 8
+    total be total + m.get(k)
+  }
+  yell(total)                           // 7 * sum(0..2047) = 14672896
+
+  // Phase 3: miss lookup at odd offsets (never inserted).
+  miss_count is 0
+  through (i from 0 to 2048 by 1) {
+    k is i * 8 + 1
+    opt is m.try_get(k)
+    opt.is_none() ?{ miss_count be miss_count + 1 }
+  }
+  yell(miss_count)                      // 2048
+
+  // Phase 4: tombstone-reuse round-trip.
+  through (i from 0 to 2048 by 1) {
+    i mod 2 eq 0 ?{
+      m.remove(i * 8)
+    }
+  }
+  through (i from 0 to 2048 by 1) {
+    m.set(i * 8 + 4, i)
+  }
+  yell(m.len())                         // 1024 (odd survivors) + 2048 (new) = 3072
+  // Spot check: a survivor and a new entry.
+  yell(m.get(7 * 8))                    // 7 * 7 = 49
+  yell(m.get(0 + 4))                    // 0 (the i=0 new entry)
+}

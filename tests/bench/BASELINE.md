@@ -67,6 +67,25 @@ record (~28890 bytes), then exercises:
 
 - Output shape (6 lines): `28889 / 3000 / 5000 / 23890 / 5000 / 23890`.
 
+## `hash_probe_bench.ptt` — Map probe quality on adversarial keys
+
+F-005 reference workload. Stresses `Map of int, int` with 2048
+adversarial keys (multiples of 8) — the F-005 worst case under
+the pre-fix low-bit modulo. Phases:
+  1. set: insert N=2048 multiples of 8.
+  2. get-hit: read every key back; sum values.
+  3. get-miss: try_get of N non-member keys (odd offsets).
+  4. tombstone-reuse: remove half the keys, re-insert a
+     different adversarial set, lookup-hit verify.
+
+Pre-fix, sequentially-related keys that share low bits all
+collided on the same bucket regardless of cap, turning every
+lookup into a near-full-table linear scan. Post-fix the
+bucket index folds the high-bit window of `h` into the low
+bits, restoring full-table distribution.
+
+- Output shape (6 lines): `2048 / 14672896 / 2048 / 3072 / 49 / 0`.
+
 ## Baseline (M-series Mac)
 
 The fixed cost (lex/parse/check/codegen/assemble/link/launch)

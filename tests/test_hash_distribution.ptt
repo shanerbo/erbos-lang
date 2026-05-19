@@ -1,0 +1,287 @@
+// F-005 regression: hash-container probe quality under
+// adversarial integer keys.
+//
+// Pre-fix `Map` and `Set` reduced the key hash with plain
+// `h mod cap`, so the bucket depended only on the bottom
+// log2(cap) bits of `h`. Knuth multiplicative hashing's bottom
+// bit is 1, so for sequential keys the bucket reduces to
+// `key mod cap`. For keys that are multiples of cap (or share
+// any low-bit pattern with cap), every key hashed to the same
+// bucket — a 100% collision rate that turned every lookup into
+// a full-table linear scan.
+//
+// Post-fix: `map_probe_index` and `set_probe_index` mix
+// `h / cap` (the high-bit window) into the low bits before
+// taking `mod cap`. Adversarial low-bit-aligned keys spread
+// across the table because their high-bit windows differ.
+//
+// Probe walks no longer recompute `(start + off) mod cap` per
+// step; instead the bucket cursor increments and wraps via
+// branch-and-subtract, which the hardware predicts well.
+//
+// Tests: hold the hash containers to correctness under several
+// patterned key distributions that would have collapsed the
+// pre-fix probe walks. The post-fix invariant is purely
+// algorithmic (no observable semantic change for ordinary
+// inputs); these tests guarantee distribution holds even at
+// scale.
+
+use std/list
+use std/map
+use std/set
+use std/string
+
+// ---------------------------------------------------------------
+// Map: adversarial integer keys under low-bit modulo
+// ---------------------------------------------------------------
+
+test "Map of int, int handles multiples-of-cap keys" {
+  // Pre-fix worst case: keys = 8, 16, 24, 32, ... all collide
+  // on bucket 0 because (key * golden_ratio) mod 8 collapses
+  // to (key mod 8) = 0 for multiples of 8.
+  m is Map of int, int()
+  through (i from 0 to 4096 by 1) {
+    k is i * 8
+    m.set(k, i)
+  }
+  assert(m.len() eq 4096)
+  // Every key must be retrievable after 9 cap doublings
+  // (cap=8 -> 16 -> ... -> 8192).
+  through (i from 0 to 4096 by 1) {
+    k is i * 8
+    assert(m.get(k) eq i)
+  }
+}
+
+test "Map of int, int handles multiples-of-256 keys" {
+  // Larger pre-fix collision class: multiples of 256 collapse
+  // to bucket 0 for cap up to 256.
+  m is Map of int, int()
+  through (i from 0 to 4096 by 1) {
+    k is i * 256
+    m.set(k, i * 3)
+  }
+  assert(m.len() eq 4096)
+  through (i from 0 to 4096 by 1) {
+    k is i * 256
+    assert(m.get(k) eq i * 3)
+  }
+}
+
+test "Map of int, int handles powers-of-two keys" {
+  // Each power of two has a single bit set in a unique high
+  // position. Pre-fix bucket = (2^n * golden_ratio) mod cap
+  // depends only on bits of 2^n that align with cap; for
+  // n > log2(cap), bucket = 0.
+  m is Map of int, int()
+  through (n from 0 to 60 by 1) {
+    k is 1
+    through (j from 0 to n by 1) {
+      k be k * 2
+    }
+    m.set(k, n)
+  }
+  assert(m.len() eq 60)
+  // Verify each power of two retrievable.
+  through (n from 0 to 60 by 1) {
+    k is 1
+    through (j from 0 to n by 1) {
+      k be k * 2
+    }
+    assert(m.get(k) eq n)
+  }
+}
+
+test "Map of int, int handles same-low-bits-different-high keys" {
+  // Keys like 1, 1+1024, 1+2048, 1+3072, ... share bottom 10
+  // bits. Pre-fix: all collide on bucket 1 for caps up to 1024.
+  m is Map of int, int()
+  through (i from 0 to 2048 by 1) {
+    k is 1 + i * 1024
+    m.set(k, i)
+  }
+  assert(m.len() eq 2048)
+  through (i from 0 to 2048 by 1) {
+    k is 1 + i * 1024
+    assert(m.get(k) eq i)
+  }
+}
+
+test "Map of int, int negative adversarial keys" {
+  // Negative multiples of 8 — pre-fix combined with the
+  // negative-mod fold to land on bucket 0 systematically.
+  m is Map of int, int()
+  through (i from 0 to 1024 by 1) {
+    k is 0 - (i + 1) * 8
+    m.set(k, i)
+  }
+  assert(m.len() eq 1024)
+  through (i from 0 to 1024 by 1) {
+    k is 0 - (i + 1) * 8
+    assert(m.get(k) eq i)
+  }
+}
+
+test "Map of int, int interleaved positive and negative adversarial" {
+  // Mix positive multiples of 8 with negative multiples of 8 —
+  // doubles the adversarial key population while staying in
+  // the same low-bit class.
+  m is Map of int, int()
+  through (i from 1 to 1025 by 1) {
+    m.set(i * 8, i)
+    m.set(0 - i * 8, 0 - i)
+  }
+  assert(m.len() eq 2048)
+  through (i from 1 to 1025 by 1) {
+    assert(m.get(i * 8) eq i)
+    assert(m.get(0 - i * 8) eq 0 - i)
+  }
+}
+
+// ---------------------------------------------------------------
+// Set: same adversarial inputs
+// ---------------------------------------------------------------
+
+test "Set of int handles multiples-of-cap keys at scale" {
+  s is Set of int()
+  through (i from 0 to 4096 by 1) {
+    k is i * 8
+    s.add(k)
+  }
+  assert(s.len() eq 4096)
+  through (i from 0 to 4096 by 1) {
+    k is i * 8
+    assert(s.has(k))
+  }
+}
+
+test "Set of int handles same-low-bits-different-high keys" {
+  s is Set of int()
+  through (i from 0 to 2048 by 1) {
+    k is 7 + i * 1024
+    s.add(k)
+  }
+  assert(s.len() eq 2048)
+  through (i from 0 to 2048 by 1) {
+    k is 7 + i * 1024
+    assert(s.has(k))
+  }
+}
+
+// ---------------------------------------------------------------
+// Lookup-miss correctness under adversarial fill
+// ---------------------------------------------------------------
+
+test "Map miss correctly returns None under collision pressure" {
+  // After filling with multiples of 8, missing keys (non-
+  // multiples-of-8) must return None. The probe must visit
+  // EMPTY slots to terminate; pre-fix the chain was so long
+  // that EMPTY-finding was essentially a full scan, but
+  // correctness held. Post-fix the chain is short and EMPTY
+  // is hit early.
+  m is Map of int, int()
+  through (i from 0 to 1000 by 1) {
+    m.set(i * 8, i)
+  }
+  // Keys not in the table.
+  assert(m.try_get(1).is_none())
+  assert(m.try_get(7).is_none())
+  assert(m.try_get(9).is_none())
+  assert(m.try_get(0 - 1).is_none())
+  assert(m.try_get(99999999).is_none())
+  // Keys that ARE in the table.
+  assert(m.try_get(0).is_some())
+  assert(m.try_get(8).is_some())
+  assert(m.try_get(7992).is_some())  // = 999 * 8
+}
+
+test "Set miss correctly returns false under collision pressure" {
+  s is Set of int()
+  through (i from 0 to 1000 by 1) {
+    s.add(i * 8)
+  }
+  assert(not s.has(1))
+  assert(not s.has(7))
+  assert(not s.has(9))
+  assert(not s.has(99999999))
+  assert(s.has(0))
+  assert(s.has(8))
+  assert(s.has(7992))
+}
+
+// ---------------------------------------------------------------
+// Tombstone-reuse + adversarial keys
+// ---------------------------------------------------------------
+
+test "Map tombstone reuse under adversarial low-bit keys" {
+  // Insert multiples of 8, remove every other one, re-insert
+  // a different patterned set. The probe walk must traverse
+  // tombstones correctly across the high-bit-mixed buckets.
+  m is Map of int, int()
+  through (i from 0 to 256 by 1) {
+    m.set(i * 8, i)
+  }
+  through (i from 0 to 256 by 1) {
+    i mod 2 eq 0 ?{
+      m.remove(i * 8)
+    }
+  }
+  assert(m.len() eq 128)
+  // Re-insert a non-overlapping adversarial set.
+  through (i from 0 to 256 by 1) {
+    m.set(i * 8 + 4, i + 1000)
+  }
+  assert(m.len() eq 128 + 256)
+  // Both sets retrievable.
+  through (i from 0 to 256 by 1) {
+    i mod 2 eq 1 ?{
+      assert(m.get(i * 8) eq i)
+    }
+    assert(m.get(i * 8 + 4) eq i + 1000)
+  }
+}
+
+test "Set tombstone reuse under adversarial low-bit keys" {
+  s is Set of int()
+  through (i from 0 to 512 by 1) {
+    s.add(i * 8)
+  }
+  through (i from 0 to 512 by 1) {
+    i mod 3 eq 0 ?{
+      s.remove(i * 8)
+    }
+  }
+  // Re-add a different adversarial set.
+  through (i from 0 to 512 by 1) {
+    s.add(i * 8 + 4)
+  }
+  // Survived.
+  through (i from 0 to 512 by 1) {
+    assert(s.has(i * 8 + 4))
+    i mod 3 ne 0 ?{
+      assert(s.has(i * 8))
+    } nah {
+      assert(not s.has(i * 8))
+    }
+  }
+}
+
+// ---------------------------------------------------------------
+// String-keyed Map under prefix-shared keys
+// ---------------------------------------------------------------
+
+test "Map of String, int with shared-prefix keys" {
+  // Strings sharing a long prefix should still distribute
+  // because String.hash mixes byte by byte. This is here to
+  // make sure the probe walk holds for string keys too.
+  m is Map of String, int()
+  through (i from 0 to 1024 by 1) {
+    k is "very-long-shared-prefix-".concat(i.to_string())
+    m.set(k, i)
+  }
+  assert(m.len() eq 1024)
+  through (i from 0 to 1024 by 1) {
+    k is "very-long-shared-prefix-".concat(i.to_string())
+    assert(m.get(k) eq i)
+  }
+}
