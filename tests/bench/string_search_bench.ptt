@@ -1,0 +1,65 @@
+// Microbenchmark for the F-007 shared string-search primitive
+// behind index_of, contains, split, replace.
+//
+// Pre-fix each of those four APIs hand-rolled its own scan loop
+// calling str_match_at at every position. Post-fix all four
+// route through `str_find`, which adds a single-byte fast path
+// and a `begin` cursor for split / replace.
+//
+// Phases:
+//   1. build: a 5000-field comma-separated record (single-byte
+//      separator workload).
+//   2. index_of: scan for an embedded long needle in a repeated-
+//      prefix haystack.
+//   3. split: separate the comma-separated record into 5000
+//      fields, sum each field's length to keep dead-code-elim
+//      away.
+//   4. replace: swap every "," for "|", then split on "|" and
+//      sum field lengths again — verifies replace + split
+//      round-trip on heavy traffic.
+
+use std/list
+use std/string
+
+spark {
+  // Phase 1: build a 5000-field record. Each field is "fK" for
+  // k in 0..5000 — total length ~28890 bytes (4-digit fields
+  // dominate the byte budget).
+  builder is "f0"
+  through (i from 1 to 5000 by 1) {
+    builder be builder.concat(",f").concat(i.to_string())
+  }
+  yell(builder.len())                   // length anchor
+
+  // Phase 2: index_of with embedded long needle in repeated
+  // prefix. Forces the general path through str_find.
+  base is ""
+  through (i from 0 to 1000 by 1) {
+    base be base.concat("abc")
+  }
+  // base.len() == 3000
+  tail is base.concat("abcdef")
+  yell(tail.index_of("abcdef"))        // 3000
+
+  // Phase 3: split on the single-byte separator. Hits the fast
+  // path 4999 times.
+  parts is builder.split(",")
+  total is 0
+  through (i from 0 to parts.len() by 1) {
+    total be total + parts.get(i).len()
+  }
+  yell(parts.len())                     // 5000
+  yell(total)                           // sum of field byte lengths
+
+  // Phase 4: replace every comma with a pipe, split on pipe,
+  // and re-sum the field lengths. Both replace and split must
+  // route through the single-byte fast path.
+  swapped is builder.replace(",", "|")
+  parts2 is swapped.split("|")
+  total2 is 0
+  through (i from 0 to parts2.len() by 1) {
+    total2 be total2 + parts2.get(i).len()
+  }
+  yell(parts2.len())                    // 5000
+  yell(total2)                          // must equal `total`
+}

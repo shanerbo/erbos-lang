@@ -51,6 +51,22 @@ divergence in formatting shape surfaces immediately.
 
 - Output shape (3 lines): `38890 / 38890 / identical`.
 
+## `string_search_bench.ptt` — index_of / split / replace
+
+F-007 reference workload. Builds a 5000-field comma-separated
+record (~28890 bytes), then exercises:
+  1. an `index_of` of a 6-byte needle in a 3006-byte
+     repeated-prefix haystack (forces the general path through
+     `str_find`);
+  2. a single-byte `split` on the comma separator (4999 hits
+     through the fast path), summing field lengths;
+  3. a `replace` of every `,` with `|` followed by another
+     single-byte `split` on `|`. Both replace's count pass and
+     replace's copy pass route through `str_find`'s single-byte
+     fast path; the post-split sum must match phase 2's sum.
+
+- Output shape (6 lines): `28889 / 3000 / 5000 / 23890 / 5000 / 23890`.
+
 ## Baseline (M-series Mac)
 
 The fixed cost (lex/parse/check/codegen/assemble/link/launch)

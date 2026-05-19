@@ -64,13 +64,13 @@ If another implementation batch starts before audit:
 ## Header
 
 - `State`: IDLE
-- `Claim ID`: (none — C-007 was consumed and accepted for F-008;
-  batch remains on HOLD because F-005 / F-007 are still open
-  against the post-C-007 working tree)
-- `Against findings revision`: 12
-- `Target commit`: c8cdd04 + working tree
-- `Claimed fixed`: (none pending; next claim will target F-007)
-- `Last updated`: 2026-05-19T01:13:36+00:00
+- `Claim ID`: (none — C-008 was consumed and accepted for F-007;
+  batch remains on HOLD because F-005 is still open against the
+  post-C-008 working tree)
+- `Against findings revision`: 13
+- `Target commit`: 7650e2e + working tree
+- `Claimed fixed`: (none pending; next claim will target F-005)
+- `Last updated`: 2026-05-19T01:37:05+00:00
 
 ## Claim C-001
 - State: READY_FOR_AUDIT
@@ -896,6 +896,110 @@ If another implementation batch starts before audit:
   - Pre-existing `tests/test_collection_materializers.ptt`
     (F-006 regressions, 14 cases) still passes.
 
+## Claim C-008
+- State: READY_FOR_AUDIT
+- Against findings revision: 12
+- Target commit: 7650e2e + working tree (uncommitted; Codex can
+  verify against `git diff` for the listed files)
+- Claimed fixed: F-007
+- Last updated: 2026-05-19T01:23:24+00:00
+- Bug class (recap from findings.md F-007):
+  Each of `String.index_of`, `String.contains`, `String.split`,
+  and `String.replace` ran its own scan loop calling
+  `str_match_at` at every candidate position. The substring
+  scan logic was duplicated four times, none of the APIs had a
+  single-byte fast path even though `","` / `" "` / `"/"` /
+  `"\n"` separators dominate real-world traffic, and `replace`
+  scanned twice (count pass + copy pass) without sharing.
+  Worst-case O(n*m) was unchanged by the duplication, but the
+  constant-factor regression and the maintenance burden of
+  hand-rolled scans across four APIs were real.
+- Root-cause fix:
+  Pure stdlib change in `std/string.ptt`. Introduced a single
+  shared substring-search primitive `str_find` and routed all
+  four APIs through it.
+  - `str_find(hay String, needle String, begin int) int`
+    returns the smallest `i >= begin` (clamped to 0) at which
+    `needle` occurs in `hay`, or -1. Empty needle returns the
+    clamped begin (matches the existing `index_of("")` contract
+    that returns 0). Single-byte needle path: scans byte-by-
+    byte against `needle.data[0]` directly, skipping the
+    str_match_at setup overhead per position. General path
+    falls back to the full str_match_at on each candidate.
+  - `String.index_of` is a one-liner: `give str_find(self,
+    needle, 0)`.
+  - `String.contains` is a one-liner: `give str_find(self,
+    needle, 0) ne 0 - 1`.
+  - `String.split` walks via successive `str_find` calls
+    starting from the previous-hit cursor, which removes the
+    quadratic recomputation of the search prefix.
+  - `String.replace` walks via successive `str_find` calls in
+    both the count pass and the copy pass. The copy pass
+    inlines a verbatim prefix copy and a needle splice between
+    consecutive hits, then a tail copy after the last hit; no
+    longer interleaves a per-byte str_match_at recheck inside
+    the copy loop.
+  Public semantics are unchanged: same return values, same
+  panic conditions on empty needle in split / replace, same
+  treatment of overlapping prefixes (split / replace advance
+  by needle.count after each hit, leaving overlapping matches
+  unmatched — locked in by the new
+  `split with overlapping needle prefix matches non-overlapping`
+  and `replace with multi-byte needle and overlapping prefixes`
+  tests).
+- Files changed:
+  - `std/string.ptt` (str_find primitive added; index_of,
+    contains, split, replace re-routed)
+  - `tests/test_string_search.ptt` (new, 19 framework cases)
+  - `tests/bench/string_search_bench.ptt` (new bench file)
+  - `tests/bench/BASELINE.md` (added a section for the new
+    bench)
+- Tests added (`tests/test_string_search.ptt`, all pass at
+  `-O0`/`-O1`/`-O2`):
+  - **index_of / contains corners** (5):
+    `index_of finds first occurrence with overlapping prefix`,
+    `index_of with single-byte needle exercises fast path`,
+    `contains agrees with index_of on long haystacks`,
+    `index_of of empty needle returns 0`,
+    `index_of when needle longer than haystack returns -1`.
+  - **split corners** (5): single-byte separator on a
+    1000-field record, multi-byte separator boundary content,
+    overlapping needle prefix advancing by needle.count,
+    separator at start / middle / end, separator-only string
+    yielding all-empty parts.
+  - **replace corners** (7): single-byte needle on long input
+    via fast path, shorter substitution shrinks result,
+    longer substitution grows result, no-match returns owned
+    clone, multi-byte needle with overlapping prefix, empty
+    haystack, tail-copy preservation after final hit.
+  - **Stress** (2): split + replace round-trip on a
+    5000-field comma-separated record (verifies fast-path
+    pressure under heavy traffic), and an
+    `abc`-repeated 600-byte haystack with an embedded 6-byte
+    needle exercising the general path through `str_find`.
+- Bench coverage added (`tests/bench/`, stand-alone `spark`
+  program):
+  - `string_search_bench.ptt`: builds a 5000-field
+    comma-separated record (~28890 bytes), then runs
+    index_of (general path on a 3006-byte repeated-prefix
+    haystack), split (single-byte fast path × 4999),
+    replace + split round-trip (replace's count + copy
+    passes + a second single-byte split). Output:
+    `28889 / 3000 / 5000 / 23890 / 5000 / 23890`.
+  - `tests/bench/BASELINE.md` extended with a
+    `string_search_bench.ptt` section.
+- Verification context:
+  - `make clean && make test` ends with `All tests passed.`
+    from a cold rebuild on the working tree.
+  - `tests/test_string_search.ptt` (19 cases) passes at
+    `-O0`, `-O1`, `-O2`.
+  - Pre-existing `tests/test_string_extended.ptt` (the F-007
+    evidence file) still passes unchanged.
+  - The new bench produces consistent output (the two
+    field-sum totals match: 23890), locking the search
+    primitive against silent regressions in any of the four
+    public APIs.
+
 ## Claim Template
 
 ```md
@@ -1002,12 +1106,20 @@ If another implementation batch starts before audit:
   are still open against the post-C-007 working tree; those need
   their own claims before the batch can land. Header reset to
   `IDLE`.
-- Claim C-005 consumed by Codex against findings revision 9 and
-  accepted with `Conclusion: ALL_CLEAR` /
-  `Release action: COMMIT_AND_PUSH`. The audited batch covers
-  both C-004 (F-002, accepted earlier but held pending F-003 /
-  F-004) and C-005 (F-003 + F-004). Landing as two separate
-  commits in dependency order: C-004 first (F-002 compiler +
-  List stdlib changes that C-005 builds on), then C-005
-  (Queue / Deque stdlib changes plus their tests). Header reset
-  to `IDLE`.
+- Claim C-008 submitted: F-007 fix (shared substring-search
+  primitive). Pure stdlib change. New `str_find(hay, needle,
+  begin)` primitive with single-byte fast path + general
+  str_match_at fallback; index_of / contains / split / replace
+  all funnel through it. 19 new framework cases cover index_of,
+  contains, split, replace corners (overlapping prefixes,
+  separator placement, length-changing replace, no-match clone,
+  empty haystack), plus two stress tests (5000-field round-trip
+  and embedded-long-needle on a 600-byte repeated-prefix
+  haystack). New bench `string_search_bench.ptt` exercises the
+  fast path × 4999, the general path on a 3006-byte haystack,
+  and the replace + split round-trip. Cold-rebuild `make test`
+  green; new file passes at -O0/-O1/-O2.
+- Claim C-008 consumed by Codex against findings revision 13 and
+  accepted for F-007. Batch stays on HOLD because F-005 is still
+  open against the post-C-008 working tree; that needs its own
+  claim before the batch can land. Header reset to `IDLE`.

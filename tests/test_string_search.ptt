@@ -1,0 +1,218 @@
+// F-007 regression: shared substring-search primitive (`str_find`)
+// behind index_of, contains, split, replace.
+//
+// Pre-fix each of those four APIs ran its own scan loop calling
+// str_match_at at every candidate position. Post-fix all four
+// funnel through `str_find`, which adds:
+//   - a single-byte fast path that skips str_match_at's setup
+//     (loop init, redundant bounds checks) per position
+//   - a `begin` cursor so split / replace can resume scanning
+//     after a hit without recomputing from zero
+//
+// Public semantics are unchanged; these tests cover the corners
+// that the rewrite has to preserve.
+
+use std/list
+use std/string
+
+// ---------------------------------------------------------------
+// index_of / contains corners
+// ---------------------------------------------------------------
+
+test "index_of finds first occurrence with overlapping prefix" {
+  // Repeated-prefix needle. The pre-fix path retried str_match_at
+  // at every position; the post-fix general path does the same
+  // thing through str_find but routes via a single primitive so
+  // the behaviour better not regress.
+  s is "aaab"
+  assert(s.index_of("ab") eq 2)
+  assert(s.index_of("aab") eq 1)
+  assert(s.index_of("aaab") eq 0)
+  assert(s.index_of("b") eq 3)
+}
+
+test "index_of with single-byte needle exercises fast path" {
+  // Large haystack, single-byte needle. The single-byte fast
+  // path matters here.
+  hay is "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,end"
+  assert(hay.index_of(",") eq 50)
+  assert(hay.index_of("e") eq 51)
+}
+
+test "contains agrees with index_of on long haystacks" {
+  hay is "abcdefghijklmnopqrstuvwxyz0123456789"
+  assert(hay.contains("xyz"))
+  assert(hay.contains("9"))
+  assert(not hay.contains("ZZ"))
+  assert(hay.index_of("xyz") eq 23)
+}
+
+test "index_of of empty needle returns 0" {
+  assert("".index_of("") eq 0)
+  assert("hello".index_of("") eq 0)
+}
+
+test "index_of when needle longer than haystack returns -1" {
+  assert("ab".index_of("abc") eq 0 - 1)
+  assert("".index_of("x") eq 0 - 1)
+}
+
+// ---------------------------------------------------------------
+// split corners
+// ---------------------------------------------------------------
+
+test "split with single-byte separator on long input" {
+  // 1000 fields separated by ",". Hits the single-byte fast path
+  // 999 times.
+  builder is "f0"
+  through (i from 1 to 1000 by 1) {
+    builder be builder.concat(",f").concat(i.to_string())
+  }
+  parts is builder.split(",")
+  assert(parts.len() eq 1000)
+  assert(parts.get(0).equals("f0"))
+  assert(parts.get(1).equals("f1"))
+  assert(parts.get(999).equals("f999"))
+}
+
+test "split with multi-byte separator preserves boundary content" {
+  s is "a-->b-->c-->d"
+  parts is s.split("-->")
+  assert(parts.len() eq 4)
+  assert(parts.get(0).equals("a"))
+  assert(parts.get(1).equals("b"))
+  assert(parts.get(2).equals("c"))
+  assert(parts.get(3).equals("d"))
+}
+
+test "split with overlapping needle prefix matches non-overlapping" {
+  // "aa" in "aaaa": should produce ["", "", ""] because the
+  // scan advances by sep.count after each hit (matches both
+  // pre-fix and post-fix shapes; a regression here would change
+  // public behaviour).
+  parts is "aaaa".split("aa")
+  assert(parts.len() eq 3)
+  assert(parts.get(0).equals(""))
+  assert(parts.get(1).equals(""))
+  assert(parts.get(2).equals(""))
+}
+
+test "split with separator at start, middle, end" {
+  parts is ",a,b,".split(",")
+  assert(parts.len() eq 4)
+  assert(parts.get(0).equals(""))
+  assert(parts.get(1).equals("a"))
+  assert(parts.get(2).equals("b"))
+  assert(parts.get(3).equals(""))
+}
+
+test "split of separator-only string yields empty parts" {
+  // ",,," with sep "," yields four empty parts.
+  parts is ",,,".split(",")
+  assert(parts.len() eq 4)
+  through (i from 0 to 4 by 1) {
+    assert(parts.get(i).equals(""))
+  }
+}
+
+// ---------------------------------------------------------------
+// replace corners
+// ---------------------------------------------------------------
+
+test "replace single-byte needle on long input via fast path" {
+  // Replace every ',' with ';' in a 1000-field record. Pre-fix
+  // and post-fix both produce a length-preserving copy; post-fix
+  // routes the count + copy passes through str_find's single-
+  // byte fast path.
+  builder is "f0"
+  through (i from 1 to 1000 by 1) {
+    builder be builder.concat(",f").concat(i.to_string())
+  }
+  swapped is builder.replace(",", ";")
+  // Same length, same content modulo separator.
+  assert(swapped.len() eq builder.len())
+  parts is swapped.split(";")
+  assert(parts.len() eq 1000)
+  assert(parts.get(0).equals("f0"))
+  assert(parts.get(999).equals("f999"))
+}
+
+test "replace shorter substitution shrinks the result" {
+  s is "[hello] [world] [foo]"
+  out is s.replace("[", "")
+  assert(out.equals("hello] world] foo]"))
+  out2 is out.replace("]", "")
+  assert(out2.equals("hello world foo"))
+}
+
+test "replace longer substitution grows the result" {
+  s is "x;y;z"
+  out is s.replace(";", " AND ")
+  assert(out.equals("x AND y AND z"))
+}
+
+test "replace with no matches returns an owned clone" {
+  s is "potato"
+  out is s.replace("xyz", "zzz")
+  assert(out.equals("potato"))
+  // Must be independent of the source.
+  assert(out.len() eq s.len())
+}
+
+test "replace with multi-byte needle and overlapping prefixes" {
+  // "ababab" with needle "abab" → after the first match at 0,
+  // the cursor advances by needle.count to 4; from there "ab"
+  // remains, no further match. Result: "[REPL]ab".
+  s is "ababab"
+  out is s.replace("abab", "[REPL]")
+  assert(out.equals("[REPL]ab"))
+}
+
+test "replace empty haystack stays empty" {
+  s is ""
+  out is s.replace("x", "y")
+  assert(out.equals(""))
+}
+
+test "replace tail copy after final hit preserves trailing bytes" {
+  // Hit lands well before end-of-string; the post-fix copy pass
+  // must still copy the trailing bytes verbatim.
+  s is "head--middle--tail"
+  out is s.replace("--", "/")
+  assert(out.equals("head/middle/tail"))
+}
+
+// ---------------------------------------------------------------
+// Stress tests: large haystack / repeated workload
+// ---------------------------------------------------------------
+
+test "split + replace round-trip on repeated stress workload" {
+  // Build a 5000-field comma-separated record, replace every
+  // comma with a pipe, then split on the pipe. Verifies the
+  // shared search primitive holds up under both directions of
+  // heavy traffic.
+  builder is "f0"
+  through (i from 1 to 5000 by 1) {
+    builder be builder.concat(",f").concat(i.to_string())
+  }
+  swapped is builder.replace(",", "|")
+  parts is swapped.split("|")
+  assert(parts.len() eq 5000)
+  assert(parts.get(0).equals("f0"))
+  assert(parts.get(2500).equals("f2500"))
+  assert(parts.get(4999).equals("f4999"))
+}
+
+test "index_of finds embedded long needle in repeated pattern" {
+  // 'abcabcabc...' haystack; needle 'abcdef' must miss. Then a
+  // tail with the pattern must hit at the right offset.
+  base is ""
+  through (i from 0 to 200 by 1) {
+    base be base.concat("abc")
+  }
+  // base.len() == 600
+  assert(base.index_of("abcdef") eq 0 - 1)
+  tail is base.concat("abcdef")
+  assert(tail.index_of("abcdef") eq 600)
+  assert(tail.contains("abcdef"))
+}

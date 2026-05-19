@@ -90,6 +90,53 @@ str_match_at(hay String, at int, needle String) bool {
   give true
 }
 
+// F-007: shared substring search. Returns the smallest index
+// `i >= from` (clamped to 0) at which `needle` occurs in `hay`,
+// or -1 when there is no such index. `index_of`, `contains`,
+// `split`, and `replace` all funnel through this — they used
+// to hand-roll their own scan loop calling `str_match_at` at
+// every position, duplicating the search logic three or four
+// times.
+//
+// Two specialised paths:
+//
+//   - Empty needle: returns the clamped `from` (matches the
+//     existing `index_of("")` contract that returns 0).
+//   - Single-byte needle: scan byte-by-byte against
+//     `needle.data[0]` directly. Saves the per-position
+//     `str_match_at` setup overhead (loop init, redundant
+//     bounds re-checks) for the common single-character
+//     separator / replacement case.
+//
+// General path falls back to the full `str_match_at` on each
+// candidate position. Worst-case complexity is unchanged
+// (O(hay.count * needle.count)), but the constant factors for
+// `index_of`, `contains`, `split`, and `replace` collapse from
+// per-call hand-rolled scan to one shared primitive.
+str_find(hay String, needle String, begin int) int {
+  start is begin
+  start lt 0 ?{ start be 0 }
+  needle.count eq 0 ?{ give start }
+  needle.count gt hay.count ?{ give 0 - 1 }
+  start gt hay.count - needle.count ?{ give 0 - 1 }
+  // Single-byte fast path. Saves the str_match_at setup cost
+  // per position for separators / replacements like ",", " ",
+  // "/", "\n", which dominate real-world split/replace traffic.
+  needle.count eq 1 ?{
+    target is needle.data[0]
+    through (i from start to hay.count by 1) {
+      hay.data[i] eq target ?{ give i }
+    }
+    give 0 - 1
+  }
+  // General path.
+  limit is hay.count - needle.count
+  through (i from start to limit + 1 by 1) {
+    str_match_at(hay, i, needle) ?{ give i }
+  }
+  give 0 - 1
+}
+
 str_is_ascii_space(b int) bool {
   b eq 32 ?{ give true }
   b eq 9 ?{ give true }
@@ -111,18 +158,16 @@ String.ends_with(self String, suffix String) bool {
   give str_match_at(self, start, suffix)
 }
 
+// F-007: route through the shared `str_find` primitive instead
+// of running its own scan loop. Behaviour is unchanged: empty
+// needle returns 0, missing needle returns -1, the single-byte
+// fast path is automatic.
 String.index_of(self String, needle String) int {
-  needle.count eq 0 ?{ give 0 }
-  needle.count gt self.count ?{ give 0 - 1 }
-  limit is self.count - needle.count
-  through (i from 0 to limit + 1 by 1) {
-    str_match_at(self, i, needle) ?{ give i }
-  }
-  give 0 - 1
+  give str_find(self, needle, 0)
 }
 
 String.contains(self String, needle String) bool {
-  give self.index_of(needle) ne 0 - 1
+  give str_find(self, needle, 0) ne 0 - 1
 }
 
 String.slice(self String, start int, end int) String {
@@ -183,58 +228,72 @@ String.trim(self String) String {
   give self.slice(start, end)
 }
 
+// F-007: route through `str_find` so the substring scan is
+// single-source with `index_of` / `contains` / `replace`. The
+// single-byte separator fast path automatically applies for
+// the common `","`, `" "`, `"\n"` case.
 String.split(self String, sep String) List of String {
   sep.count eq 0 ?{
     assert(false)
   }
   parts is List of String()
   start is 0
-  i is 0
-  infi (i le self.count - sep.count) {
-    str_match_at(self, i, sep) ?{
-      parts.push(self.slice(start, i))
-      i be i + sep.count
-      start be i
-      skip
-    }
-    i be i + 1
+  infi (true) {
+    hit is str_find(self, sep, start)
+    hit lt 0 ?{ stop }
+    parts.push(self.slice(start, hit))
+    start be hit + sep.count
   }
   parts.push(self.slice(start, self.count))
   give parts
 }
 
+// F-007: route through `str_find` for both the count pass and
+// the copy pass. Both passes used to inline str_match_at; now
+// they share the single primitive — including the single-byte
+// fast path, which dominates real-world replace workloads.
 String.replace(self String, needle String, repl String) String {
   needle.count eq 0 ?{
     assert(false)
   }
+  // Count occurrences via successive str_find calls.
   hits is 0
-  i is 0
-  infi (i le self.count - needle.count) {
-    str_match_at(self, i, needle) ?{
-      hits be hits + 1
-      i be i + needle.count
-      skip
-    }
-    i be i + 1
+  scan is 0
+  infi (true) {
+    pos is str_find(self, needle, scan)
+    pos lt 0 ?{ stop }
+    hits be hits + 1
+    scan be pos + needle.count
   }
   hits eq 0 ?{ give self.clone() }
   total is self.count + hits * (repl.count - needle.count)
   total eq 0 ?{ give String() }
   fresh is array of byte with cap total
+  // Copy pass: walk via str_find again, splice in `repl` at
+  // every hit, and verbatim-copy the bytes between hits.
   src is 0
   dst is 0
   infi (src lt self.count) {
-    src le self.count - needle.count and str_match_at(self, src, needle) ?{
-      through (j from 0 to repl.count by 1) {
-        fresh[dst + j] be repl.data[j]
+    pos is str_find(self, needle, src)
+    pos lt 0 ?{
+      // No more hits — copy the tail and exit.
+      through (k from src to self.count by 1) {
+        fresh[dst] be self.data[k]
+        dst be dst + 1
       }
-      dst be dst + repl.count
-      src be src + needle.count
-      skip
+      stop
     }
-    fresh[dst] be self.data[src]
-    dst be dst + 1
-    src be src + 1
+    // Copy the prefix [src..pos) verbatim.
+    through (k from src to pos by 1) {
+      fresh[dst] be self.data[k]
+      dst be dst + 1
+    }
+    // Splice `repl` in for the matched needle.
+    through (j from 0 to repl.count by 1) {
+      fresh[dst] be repl.data[j]
+      dst be dst + 1
+    }
+    src be pos + needle.count
   }
   out is String()
   out.cap be total
