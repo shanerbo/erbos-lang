@@ -169,11 +169,14 @@ Two native ARM64 backends ship in-tree, both validated end-to-end:
 
 Linux output was validated by cross-assembling on macOS (clang
 `--target=aarch64-linux-gnu` + `ld.lld -static`) and executing
-inside an arm64 Alpine Linux container on Apple Silicon. Bare-metal
-`erbos --target=linux-arm64 run …` requires GNU `as` and `ld`
-on the host PATH; on a real Linux/aarch64 host the existing
-`./erbos --target=linux-arm64 run hello.ptt` path is the same as
-Darwin's.
+inside two independent Linux/aarch64 runtimes on Apple Silicon:
+Apple's native `container` CLI (Alpine, kernel 6.18.15) and
+Docker Desktop (Debian trixie, linuxkit kernel 6.12). Both
+runtimes produced identical results to Darwin across all 182
+program runs. Bare-metal `erbos --target=linux-arm64 run …`
+requires GNU `as` and `ld` on the host PATH; on a real
+Linux/aarch64 host the existing `./erbos --target=linux-arm64
+run hello.ptt` path is the same as Darwin's.
 
 Linux backend implementation: `compiler/target_linux_arm64.c`;
 every Linux-specific constant (`__NR_write=64`, `__NR_exit=93`,

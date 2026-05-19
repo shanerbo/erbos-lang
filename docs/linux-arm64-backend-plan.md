@@ -191,28 +191,32 @@ no behavioral change).
 
 Linux ARM64 backend can build and run minimal samples end to end.
 
-**Status: PASSED.** Validation environment used: Apple's `container`
-CLI (https://apple.github.io/container/documentation/) running an
-arm64 Alpine Linux container natively on Apple Silicon via
-Virtualization.framework, kernel 6.18.15, kata-static-3.28.0-arm64.
+**Status: PASSED.** Confirmed in two independent Linux/aarch64
+environments:
 
-Toolchain on the macOS side: clang `--target=aarch64-linux-gnu` for
-cross-assembly (LLVM's integrated assembler emits ELF aarch64
-objects); LLD `ld.lld -static -e _start` for static linking. The
-emitted ELF objects use exactly the relocation types cited in
-`target_linux_arm64.c`: `R_AARCH64_ADR_PREL_PG_HI21`,
-`R_AARCH64_ADD_ABS_LO12_NC`, `R_AARCH64_CALL26`, `R_AARCH64_ABS64`.
+1. **Apple `container` CLI** + arm64 Alpine, kernel 6.18.15
+   (kata-static-3.28.0-arm64), Virtualization.framework backend.
+2. **Docker Desktop** + arm64 Debian (`arm64v8/debian:stable-slim`,
+   trixie), kernel 6.12.67-linuxkit.
 
-Smoke results: `examples/hello.ptt` (`yell(10 + 20)`) emits `30`
-and exits 0 inside the Linux container, byte-identical to its
-Darwin output.
+Toolchain on the macOS side (same for both environments): clang
+`--target=aarch64-linux-gnu` for cross-assembly (LLVM's integrated
+assembler emits ELF aarch64 objects); LLD `ld.lld -static -e
+_start` for static linking. The emitted ELF objects use exactly
+the relocation types cited in `target_linux_arm64.c`:
+`R_AARCH64_ADR_PREL_PG_HI21`, `R_AARCH64_ADD_ABS_LO12_NC`,
+`R_AARCH64_CALL26`, `R_AARCH64_ABS64`.
+
+Smoke results in both environments: `examples/hello.ptt`
+(`yell(10 + 20)`) emits `30` and exits 0 inside the Linux
+container, byte-identical to its Darwin output.
 
 ### Gate C
 
 Linux ARM64 passes the repo test suite, or any remaining exclusions are explicit, justified, and tracked as findings.
 
-**Status: PASSED.** Validation matrix run inside the Apple container
-(arm64 Alpine, kernel 6.18.15):
+**Status: PASSED.** Validation matrix run independently in both
+environments listed above. Identical results in both:
 
 - 22/22 runnable `examples/*.ptt` programs — byte-identical output
   Linux ↔ Darwin.
@@ -227,8 +231,10 @@ Linux ARM64 passes the repo test suite, or any remaining exclusions are explicit
   iterates over) — exit non-zero on Linux, matching Darwin's
   behavior.
 
-Total: 182 program runs on Linux/aarch64, all behaviorally
-identical to the Darwin baseline. No exclusions, no findings.
+Total per environment: 182 program runs on Linux/aarch64, all
+behaviorally identical to the Darwin baseline. Combined: 364
+program runs across two independent Linux runtimes, zero failures,
+zero exclusions.
 
 ### Gate D
 
@@ -239,13 +245,18 @@ claim Potato has native multi-platform support across Darwin
 ARM64 and Linux ARM64.
 
 Caveats to keep honest:
-- Validation was run inside an arm64 Alpine container on Apple
-  Silicon, not on bare-metal Linux/aarch64 hardware. The kernel ABI
-  and instruction execution are real (Apple's `container` does not
-  emulate; it virtualizes), so the Linux syscall and AArch64
-  instruction paths exercised are exactly what a bare-metal
-  Linux/aarch64 system would see. The container's libc was not
-  involved (statically-linked ELF, no libc dependencies).
+- Validation was run inside Linux/aarch64 containers on Apple
+  Silicon, not on bare-metal Linux/aarch64 hardware. The kernel
+  ABI and instruction execution are real (Virtualization.framework
+  / linuxkit do not emulate; they run aarch64 natively on the
+  Apple Silicon CPU), so the Linux syscall and AArch64 instruction
+  paths exercised are exactly what a bare-metal Linux/aarch64
+  system would see. The container's libc was not involved
+  (statically-linked ELF, no libc dependencies).
+- Two independent runtimes (Apple `container` + Alpine, Docker
+  Desktop + Debian) produce identical results — that's the
+  strongest signal short of bare-metal that the backend isn't
+  hitting an environment-specific quirk.
 - Cross-assembly was done with clang's integrated assembler, not
   GNU `as`. The two should produce equivalent output for the
   AArch64 ELF directives this compiler emits (`.text`, `.data`,
@@ -302,28 +313,22 @@ still unverified until it executes on a real Linux/aarch64 host.
 
 ## Phase 4 validation playbook
 
-The following recipe was used to clear Gates B/C from a macOS host
-running Apple Silicon. It can be reproduced from any macOS 15+
-arm64 machine; the same shape applies on a bare-metal Linux/aarch64
-host with `gcc` and `binutils` instead of clang/lld.
+Two recipes were used to clear Gates B/C from a macOS host running
+Apple Silicon. Either is sufficient on its own; running both
+gives independent runtime confirmation.
 
-### One-time host setup (macOS arm64)
+### Recipe A — Apple `container` CLI
 
 ```sh
 # LLVM's lld linker — the static linker for the Linux ELF output.
 brew install lld
 
 # Apple's native Linux container CLI; uses Virtualization.framework
-# under the hood, no Docker needed.
+# under the hood, no Docker needed. Requires macOS 15+ on arm64.
 brew install container
 container system kernel set --recommended
 container system start
-```
 
-Spin up a long-running Alpine Linux container with the repo and a
-scratch dir mounted in:
-
-```sh
 mkdir -p /tmp/linuxvalid
 container run -d --rm --arch arm64 --name potatovalid \
   -v "$(pwd):/repo:ro" \
@@ -331,23 +336,46 @@ container run -d --rm --arch arm64 --name potatovalid \
   alpine:latest sleep 3600
 ```
 
-### Per-program validation
-
-For one `.ptt` source:
+Per-program validation:
 
 ```sh
 ERBOS=$(pwd)/erbos
-"$ERBOS" --target=linux-arm64 ir path/to/prog.ptt   # emits prog.s
+"$ERBOS" --target=linux-arm64 ir path/to/prog.ptt
 clang --target=aarch64-linux-gnu -c prog.s -o /tmp/linuxvalid/prog.o
 ld.lld -static -e _start -o /tmp/linuxvalid/prog.elf /tmp/linuxvalid/prog.o
-container exec potatovalid /host/prog.elf            # runs on Linux/arm64
+container exec potatovalid /host/prog.elf
 ```
 
-The two helper scripts used during the Phase 4 validation pass —
-`run.sh` (compares Linux output against Darwin output for normal
-exits) and `run_panic.sh` (asserts non-zero exit for runtime-panic
-tests) — were ad-hoc and live under `/tmp/linuxvalid/` only during
-the validation run; they do not need to be checked in.
+### Recipe B — Docker Desktop
+
+```sh
+brew install lld   # (if not already)
+
+docker pull arm64v8/debian:stable-slim
+
+mkdir -p /tmp/dockervalid
+docker run -d --rm --platform linux/arm64 \
+  --name dockervalid \
+  -v "$(pwd):/repo:ro" \
+  -v "/tmp/dockervalid:/host:ro" \
+  arm64v8/debian:stable-slim sleep 3600
+```
+
+Per-program validation:
+
+```sh
+ERBOS=$(pwd)/erbos
+"$ERBOS" --target=linux-arm64 ir path/to/prog.ptt
+clang --target=aarch64-linux-gnu -c prog.s -o /tmp/dockervalid/prog.o
+ld.lld -static -e _start -o /tmp/dockervalid/prog.elf /tmp/dockervalid/prog.o
+docker exec dockervalid /host/prog.elf
+```
+
+The helper scripts used during validation — `run.sh` (diff Linux
+output against Darwin output for normal exits) and `run_panic.sh`
+(assert non-zero exit for runtime-panic tests) — were ad-hoc and
+live under `/tmp/{linuxvalid,dockervalid}/` only during the run;
+they don't need to be checked in.
 
 ### Bare-metal Linux/aarch64 alternative
 
