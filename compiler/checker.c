@@ -1607,6 +1607,22 @@ static void check_stmt(Checker *c, Node *n) {
                 }
                 mark_moved_sym(c, src);
             }
+            // F-010: re-binding via `be now` / `be rep` re-establishes
+            // the destination as a live owner, so clear its moved
+            // flag. Without this, a previously-moved local that gets
+            // reassigned via `dst be now src` is permanently treated
+            // as moved by the checker, even though irgen's set_local
+            // already clears the runtime moved flag and produces
+            // correct code. Mirrors the var-decl re-binding behaviour
+            // in set_sym (line 144).
+            if (n->assign.is_move || n->assign.is_rep) {
+                for (int si = c->count - 1; si >= 0; si--) {
+                    if (!strcmp(c->syms[si].name, n->assign.name)) {
+                        c->syms[si].is_moved = 0;
+                        break;
+                    }
+                }
+            }
             // F-002: `q be now arr[i]` extracts the slot's pointer
             // and nulls the slot. Stash the element struct name so
             // irgen tags the destination's heap-tracking with the

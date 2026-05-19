@@ -64,15 +64,14 @@ If another implementation batch starts before audit:
 ## Header
 
 - `State`: IDLE
-- `Claim ID`: (none — C-009 was consumed by Codex against findings
-  revision 14 and accepted with `Conclusion: ALL_CLEAR` /
-  `Release action: COMMIT_AND_PUSH`; the audited optimization
-  batch (C-008 + C-009) was landed as two commits in dependency
-  order: C-008 in 8ea71a5 and C-009 in this commit)
-- `Against findings revision`: 14
-- `Target commit`: 8ea71a5 + this commit
-- `Claimed fixed`: (none pending)
-- `Last updated`: 2026-05-19T02:07:04+00:00
+- `Claim ID`: (none — C-010 was consumed and accepted for F-010;
+  batch remains on HOLD because F-011 was opened against the
+  STDLIB_CHECKLIST.md doc lag — the canonical checklist still
+  describes the pre-F-010 hash-container design)
+- `Against findings revision`: 16
+- `Target commit`: 371141f + working tree
+- `Claimed fixed`: (none pending; next claim will target F-011)
+- `Last updated`: 2026-05-19T03:13:21+00:00
 
 ## Claim C-001
 - State: READY_FOR_AUDIT
@@ -1117,6 +1116,151 @@ If another implementation batch starts before audit:
     (F-006, 14 cases), `tests/test_map_methods.ptt`, and
     `tests/test_set.ptt` all still pass.
 
+## Claim C-010
+- State: READY_FOR_AUDIT
+- Against findings revision: 15
+- Target commit: 371141f + working tree (uncommitted; Codex can
+  verify against `git diff` for the listed files)
+- Claimed fixed: F-010
+- Last updated: 2026-05-19T03:06:06+00:00
+- Bug class (recap from findings.md F-010):
+  After F-005's bucket-selection fix, `Map` and `Set` were
+  correct and materially better than the pre-F-005 version,
+  but still rested on (a) a 32-bit Knuth multiplier for
+  `int.hash` (weak high-bit mixing on 64-bit inputs), (b) a
+  djb2-shaped `String.hash` with no avalanche, (c) plain
+  linear probing with no distance awareness, and (d) tombstone
+  deletion that left `states[i] = 2` markers behind. Long-
+  lived churn workloads accumulated tombstones until the next
+  resize/clear; probes in the meantime had to walk past every
+  one. Below the intended stdlib quality bar.
+- Root-cause fix:
+  Four-axis hardening, all in pure stdlib (plus one ARM64
+  emit-side helper to handle larger frames produced by the
+  Robin Hood code).
+  - **Stronger `int.hash`** (`std/math.ptt`): replaced the
+    32-bit Knuth multiplier `2654435769` with the full 64-bit
+    golden-ratio multiplier `0x9E3779B97F4A7C15` (signed-64
+    wrap, expressed as `0 - 7046029254386353131`). Same
+    one-multiplication cost; output spreads across all 64 bit
+    positions instead of leaving the top 32 weakly mixed.
+  - **Stronger `String.hash`** (`std/string.ptt`): kept the
+    djb2-shaped per-byte fold and added a 64-bit Knuth
+    finalizer (`* 0 - 7046029254386353131`). Single extra
+    multiplication regardless of input length; avalanches the
+    djb2 output's few-bit differences across the full 64-bit
+    result.
+  - **Robin Hood probing** (`std/map.ptt`, `std/set.ptt`):
+    `Map.set` / `Set.add` track each entry's distance from
+    its ideal bucket; on insert, when the to-insert's
+    distance exceeds the slot's, swap and continue with the
+    displaced entry. Lookups (`has` / `get` / `try_get` /
+    `remove`) use the same Robin Hood early-out: if `pdist >
+    slot's distance`, the searched key cannot be in the
+    table. Worst-case probe length is bounded; lookups
+    terminate at the first slot where the key would have
+    been inserted.
+  - **Backshift deletion** (`std/map.ptt`, `std/set.ptt`):
+    `Map.remove` / `Set.remove` walk forward from the
+    vacated slot, shifting any FULL slot whose probe
+    distance is positive one slot leftward, until they hit
+    EMPTY or a distance-0 slot. The post-remove table is
+    byte-equivalent to one where the key had never been
+    inserted — no tombstones. The state byte simplifies to
+    `{EMPTY=0, FULL=1}`; DELETED is gone.
+  Two supporting compiler changes:
+  - `compiler/iremit.c` — `emit_add_frame_off` helper that
+    emits a chained `add x?, x29, #4095; add x?, x?, ...`
+    sequence for frames whose offsets exceed ARM64's 12-bit
+    immediate limit. The Robin Hood implementation in
+    `Map of String, String`'s monomorphisations produces
+    larger frames (more heap-tracked locals + spills); the
+    pre-fix single-add emission failed assembly with
+    "expected immediate in range [0, 4095]". All
+    frame-relative `add` sites in iremit.c now route through
+    the helper.
+  - `compiler/checker.c` — `NODE_ASSIGN` with
+    `is_move`/`is_rep` now clears the destination's
+    `is_moved` flag (mirroring what `set_sym` does for
+    var-decl re-binding). Without this, the Robin Hood swap
+    pattern `dst be now src` left `dst` permanently flagged
+    moved by the checker even though irgen's `set_local`
+    already cleared the runtime moved flag and produced
+    correct code. The change closes that conservatism gap.
+  External `Map` / `Set` semantics are unchanged: same return
+  values, same iteration order (still unordered, post-resize-
+  shuffle), same panic conditions.
+- Files changed:
+  - `compiler/checker.c` (clear is_moved on assign re-bind)
+  - `compiler/iremit.c` (emit_add_frame_off helper +
+    routing of frame-relative add sites through it)
+  - `std/math.ptt` (int.hash 64-bit multiplier)
+  - `std/string.ptt` (String.hash 64-bit finalizer)
+  - `std/map.ptt` (Robin Hood + backshift; new
+    `map_probe_distance` helper; resize_to rewritten to
+    reuse Robin Hood)
+  - `std/set.ptt` (Robin Hood + backshift; new
+    `set_probe_distance` helper; resize_to rewritten)
+  - `tests/test_hash_robin_hood.ptt` (new, 16 framework
+    cases)
+  - `tests/bench/hash_churn_bench.ptt` (new bench)
+  - `tests/bench/hash_string_bench.ptt` (new bench)
+  - `tests/bench/BASELINE.md` (extended with sections for
+    the two new bench files)
+- Tests added (`tests/test_hash_robin_hood.ptt`, all pass at
+  `-O0`/`-O1`/`-O2`):
+  - **Hit-heavy** (3): `Map of int, int` 4096 sequential
+    keys with full lookup pass; `Set of int` same shape;
+    `Map of String, int` 1024 distinct concat-formed keys.
+  - **Miss-heavy** (2): try_get of 2048 odd keys against an
+    even-keyed Map; has() of 2048 odd keys against an
+    even-keyed Set.
+  - **Delete/reinsert-heavy** (4): insert N + remove half +
+    reinsert different half; sustained 5x churn cycles with
+    distinct key bases per cycle (validates the no-
+    accumulating-tombstones contract); Set churn full
+    cycle; Map remove preserves siblings on shared-bucket
+    chains (multiples-of-8 with every-other-removed).
+  - **Update path** (3): existing-key value updates don't
+    change len; heap-shaped V update path drops the prior
+    value cleanly; Set.add idempotency.
+  - **Heap-shaped K/V correctness under Robin Hood swaps**
+    (2): Map of String, String with 256 distinct keys
+    survives the swap chains; Set of String with backshift
+    half-removal preserves survivors.
+  - **Adversarial-key regressions inherited from F-005**
+    (2): multiples of 8 (4096 entries) and same-low-bits-
+    different-high keys (1024 entries) still distribute
+    under the Robin Hood + new-hash combination.
+- Bench coverage added (`tests/bench/`, stand-alone `spark`
+  programs):
+  - `hash_churn_bench.ptt`: 10-cycle insert/remove churn
+    against a 1024-baseline Map. Output:
+    `1024 / 1024 / 8904192`. Pre-F-010 the post-cycle
+    state would have been littered with tombstones; the
+    output is identical post-F-010 because backshift
+    deletion makes the cycles transparent.
+  - `hash_string_bench.ptt`: parallel int and String Map
+    workloads (fill + hit + miss; plus a 4096-element
+    resize-stress for the int side). Output:
+    `1024 / 523776 / 1024 / 5120 / 1024 / 523776 / 1024`.
+  - `tests/bench/BASELINE.md` extended with sections for
+    both new bench files.
+- Verification context:
+  - `make clean && make test` ends with `All tests passed.`
+    from a cold rebuild.
+  - `tests/test_hash_robin_hood.ptt` (16 cases) passes at
+    `-O0`, `-O1`, `-O2`.
+  - The new bench files run cleanly and emit deterministic
+    output, locking the new probe + hash paths against
+    silent regressions.
+  - Pre-existing `tests/test_hash_distribution.ptt` (F-005,
+    14 cases), `tests/test_map_methods.ptt`,
+    `tests/test_set.ptt`, `tests/test_collection_materializers.ptt`
+    (F-006, 14 cases), `tests/test_string_builder.ptt`
+    (F-008, 18 cases), and `tests/test_string_search.ptt`
+    (F-007, 19 cases) all still pass unchanged.
+
 ## Claim Template
 
 ```md
@@ -1266,12 +1410,25 @@ If another implementation batch starts before audit:
   string-search primitive that doesn't depend on hash-table
   changes), then C-009 (Map / Set probe quality). Header
   reset to `IDLE`.
-- Claim C-005 consumed by Codex against findings revision 9 and
-  accepted with `Conclusion: ALL_CLEAR` /
-  `Release action: COMMIT_AND_PUSH`. The audited batch covers
-  both C-004 (F-002, accepted earlier but held pending F-003 /
-  F-004) and C-005 (F-003 + F-004). Landing as two separate
-  commits in dependency order: C-004 first (F-002 compiler +
-  List stdlib changes that C-005 builds on), then C-005
-  (Queue / Deque stdlib changes plus their tests). Header reset
-  to `IDLE`.
+- Claim C-010 submitted: F-010 fix (hash-container quality
+  hardening). Pure stdlib + minimal compiler-emit support.
+  Stronger int.hash (64-bit Knuth multiplier) and String.hash
+  (Knuth finalizer post-djb2). Robin Hood probing in Map/Set
+  insert + lookup with distance-aware swap and early-out.
+  Backshift deletion replaces tombstones — DELETED state is
+  gone, post-remove table self-heals so churn doesn't degrade
+  probe quality. Compiler-side: emit_add_frame_off helper for
+  frames > 4095 bytes; checker clears is_moved on `be now` /
+  `be rep` re-bind to support the Robin Hood swap pattern.
+  16 new framework cases cover hit-heavy, miss-heavy,
+  delete/reinsert-heavy, update path, heap-shaped K/V swap
+  chains, and adversarial-key regressions. Two new bench
+  programs lock in the design. Cold-rebuild `make test` green;
+  new tests pass at -O0/-O1/-O2.
+- Claim C-010 consumed by Codex against findings revision 16 and
+  accepted for F-010. Batch stays on HOLD because F-011 was
+  opened against `std/STDLIB_CHECKLIST.md`: the canonical
+  status doc still describes the pre-F-010 design (linear
+  probing, tombstone-reusing inserts, `{EMPTY, FULL, DELETED}`
+  states, stronger-hashing-as-future-work) — false against the
+  audited code. Header reset to `IDLE`.

@@ -119,6 +119,35 @@ static void emit_epilogue_ldp(FILE *out, int stack_size) {
         fprintf(out, "    add sp, sp, #%d\n", extra);
 }
 
+// F-010: emit `add x<dst>, x29, #<off>` correctly handling
+// offsets larger than ARM64's 12-bit immediate limit (4095).
+// For offsets in [0, 4095] this is one instruction; for larger
+// offsets we issue successive `add` instructions of 4095 bytes
+// each (the max single immediate), then a final `add` for the
+// remainder. Frames in the stdlib generic-monomorph path
+// (`Map of String, String`'s set / resize_to under Robin Hood)
+// can exceed 4096-byte frames once a function has many heap-
+// tracked locals plus spills, and the prior single-instruction
+// emit failed assembly on those.
+static void emit_add_frame_off(FILE *out, int dst_reg, int off) {
+    int remaining = off;
+    int first = 1;
+    while (remaining > 4095) {
+        if (first) {
+            fprintf(out, "    add x%d, x29, #4095\n", dst_reg);
+            first = 0;
+        } else {
+            fprintf(out, "    add x%d, x%d, #4095\n", dst_reg, dst_reg);
+        }
+        remaining -= 4095;
+    }
+    if (first) {
+        fprintf(out, "    add x%d, x29, #%d\n", dst_reg, remaining);
+    } else if (remaining > 0) {
+        fprintf(out, "    add x%d, x%d, #%d\n", dst_reg, dst_reg, remaining);
+    }
+}
+
 // Emit the instruction sequence that restores any saved x19..x28
 // registers from the frame. Called immediately before every
 // epilogue.
@@ -127,10 +156,12 @@ static void emit_csr_restore(FILE *out) {
     for (int r = 19; r <= 28; r++) {
         if (!g_saved_csr[r - 19]) continue;
         int off = g_csr_slot_base + slot * 8;
-        if (off <= 255)
+        if (off <= 255) {
             fprintf(out, "    ldr x%d, [x29, #%d]\n", r, off);
-        else
-            fprintf(out, "    add x10, x29, #%d\n    ldr x%d, [x10]\n", off, r);
+        } else {
+            emit_add_frame_off(out, 10, off);
+            fprintf(out, "    ldr x%d, [x10]\n", r);
+        }
         slot++;
     }
 }
@@ -164,20 +195,24 @@ static int ensure_reg(FILE *out, RegAllocResult *a, VReg v) {
     if (!is_spilled(a, v)) return phys(a, v);
     // Load from spill slot into x9
     int off = spill_off(a, v);
-    if (off <= 255)
+    if (off <= 255) {
         fprintf(out, "    ldr x9, [x29, #%d]\n", off);
-    else
-        fprintf(out, "    add x9, x29, #%d\n    ldr x9, [x9]\n", off);
+    } else {
+        emit_add_frame_off(out, 9, off);
+        fprintf(out, "    ldr x9, [x9]\n");
+    }
     return 9; // x9
 }
 
 // Store physical register to spill slot
 static void store_spill(FILE *out, RegAllocResult *a, VReg v, int from_reg) {
     int off = spill_off(a, v);
-    if (off <= 255)
+    if (off <= 255) {
         fprintf(out, "    str x%d, [x29, #%d]\n", from_reg, off);
-    else
-        fprintf(out, "    add x10, x29, #%d\n    str x%d, [x10]\n", off, from_reg);
+    } else {
+        emit_add_frame_off(out, 10, off);
+        fprintf(out, "    str x%d, [x10]\n", from_reg);
+    }
 }
 
 // Emit result to dst vreg (physical or spill)
@@ -258,10 +293,12 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
         for (int r = 19; r <= 28; r++) {
             if (!saved_csr[r - 19]) continue;
             int off = g_csr_slot_base + slot * 8;
-            if (off <= 255)
+            if (off <= 255) {
                 fprintf(out, "    str x%d, [x29, #%d]\n", r, off);
-            else
-                fprintf(out, "    add x10, x29, #%d\n    str x%d, [x10]\n", off, r);
+            } else {
+                emit_add_frame_off(out, 10, off);
+                fprintf(out, "    str x%d, [x10]\n", r);
+            }
             slot++;
         }
     }
@@ -472,19 +509,23 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
                 case IR_STORE_LOCAL: {
                     int ra = ensure_reg(out, alloc, inst->a);
                     int off = local_base + (int)inst->imm * 8;
-                    if (off <= 255)
+                    if (off <= 255) {
                         fprintf(out, "    str x%d, [x29, #%d]\n", ra, off);
-                    else
-                        fprintf(out, "    add x10, x29, #%d\n    str x%d, [x10]\n", off, ra);
+                    } else {
+                        emit_add_frame_off(out, 10, off);
+                        fprintf(out, "    str x%d, [x10]\n", ra);
+                    }
                     break;
                 }
                 case IR_LOAD_LOCAL: {
                     int d = is_spilled(alloc, inst->dst) ? 11 : phys(alloc, inst->dst);
                     int off = local_base + (int)inst->imm * 8;
-                    if (off <= 255)
+                    if (off <= 255) {
                         fprintf(out, "    ldr x%d, [x29, #%d]\n", d, off);
-                    else
-                        fprintf(out, "    add x10, x29, #%d\n    ldr x%d, [x10]\n", off, d);
+                    } else {
+                        emit_add_frame_off(out, 10, off);
+                        fprintf(out, "    ldr x%d, [x10]\n", d);
+                    }
                     if (is_spilled(alloc, inst->dst))
                         store_spill(out, alloc, inst->dst, 11);
                     break;
@@ -497,18 +538,14 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
                     // having to rewrite the pointer-based field
                     // accesses (those continue to use IR_LOAD/IR_STORE
                     // against the resulting address).
+                    //
+                    // F-010: route through emit_add_frame_off so frames
+                    // that exceed the 12-bit immediate window get a
+                    // chained-add sequence (4095 + 4095 + remainder)
+                    // instead of an invalid single-add instruction.
                     int d = is_spilled(alloc, inst->dst) ? 11 : phys(alloc, inst->dst);
                     int off = local_base + (int)inst->imm * 8;
-                    // ARM64 `add Xd, Xn, #imm12` accepts unsigned imm12
-                    // up to 4095. Larger frames need the 2-instruction
-                    // movz/add sequence; we keep it simple with movk
-                    // since slot offsets are bounded by `stack_size`
-                    // which we already cap.
-                    if (off <= 4095) {
-                        fprintf(out, "    add x%d, x29, #%d\n", d, off);
-                    } else {
-                        fprintf(out, "    mov x10, #%d\n    add x%d, x29, x10\n", off, d);
-                    }
+                    emit_add_frame_off(out, d, off);
                     if (is_spilled(alloc, inst->dst))
                         store_spill(out, alloc, inst->dst, 11);
                     break;

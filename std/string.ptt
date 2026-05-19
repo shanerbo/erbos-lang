@@ -303,13 +303,29 @@ String.replace(self String, needle String, repl String) String {
   give out
 }
 
+// F-010: djb2-shaped fold (`h = h * 33 + b + 1` per byte) followed
+// by a single 64-bit Knuth-multiplicative finalizer. djb2 alone
+// has decent distribution for short / mixed-content strings but
+// loses bit mixing on long shared-prefix strings — the early bytes
+// shift out of the low bits, but `+ b` doesn't avalanche, so two
+// inputs that differ only in their last few bytes end up with
+// hashes that differ in only those few bit positions. The
+// finalizer multiplication by the full 64-bit golden-ratio
+// constant (same as `int.hash`'s) scrambles those few-bit
+// differences across the full 64-bit output, which Map / Set
+// then fold into the bucket via `map_probe_index`.
+//
+// Potato has no xor or rotate, so this is the strongest mixing
+// reachable from a single multiplication. It costs one extra
+// multiplication per `String.hash` call regardless of string
+// length.
 String.hash(self String) int {
   h is 5381
   through (i from 0 to self.count by 1) {
     b is self.byte_at(i)
     h be h * 33 + b + 1
   }
-  give h
+  give h * (0 - 7046029254386353131)
 }
 
 String.to_int(self String) Result of int, String {

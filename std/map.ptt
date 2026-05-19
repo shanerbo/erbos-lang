@@ -79,6 +79,35 @@ map_probe_index(h int, cap int) int {
   give r
 }
 
+// F-010: distance of slot `i` from its ideal bucket for hash `h`.
+// Returns a value in `[0, cap)`. A distance of 0 means the slot is
+// at the entry's preferred bucket; larger values mean the entry
+// has been displaced by collisions. Robin Hood hashing uses this
+// to keep insert/lookup probe chains short by ensuring entries
+// closer to their ideal don't get displaced past entries that are
+// farther from theirs.
+map_probe_distance(i int, h int, cap int) int {
+  ideal is map_probe_index(h, cap)
+  d is i - ideal
+  d lt 0 ?{ d be d + cap }
+  give d
+}
+
+// F-010: Robin Hood + backshift deletion replaces the prior
+// linear-probe-with-tombstones design. The state byte becomes a
+// 2-state {EMPTY=0, FULL=1}; DELETED is gone — `Map.remove`
+// shifts the trailing displaced run leftward instead of leaving
+// a tombstone, so long-lived churn no longer relies on resize/
+// clear to restore probe quality. Lookups gain a Robin Hood
+// early-out: if the current probe distance exceeds the slot's
+// own distance, the searched key cannot be in the table (because
+// it would have been swapped into a closer slot), so we stop
+// without walking the rest of the cluster.
+//
+// The `occupied` field is now redundant with `count` (no
+// tombstones), but kept on the struct to preserve the on-disk
+// layout for any code that reads it; it is updated in lockstep
+// with `count`.
 Map of K, V is {
   count    int
   occupied int
@@ -146,26 +175,30 @@ Map.values(self Map of K, V) List of V {
 
 // has() — true iff `k` is present.
 //
-// F-005: linear probe via a cursor that increments by 1 and
-// wraps via subtraction at the cap boundary, instead of
-// recomputing `map_probe_index(start + off, cap)` each step.
-// The start bucket is mixed once via map_probe_index; every
-// subsequent step is a single increment-and-conditional-
-// subtract, which the compiler lowers to a branch the
-// hardware predicts well.
+// F-010: Robin Hood lookup. Walks linearly from the ideal bucket
+// with `pdist` tracking the searched key's probe distance. Stops
+// early when (a) we hit EMPTY (no chain through this bucket), or
+// (b) `pdist` exceeds the current slot's own probe distance. The
+// second condition is the Robin Hood invariant: if `k` were in
+// the table, it would have been swapped past every entry whose
+// distance is less than ours — so finding such an entry proves
+// `k` isn't there. The pre-F-010 path walked past tombstones
+// up to `cap` iterations on a missing key; the early-out keeps
+// the lookup O(displacement) instead of O(cluster).
 Map.has(self Map of K, V, k K) bool {
   self.keys eq 0 ?{ give false }
   cap is self.keys.cap
   i is map_probe_index(k.hash(), cap)
+  pdist is 0
   through (off from 0 to cap by 1) {
     s is self.states[i]
     s eq 0 ?{ give false }
-    s eq 1 ?{
-      self.keys[i] eq k ?{ give true }
-    }
-    // s eq 2 (DELETED) — keep probing.
+    self.keys[i] eq k ?{ give true }
+    o_dist is map_probe_distance(i, self.keys[i].hash(), cap)
+    pdist gt o_dist ?{ give false }
     i be i + 1
     i ge cap ?{ i be i - cap }
+    pdist be pdist + 1
   }
   give false
 }
@@ -181,22 +214,22 @@ Map.get(self Map of K, V, k K) V {
   self.keys eq 0 ?{ assert(false) }
   cap is self.keys.cap
   i is map_probe_index(k.hash(), cap)
+  pdist is 0
   through (off from 0 to cap by 1) {
     s is self.states[i]
     s eq 0 ?{ assert(false) }
-    s eq 1 ?{
-      self.keys[i] eq k ?{ give self.vals[i] }
-    }
-    // s eq 2 — keep probing.
+    self.keys[i] eq k ?{ give self.vals[i] }
+    o_dist is map_probe_distance(i, self.keys[i].hash(), cap)
+    pdist gt o_dist ?{ assert(false) }
     i be i + 1
     i ge cap ?{ i be i - cap }
+    pdist be pdist + 1
   }
   // Probed every slot without hitting EMPTY *and* without
-  // finding a match. That's only possible if the table has
-  // no empty buckets at all; in our policy that cannot happen
-  // (resize keeps occupancy below cap), so this path is
-  // unreachable — but the language's must-return checker
-  // can't prove it, so we panic explicitly to satisfy it.
+  // finding a match. The resize-before-insert guard keeps the
+  // load below 70%, so an EMPTY exists; this path is
+  // unreachable but the language's must-return analyzer can't
+  // prove it. Explicit panic + sentinel to satisfy the analyzer.
   assert(false)
   give self.vals[0]
 }
@@ -206,42 +239,82 @@ Map.try_get(self Map of K, V, k K) Option of V {
   self.keys eq 0 ?{ give none of V () }
   cap is self.keys.cap
   i is map_probe_index(k.hash(), cap)
+  pdist is 0
   through (off from 0 to cap by 1) {
     s is self.states[i]
     s eq 0 ?{ give none of V () }
-    s eq 1 ?{
-      self.keys[i] eq k ?{ give some of V (self.vals[i]) }
-    }
-    // s eq 2 — keep probing.
+    self.keys[i] eq k ?{ give some of V (self.vals[i]) }
+    o_dist is map_probe_distance(i, self.keys[i].hash(), cap)
+    pdist gt o_dist ?{ give none of V () }
     i be i + 1
     i ge cap ?{ i be i - cap }
+    pdist be pdist + 1
   }
   give none of V ()
 }
 
 // Remove `k` if present. Returns true iff a key was removed.
-// Replaces the slot's state with DELETED (tombstone) so future
-// probes for keys that collided through this bucket still find
-// their target. The bucket itself becomes available to a later
-// `set` that wants to insert at the first DELETED in its probe
-// chain.
+//
+// F-010: backshift deletion. Once we find `k`, we vacate its
+// slot and walk forward shifting any displaced trailing entries
+// one slot leftward. We stop when we either (a) hit EMPTY, or
+// (b) reach a slot whose own probe distance is 0 (the entry is
+// already at its ideal bucket and shifting it left would push
+// it past that ideal). After the shift, no slot in the table
+// has a tombstone — the post-remove state is indistinguishable
+// from a state where `k` had never been inserted in the first
+// place. Subsequent lookups don't need to walk past tombstones,
+// and inserts don't need to track tombstone-reuse slots; both
+// stay O(displacement).
+//
+// Lookup uses the Robin Hood early-out: if our probe distance
+// exceeds the current slot's, the key isn't in the table.
 Map.remove(self ref Map of K, V, k K) bool {
   self.keys eq 0 ?{ give false }
   cap is self.keys.cap
   i is map_probe_index(k.hash(), cap)
+  pdist is 0
   through (off from 0 to cap by 1) {
     s is self.states[i]
     s eq 0 ?{ give false }
-    s eq 1 ?{
-      self.keys[i] eq k ?{
-        self.states[i] be 2
-        self.count be self.count - 1
-        give true
+    self.keys[i] eq k ?{
+      // Found at slot i. Vacate it via `is now arr[k]` so the
+      // extracted owners (for heap-shaped K / V) drop at scope
+      // exit; the slot becomes null.
+      gone_k is now self.keys[i]
+      gone_v is now self.vals[i]
+      self.states[i] be 0
+      // Backshift: walk forward; each FULL slot whose own probe
+      // distance is positive gets moved one slot left. When we
+      // hit EMPTY or a distance-0 slot, the chain is healed and
+      // we stop.
+      j is i
+      through (b_off from 0 to cap by 1) {
+        next is j + 1
+        next ge cap ?{ next be next - cap }
+        self.states[next] eq 0 ?{ stop }
+        n_dist is map_probe_distance(next, self.keys[next].hash(), cap)
+        n_dist eq 0 ?{ stop }
+        // Shift slot[next] -> slot[j]. Both are FULL on the way
+        // in; after the move, slot[next] is EMPTY and slot[j]
+        // owns the moved pointers.
+        sk is now self.keys[next]
+        sv is now self.vals[next]
+        self.keys[j] be now sk
+        self.vals[j] be now sv
+        self.states[j] be 1
+        self.states[next] be 0
+        j be next
       }
+      self.count be self.count - 1
+      self.occupied be self.occupied - 1
+      give true
     }
-    // s eq 2 — keep probing.
+    o_dist is map_probe_distance(i, self.keys[i].hash(), cap)
+    pdist gt o_dist ?{ give false }
     i be i + 1
     i ge cap ?{ i be i - cap }
+    pdist be pdist + 1
   }
   give false
 }
@@ -284,11 +357,29 @@ Map.reserve(self ref Map of K, V, cap_request int) {
   self.resize_to(pow2)
 }
 
-// Insert or update. Power-of-two cap, linear-probe, tombstone-
-// reusing. Both `k` and `v` are deep-cloned into freshly-owned
-// array slots via `is rep` + `arr[i] be now`, so the caller's
-// values can go out of scope without leaving dangling pointers
-// behind.
+// Insert or update.
+//
+// F-010: Robin Hood insert + lookup. The to-insert key/value
+// (deep-cloned for heap-shaped K / V) starts at the ideal
+// bucket and walks linearly. Three things can happen at each
+// slot:
+//   - EMPTY: drop the to-insert in; done.
+//   - FULL with same key (lookup phase only): overwrite the
+//     value; done.
+//   - FULL with smaller probe distance: swap with the slot,
+//     continue with the displaced entry as the new to-insert.
+//
+// Once the first swap fires, the original key cannot be in the
+// table: by the Robin Hood invariant, if it were, it would
+// have been swapped past every entry whose distance is less
+// than its own — so encountering one proves the key is
+// missing. The `inserting` flag tracks this transition; after
+// a swap, we don't check for update.
+//
+// Backshift deletion (see Map.remove) keeps the table free of
+// tombstones, so this insert path never has to reuse a
+// DELETED slot — every FULL slot is a real entry, every EMPTY
+// slot is an immediate drop point.
 Map.set(self ref Map of K, V, k K, v V) {
   self.keys eq 0 ?{
     cap is INITIAL_MAP_CAP()
@@ -296,69 +387,89 @@ Map.set(self ref Map of K, V, k K, v V) {
     self.vals be array of V with cap cap
     self.states be array of byte with cap cap
   }
-  // Resize-before-insert: keep load factor under 70%, and never
-  // allow `occupied` to fully cover the table (the probe walk
-  // in get() relies on at least one EMPTY existing).
+  // Resize-before-insert: keep load factor under 70%. With
+  // backshift deletion `count == occupied` always, so a single
+  // threshold check suffices.
   threshold is (self.keys.cap * 7) / 10
-  self.occupied ge threshold ?{
+  self.count ge threshold ?{
     self.resize_to(self.keys.cap * 2)
   }
   cap is self.keys.cap
+  // Pass 1: Robin Hood lookup for an existing key. If we hit
+  // EMPTY or the Robin Hood early-out before finding `k`, we
+  // know `k` is not in the table and fall through to the
+  // insert pass. Splitting lookup from insert keeps the
+  // ownership story tractable: the update path doesn't touch
+  // `ins_k` / `ins_v` (those are only deep-cloned for the
+  // insert path), so the checker's linear move-tracking sees
+  // a single move-out site for each.
   i is map_probe_index(k.hash(), cap)
-  // Two-pass insert: first scan for an existing key OR an EMPTY.
-  // If we encountered a DELETED before EMPTY and never found the
-  // key, prefer that DELETED slot for the insert (tombstone reuse).
-  found_deleted is 0 - 1
+  pdist is 0
   through (off from 0 to cap by 1) {
     s is self.states[i]
-    s eq 1 ?{
-      self.keys[i] eq k ?{
-        // Key already present — overwrite the value. Deep-clone
-        // the new v into the slot; the slot already had a value
-        // before, but `array of V` does not currently track
-        // per-element ownership for drop, so the old value's
-        // heap data leaks. (See language-law / findings: typed
-        // arrays of heap-shaped T need element-wise drop.)
-        v_clone is rep v
-        self.vals[i] be now v_clone
-        give
-      }
-    }
-    s eq 2 ?{
-      found_deleted lt 0 ?{ found_deleted be i }
-    }
-    s eq 0 ?{
-      slot is i
-      reuse is 0
-      found_deleted ge 0 ?{
-        slot be found_deleted
-        reuse be 1
-      }
-      // Deep-clone both key and value into independent owned
-      // slots, then transfer ownership into the array via `now`.
-      // For primitive K / V these collapse to a value copy and a
-      // plain store; for heap-shaped K / V the map gets its own
-      // independent block.
-      k_clone is rep k
-      v_clone is rep v
-      self.keys[slot] be now k_clone
-      self.vals[slot] be now v_clone
-      self.states[slot] be 1
-      self.count be self.count + 1
-      reuse eq 0 ?{
-        self.occupied be self.occupied + 1
-      }
+    s eq 0 ?{ off be cap }
+    s eq 0 ?{ skip }
+    self.keys[i] eq k ?{
+      // Update: overwrite val via `be now`, which drops the
+      // previous occupant (heap-shaped V) or does a plain
+      // store (primitive V).
+      v_upd is rep v
+      self.vals[i] be now v_upd
       give
+    }
+    o_dist is map_probe_distance(i, self.keys[i].hash(), cap)
+    pdist gt o_dist ?{ off be cap }
+    pdist gt o_dist ?{ skip }
+    i be i + 1
+    i ge cap ?{ i be i - cap }
+    pdist be pdist + 1
+  }
+  // Pass 2: Robin Hood insert. Walk forward; for each FULL
+  // slot whose own probe distance is less than ours, swap
+  // (extract the slot, drop ours in, continue with the
+  // displaced as the new to-insert). When we hit EMPTY,
+  // record `target_i` and break — the actual final move
+  // happens after the loop so the checker's linear
+  // move-tracking sees a single textual move-out for `ins_k`
+  // and `ins_v` at the EMPTY-drop site.
+  ins_k is rep k
+  ins_v is rep v
+  target_i is 0 - 1
+  through (off from 0 to cap by 1) {
+    s is self.states[i]
+    s eq 0 ?{
+      target_i be i
+      off be cap
+      skip
+    }
+    // FULL: try Robin Hood swap.
+    o_dist is map_probe_distance(i, self.keys[i].hash(), cap)
+    pdist gt o_dist ?{
+      slot_k is now self.keys[i]
+      slot_v is now self.vals[i]
+      self.keys[i] be now ins_k
+      self.vals[i] be now ins_v
+      ins_k be now slot_k
+      ins_v be now slot_v
+      pdist be o_dist
     }
     i be i + 1
     i ge cap ?{ i be i - cap }
+    pdist be pdist + 1
   }
-  // Probed every bucket without finding EMPTY. The
-  // resize-before-insert guard above guarantees an EMPTY exists,
-  // so this is only reachable if the resize itself failed to
-  // grow (which our policy never does). Keep an explicit assert
-  // so a future regression that silences the resize would crash
-  // visibly instead of corrupting the table.
+  // Final drop into the discovered EMPTY slot. The 70% load
+  // bound keeps at least 30% of slots EMPTY at all times, so
+  // `target_i` is always set by the loop above; the
+  // assert(false) post-loop is unreachable in correct
+  // operation but satisfies the must-return analyzer.
+  target_i ge 0 ?{
+    self.keys[target_i] be now ins_k
+    self.vals[target_i] be now ins_v
+    self.states[target_i] be 1
+    self.count be self.count + 1
+    self.occupied be self.occupied + 1
+    give
+  }
   assert(false)
 }
 
@@ -383,28 +494,54 @@ Map.resize_to(self ref Map of K, V, new_cap int) {
   // freed when the old array drops doesn't touch the
   // already-moved heap blocks.
   old_cap is self.keys.cap
+  // F-010: Robin Hood re-insert. Walk the old table; for each
+  // FULL slot, extract the key + value via `is now` (no extra
+  // clone — the old buffers are about to drop), then insert
+  // into the fresh arrays via the same Robin Hood path the
+  // public Map.set uses. The displaced-entry continuation
+  // works against the fresh arrays only; old slots are not
+  // re-touched.
   through (i from 0 to old_cap by 1) {
     self.states[i] eq 1 ?{
-      // Hash from a fresh local read; we don't mutate old_keys,
-      // we transfer the pointer.
-      h is self.keys[i].hash()
-      // F-005: linear-probe cursor with subtract-on-overflow
-      // wrap; same shape as the lookup paths above. The break
-      // condition still drives `off be new_cap`, but the
-      // bucket index is now an explicit cursor `j` instead of
-      // a per-step modular reduction.
+      ins_k is now self.keys[i]
+      ins_v is now self.vals[i]
+      self.states[i] be 0
+      h is ins_k.hash()
       j is map_probe_index(h, new_cap)
+      pdist is 0
+      target_j is 0 - 1
       through (off from 0 to new_cap by 1) {
         fresh_states[j] eq 0 ?{
-          k is rep self.keys[i]
-          v is rep self.vals[i]
-          fresh_keys[j] be now k
-          fresh_vals[j] be now v
-          fresh_states[j] be 1
+          target_j be j
           off be new_cap
+          skip
+        }
+        // FULL fresh slot — Robin Hood swap if our distance is
+        // larger. (Fresh inserts can collide because two
+        // different old keys may map to the same new ideal.)
+        o_h is fresh_keys[j].hash()
+        o_dist is map_probe_distance(j, o_h, new_cap)
+        pdist gt o_dist ?{
+          slot_k is now fresh_keys[j]
+          slot_v is now fresh_vals[j]
+          fresh_keys[j] be now ins_k
+          fresh_vals[j] be now ins_v
+          ins_k be now slot_k
+          ins_v be now slot_v
+          pdist be o_dist
         }
         j be j + 1
         j ge new_cap ?{ j be j - new_cap }
+        pdist be pdist + 1
+      }
+      // Single move-out point for ins_k / ins_v into the
+      // EMPTY slot the loop above located. The 70%-load
+      // bound on `new_cap` keeps an EMPTY slot reachable
+      // for every old entry, so target_j is always set.
+      target_j ge 0 ?{
+        fresh_keys[target_j] be now ins_k
+        fresh_vals[target_j] be now ins_v
+        fresh_states[target_j] be 1
       }
     }
   }

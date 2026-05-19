@@ -86,6 +86,38 @@ bits, restoring full-table distribution.
 
 - Output shape (6 lines): `2048 / 14672896 / 2048 / 3072 / 49 / 0`.
 
+## `hash_churn_bench.ptt` — Map sustained churn
+
+F-010 reference workload. 10 cycles of (insert 1024 + remove
+1024) against a `Map of int, int` that already holds 1024
+unrelated baseline entries. Pre-F-010 each cycle accumulated
+~1024 tombstones in the table; over 10 cycles the cluster of
+tombstones could reach ~10000, and every probe in subsequent
+phases had to walk past them until the next resize/clear.
+Post-F-010 backshift deletion heals the chain in place — the
+post-cycle table is byte-equivalent to one that never held the
+churned keys, so probe quality stays steady regardless of
+churn volume.
+
+- Output shape (3 lines): `1024 / 1024 / 8904192`.
+
+## `hash_string_bench.ptt` — int and String Map hasher quality
+
+F-010 reference workload. Two parallel workloads — `Map of
+int, int` and `Map of String, int` — each running fill / hit /
+miss phases at N=1024, plus a 4096-element resize-stress for
+the int side. Pre-F-010 `int.hash` was a 32-bit Knuth
+multiplier (weak high-bit mixing on 64-bit inputs) and
+`String.hash` was plain djb2 (no avalanche). Post-F-010 both
+hashers carry a 64-bit Knuth-multiplicative finalizer, so the
+output bits are spread across all 64 positions; combined with
+the F-005 high-bit-into-low fold in `map_probe_index`, the
+effective avalanche is two-stage. The bench prints lengths and
+sums for both sides so hasher-quality changes are measurable
+rather than assumed.
+
+- Output shape (7 lines): `1024 / 523776 / 1024 / 5120 / 1024 / 523776 / 1024`.
+
 ## Baseline (M-series Mac)
 
 The fixed cost (lex/parse/check/codegen/assemble/link/launch)

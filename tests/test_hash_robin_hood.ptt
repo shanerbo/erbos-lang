@@ -1,0 +1,313 @@
+// F-010 regression: Robin Hood + backshift hash-container
+// hardening for Map and Set. Pre-F-010 the containers used
+// plain linear probing with tombstone-style deletion (`states[i]
+// = 2` to mark DELETED), so long-lived churn workloads
+// accumulated tombstones that probes had to walk past until the
+// next resize/clear. Post-F-010:
+//
+//   - Stronger hashing (`int.hash` uses a 64-bit golden-ratio
+//     multiplier; `String.hash` adds a 64-bit Knuth finalizer
+//     post-djb2).
+//   - Robin Hood insert / lookup: each entry tracks distance
+//     from its ideal bucket; inserts swap if the to-insert's
+//     distance exceeds the slot's; lookups early-out when
+//     `pdist > slot's distance`.
+//   - Backshift deletion replaces tombstones: on remove, walk
+//     forward shifting any FULL slot whose probe distance is
+//     positive one slot leftward, stopping at EMPTY or
+//     distance-0. The post-remove state matches a state where
+//     the removed key had never been inserted.
+//
+// External Map / Set semantics are unchanged. These tests cover
+// hit-heavy, miss-heavy, and delete/reinsert-heavy workloads
+// that the pre-F-010 design degraded on.
+
+use std/list
+use std/map
+use std/set
+use std/string
+use std/option
+
+// ---------------------------------------------------------------
+// Hit-heavy: dense lookup hits after a single bulk fill
+// ---------------------------------------------------------------
+
+test "Map hit-heavy: 4096 sequential keys, full lookup pass" {
+  m is Map of int, int()
+  through (i from 0 to 4096 by 1) {
+    m.set(i, i * 13)
+  }
+  through (i from 0 to 4096 by 1) {
+    assert(m.get(i) eq i * 13)
+  }
+  assert(m.len() eq 4096)
+}
+
+test "Set hit-heavy: 4096 sequential keys, full has() pass" {
+  s is Set of int()
+  through (i from 0 to 4096 by 1) {
+    s.add(i)
+  }
+  through (i from 0 to 4096 by 1) {
+    assert(s.has(i))
+  }
+  assert(s.len() eq 4096)
+}
+
+test "Map of String, int hit-heavy: 1024 distinct keys" {
+  m is Map of String, int()
+  through (i from 0 to 1024 by 1) {
+    k is "key-".concat(i.to_string())
+    m.set(k, i)
+  }
+  through (i from 0 to 1024 by 1) {
+    k is "key-".concat(i.to_string())
+    assert(m.get(k) eq i)
+  }
+  assert(m.len() eq 1024)
+}
+
+// ---------------------------------------------------------------
+// Miss-heavy: lookups for keys that never get inserted
+// ---------------------------------------------------------------
+
+test "Map miss-heavy: try_get of N non-member keys returns None" {
+  // Fill with even keys; query odd keys.
+  m is Map of int, int()
+  through (i from 0 to 2048 by 1) {
+    m.set(i * 2, i)
+  }
+  miss_count is 0
+  through (i from 0 to 2048 by 1) {
+    k is i * 2 + 1
+    opt is m.try_get(k)
+    opt.is_none() ?{ miss_count be miss_count + 1 }
+  }
+  assert(miss_count eq 2048)
+}
+
+test "Set miss-heavy: has() on non-members returns false" {
+  s is Set of int()
+  through (i from 0 to 2048 by 1) {
+    s.add(i * 2)
+  }
+  hit_count is 0
+  through (i from 0 to 2048 by 1) {
+    k is i * 2 + 1
+    s.has(k) ?{ hit_count be hit_count + 1 }
+  }
+  assert(hit_count eq 0)
+}
+
+// ---------------------------------------------------------------
+// Delete/reinsert-heavy: long-running churn workloads
+// ---------------------------------------------------------------
+
+test "Map churn: insert N, remove half, reinsert different half, validate" {
+  // Insert keys [0..2048).
+  m is Map of int, int()
+  through (i from 0 to 2048 by 1) {
+    m.set(i, i * 7)
+  }
+  // Remove every key whose value mod 2 is 0 (the even-valued
+  // ones; equivalently, the keys themselves since values track).
+  through (i from 0 to 2048 by 1) {
+    i mod 2 eq 0 ?{
+      m.remove(i)
+    }
+  }
+  assert(m.len() eq 1024)
+  // Reinsert a non-overlapping set of 1024 keys.
+  through (i from 0 to 1024 by 1) {
+    m.set(2048 + i, 2048 + i + 100)
+  }
+  assert(m.len() eq 2048)
+  // Verify both surviving and new keys.
+  through (i from 0 to 2048 by 1) {
+    i mod 2 eq 1 ?{
+      assert(m.get(i) eq i * 7)
+    }
+  }
+  through (i from 0 to 1024 by 1) {
+    assert(m.get(2048 + i) eq 2048 + i + 100)
+  }
+}
+
+test "Map sustained churn: 5x insert/remove cycles maintain integrity" {
+  // Pre-F-010 each cycle accumulated tombstones that probes had
+  // to walk past until a resize/clear. Post-F-010 the backshift
+  // delete heals the chain, so probe quality stays steady
+  // across cycles.
+  m is Map of int, int()
+  through (cycle from 0 to 5 by 1) {
+    // Insert 1000 keys.
+    through (i from 0 to 1000 by 1) {
+      m.set(cycle * 10000 + i, cycle * 10000 + i * 3)
+    }
+    // Remove all of them.
+    through (i from 0 to 1000 by 1) {
+      m.remove(cycle * 10000 + i)
+    }
+    assert(m.empty())
+  }
+  // Final shape: the table cycles through allocations cleanly.
+  m.set(99, 99)
+  assert(m.len() eq 1)
+  assert(m.get(99) eq 99)
+}
+
+test "Set churn: insert N, remove all, reinsert all, validate" {
+  s is Set of int()
+  through (i from 0 to 1024 by 1) {
+    s.add(i)
+  }
+  assert(s.len() eq 1024)
+  through (i from 0 to 1024 by 1) {
+    s.remove(i)
+  }
+  assert(s.empty())
+  through (i from 0 to 1024 by 1) {
+    s.add(i + 5000)
+  }
+  assert(s.len() eq 1024)
+  through (i from 0 to 1024 by 1) {
+    assert(s.has(i + 5000))
+    assert(not s.has(i))
+  }
+}
+
+test "Map remove preserves siblings on shared-bucket chains" {
+  // Insert keys that collide on the same ideal bucket. After
+  // backshift removal, the remaining siblings must still be
+  // findable.
+  m is Map of int, int()
+  // Multiples of cap will share low-bit buckets pre-F-005;
+  // post-F-005 they spread, but adversarial high-bit-aligned
+  // keys still create probe chains. Use multiples of 8.
+  through (i from 0 to 64 by 1) {
+    m.set(i * 8, i)
+  }
+  // Remove every other one.
+  through (i from 0 to 64 by 1) {
+    i mod 2 eq 0 ?{ m.remove(i * 8) }
+  }
+  assert(m.len() eq 32)
+  // All odd-indexed multiples-of-8 must still be retrievable.
+  through (i from 0 to 64 by 1) {
+    i mod 2 eq 1 ?{
+      assert(m.get(i * 8) eq i)
+    } nah {
+      assert(not m.has(i * 8))
+    }
+  }
+}
+
+// ---------------------------------------------------------------
+// Update path: existing-key writes don't add or remove entries
+// ---------------------------------------------------------------
+
+test "Map.set on existing key is a value update" {
+  m is Map of int, int()
+  through (i from 0 to 100 by 1) { m.set(i, i) }
+  // Update every value.
+  through (i from 0 to 100 by 1) { m.set(i, i + 1000) }
+  assert(m.len() eq 100)
+  through (i from 0 to 100 by 1) { assert(m.get(i) eq i + 1000) }
+}
+
+test "Map.set on existing String key updates value cleanly" {
+  // Heap-shaped V: the slot's previous value must drop, the
+  // new clone must be installed; no leak / no double-free.
+  m is Map of int, String()
+  through (i from 0 to 50 by 1) {
+    m.set(i, "v")
+  }
+  through (i from 0 to 50 by 1) {
+    m.set(i, "updated")
+  }
+  through (i from 0 to 50 by 1) {
+    assert(m.get(i) eq "updated")
+  }
+}
+
+test "Set.add of existing element is idempotent" {
+  s is Set of int()
+  through (i from 0 to 100 by 1) {
+    a is s.add(i)
+    assert(a)
+  }
+  through (i from 0 to 100 by 1) {
+    a is s.add(i)
+    assert(not a)
+  }
+  assert(s.len() eq 100)
+}
+
+// ---------------------------------------------------------------
+// Heap-shaped K/V correctness under Robin Hood swaps
+// ---------------------------------------------------------------
+
+test "Map of String, String survives Robin Hood swap chains" {
+  // Heap-shaped K and V. Robin Hood swap moves keys/vals between
+  // slots; the deep-clone-on-insert + extract-via-`is now`
+  // pattern must keep ownership crisp through the chain.
+  m is Map of String, String()
+  through (i from 0 to 256 by 1) {
+    k is "k-".concat(i.to_string())
+    v is "v-".concat(i.to_string())
+    m.set(k, v)
+  }
+  through (i from 0 to 256 by 1) {
+    k is "k-".concat(i.to_string())
+    expected is "v-".concat(i.to_string())
+    assert(m.get(k) eq expected)
+  }
+}
+
+test "Set of String survives Robin Hood + backshift" {
+  s is Set of String()
+  through (i from 0 to 256 by 1) {
+    s.add("v-".concat(i.to_string()))
+  }
+  // Remove half.
+  through (i from 0 to 256 by 1) {
+    i mod 2 eq 0 ?{ s.remove("v-".concat(i.to_string())) }
+  }
+  assert(s.len() eq 128)
+  // Survivors still findable.
+  through (i from 0 to 256 by 1) {
+    k is "v-".concat(i.to_string())
+    i mod 2 eq 1 ?{
+      assert(s.has(k))
+    } nah {
+      assert(not s.has(k))
+    }
+  }
+}
+
+// ---------------------------------------------------------------
+// Adversarial-key regressions inherited from F-005
+// ---------------------------------------------------------------
+
+test "Map adversarial keys still distribute under Robin Hood" {
+  // Multiples of 8 — pre-F-005 worst case. Post-F-005 the
+  // `low + high` bucket fold spreads them; post-F-010 Robin
+  // Hood adds distance-aware insert. Both layered.
+  m is Map of int, int()
+  through (i from 0 to 2048 by 1) {
+    m.set(i * 8, i)
+  }
+  through (i from 0 to 2048 by 1) {
+    assert(m.get(i * 8) eq i)
+  }
+}
+
+test "Map same-low-bits adversarial keys handled correctly" {
+  m is Map of int, int()
+  through (i from 0 to 1024 by 1) {
+    m.set(7 + i * 1024, i)
+  }
+  through (i from 0 to 1024 by 1) {
+    assert(m.get(7 + i * 1024) eq i)
+  }
+}

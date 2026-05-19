@@ -1,0 +1,72 @@
+// F-010 reference workload: mixed int and String hash-container
+// pressure. Pre-F-010 the int.hash was a 32-bit Knuth multiplier
+// (weak high-bit mixing on 64-bit inputs); String.hash was plain
+// djb2 (no avalanche). Post-F-010 both hashers gain a 64-bit
+// Knuth-multiplicative finalizer, materially strengthening the
+// distribution at no per-call cost beyond one multiplication.
+//
+// The bench runs the same workload shape for both Map of int, int
+// and Map of String, int, so hasher-quality changes are
+// measurable rather than assumed:
+//   1. fill: insert N distinct keys.
+//   2. hit: read every key back; sum.
+//   3. miss: try_get of N never-inserted keys.
+//   4. resize: continue inserting until two more cap doublings
+//      have fired, exercising the Robin Hood re-insert path
+//      under the new hashers.
+
+use std/list
+use std/map
+use std/string
+use std/option
+
+spark {
+  // === int Map ===
+  mi is Map of int, int()
+  through (i from 0 to 1024 by 1) {
+    mi.set(i * 13, i)
+  }
+  yell(mi.len())                        // 1024
+
+  total_i is 0
+  through (i from 0 to 1024 by 1) {
+    total_i be total_i + mi.get(i * 13)
+  }
+  yell(total_i)                         // sum(0..1023) = 523776
+
+  miss_i is 0
+  through (i from 0 to 1024 by 1) {
+    opt is mi.try_get(i * 13 + 1)
+    opt.is_none() ?{ miss_i be miss_i + 1 }
+  }
+  yell(miss_i)                          // 1024
+
+  // Force two more cap doublings via 4096-element fill.
+  through (i from 0 to 4096 by 1) {
+    mi.set(1000000 + i, i)
+  }
+  yell(mi.len())                        // 1024 + 4096 = 5120
+
+  // === String Map ===
+  ms is Map of String, int()
+  through (i from 0 to 1024 by 1) {
+    k is "key-".concat(i.to_string())
+    ms.set(k, i)
+  }
+  yell(ms.len())                        // 1024
+
+  total_s is 0
+  through (i from 0 to 1024 by 1) {
+    k is "key-".concat(i.to_string())
+    total_s be total_s + ms.get(k)
+  }
+  yell(total_s)                         // 523776
+
+  miss_s is 0
+  through (i from 0 to 1024 by 1) {
+    k is "miss-".concat(i.to_string())
+    opt is ms.try_get(k)
+    opt.is_none() ?{ miss_s be miss_s + 1 }
+  }
+  yell(miss_s)                          // 1024
+}

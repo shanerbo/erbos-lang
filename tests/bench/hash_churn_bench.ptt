@@ -1,0 +1,49 @@
+// F-010 reference workload: long-running churn stresses the
+// new backshift-deletion path. Pre-F-010, every removed entry
+// left a tombstone in `states[i] = 2`; over many cycles the
+// tombstones accumulated until the next resize/clear, and
+// every probe had to walk past them. Post-F-010, backshift
+// healing keeps the chain free of tombstones at all times,
+// so probe quality stays steady regardless of churn volume.
+//
+// Phases:
+//   1. baseline: insert N=1024 keys, validate len.
+//   2. churn cycles: 10 rounds of (insert-1024 + remove-1024)
+//      against the same Map, ending empty each time. Pre-F-010
+//      this would have left ~10240 tombstones in the table at
+//      its peak; post-F-010 the table self-heals.
+//   3. final hit-heavy probe of fresh inserts.
+
+use std/list
+use std/map
+
+spark {
+  m is Map of int, int()
+
+  // Phase 1: baseline insert.
+  through (i from 0 to 1024 by 1) {
+    m.set(i, i * 17)
+  }
+  yell(m.len())                         // 1024
+
+  // Phase 2: churn — 10 cycles of insert/remove.
+  through (cycle from 0 to 10 by 1) {
+    base is 100000 + cycle * 1024
+    through (i from 0 to 1024 by 1) {
+      m.set(base + i, base + i)
+    }
+    through (i from 0 to 1024 by 1) {
+      m.remove(base + i)
+    }
+  }
+  // After the churn loop, the map still holds the original
+  // 1024 entries unchanged.
+  yell(m.len())                         // 1024
+
+  // Phase 3: final hit-heavy probe.
+  total is 0
+  through (i from 0 to 1024 by 1) {
+    total be total + m.get(i)
+  }
+  yell(total)                           // 17 * sum(0..1023) = 8904192
+}

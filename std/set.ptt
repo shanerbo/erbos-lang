@@ -42,6 +42,21 @@ set_probe_index(h int, cap int) int {
   give r
 }
 
+// F-010: probe distance helper, mirroring map_probe_distance.
+// See std/map.ptt for the design rationale.
+set_probe_distance(i int, h int, cap int) int {
+  ideal is set_probe_index(h, cap)
+  d is i - ideal
+  d lt 0 ?{ d be d + cap }
+  give d
+}
+
+// F-010: same Robin Hood + backshift design as Map; see
+// std/map.ptt for rationale. State byte is {EMPTY=0, FULL=1};
+// DELETED is gone (backshift deletion heals the chain instead
+// of leaving a tombstone). The `occupied` field tracks `count`
+// in lockstep — kept on the struct to avoid a layout change
+// for any code that reads it.
 Set of T is {
   count    int
   occupied int
@@ -64,26 +79,34 @@ Set.empty(self Set of T) bool {
 
 // has() — true iff `v` is a member.
 //
-// F-005: linear probe via cursor-with-wrap, mirroring Map.has.
+// F-010: Robin Hood lookup with early-out (see Map.has).
 Set.has(self Set of T, v T) bool {
   self.data eq 0 ?{ give false }
   cap is self.data.cap
   i is set_probe_index(v.hash(), cap)
+  pdist is 0
   through (off from 0 to cap by 1) {
     s is self.states[i]
     s eq 0 ?{ give false }
-    s eq 1 ?{
-      self.data[i] eq v ?{ give true }
-    }
-    // s eq 2 — keep probing
+    self.data[i] eq v ?{ give true }
+    o_dist is set_probe_distance(i, self.data[i].hash(), cap)
+    pdist gt o_dist ?{ give false }
     i be i + 1
     i ge cap ?{ i be i - cap }
+    pdist be pdist + 1
   }
   give false
 }
 
 // add() returns true if a new element was inserted, false if
 // `v` was already present (idempotent insert).
+//
+// F-010: Robin Hood insert mirroring Map.set. Pass 1 looks up
+// the value via the Robin Hood early-out; if found, return
+// false (idempotent). Pass 2 does the Robin Hood swap-walk;
+// the final move into the located EMPTY slot happens once
+// after the loop so the checker's linear move-tracking sees a
+// single textual move-out for `ins_v`.
 Set.add(self ref Set of T, v T) bool {
   self.data eq 0 ?{
     cap is INITIAL_SET_CAP()
@@ -91,64 +114,97 @@ Set.add(self ref Set of T, v T) bool {
     self.states be array of byte with cap cap
   }
   threshold is (self.data.cap * 7) / 10
-  self.occupied ge threshold ?{
+  self.count ge threshold ?{
     self.resize_to(self.data.cap * 2)
   }
   cap is self.data.cap
+  // Pass 1: Robin Hood lookup. If we find `v`, no-op.
   i is set_probe_index(v.hash(), cap)
-  found_deleted is 0 - 1
+  pdist is 0
   through (off from 0 to cap by 1) {
     s is self.states[i]
-    s eq 1 ?{
-      self.data[i] eq v ?{
-        // Already present — no-op.
-        give false
-      }
-    }
-    s eq 2 ?{
-      found_deleted lt 0 ?{ found_deleted be i }
-    }
+    s eq 0 ?{ off be cap }
+    s eq 0 ?{ skip }
+    self.data[i] eq v ?{ give false }
+    o_dist is set_probe_distance(i, self.data[i].hash(), cap)
+    pdist gt o_dist ?{ off be cap }
+    pdist gt o_dist ?{ skip }
+    i be i + 1
+    i ge cap ?{ i be i - cap }
+    pdist be pdist + 1
+  }
+  // Pass 2: Robin Hood insert.
+  ins_v is rep v
+  target_i is 0 - 1
+  through (off from 0 to cap by 1) {
+    s is self.states[i]
     s eq 0 ?{
-      slot is i
-      reuse is 0
-      found_deleted ge 0 ?{
-        slot be found_deleted
-        reuse be 1
-      }
-      v_clone is rep v
-      self.data[slot] be now v_clone
-      self.states[slot] be 1
-      self.count be self.count + 1
-      reuse eq 0 ?{
-        self.occupied be self.occupied + 1
-      }
-      give true
+      target_i be i
+      off be cap
+      skip
+    }
+    o_dist is set_probe_distance(i, self.data[i].hash(), cap)
+    pdist gt o_dist ?{
+      slot_v is now self.data[i]
+      self.data[i] be now ins_v
+      ins_v be now slot_v
+      pdist be o_dist
     }
     i be i + 1
     i ge cap ?{ i be i - cap }
+    pdist be pdist + 1
   }
-  // Same unreachable-but-must-return guard as Map.set.
+  target_i ge 0 ?{
+    self.data[target_i] be now ins_v
+    self.states[target_i] be 1
+    self.count be self.count + 1
+    self.occupied be self.occupied + 1
+    give true
+  }
   assert(false)
   give false
 }
 
 // remove() returns true iff a value was removed.
+//
+// F-010: backshift deletion mirroring Map.remove. After
+// vacating the matching slot, walk forward shifting any FULL
+// slot whose probe distance is positive one slot leftward,
+// stopping at EMPTY or the first distance-0 slot. The chain
+// is healed in place — no tombstones.
 Set.remove(self ref Set of T, v T) bool {
   self.data eq 0 ?{ give false }
   cap is self.data.cap
   i is set_probe_index(v.hash(), cap)
+  pdist is 0
   through (off from 0 to cap by 1) {
     s is self.states[i]
     s eq 0 ?{ give false }
-    s eq 1 ?{
-      self.data[i] eq v ?{
-        self.states[i] be 2
-        self.count be self.count - 1
-        give true
+    self.data[i] eq v ?{
+      gone_v is now self.data[i]
+      self.states[i] be 0
+      j is i
+      through (b_off from 0 to cap by 1) {
+        next is j + 1
+        next ge cap ?{ next be next - cap }
+        self.states[next] eq 0 ?{ stop }
+        n_dist is set_probe_distance(next, self.data[next].hash(), cap)
+        n_dist eq 0 ?{ stop }
+        sv is now self.data[next]
+        self.data[j] be now sv
+        self.states[j] be 1
+        self.states[next] be 0
+        j be next
       }
+      self.count be self.count - 1
+      self.occupied be self.occupied - 1
+      give true
     }
+    o_dist is set_probe_distance(i, self.data[i].hash(), cap)
+    pdist gt o_dist ?{ give false }
     i be i + 1
     i ge cap ?{ i be i - cap }
+    pdist be pdist + 1
   }
   give false
 }
@@ -278,25 +334,47 @@ Set.difference(self Set of T, other Set of T) Set of T {
 }
 
 // Internal: re-hash every FULL entry into a freshly-sized table.
+//
+// F-010: Robin Hood re-insert mirroring Map.resize_to. Extract
+// each old FULL entry via `is now self.data[i]` (no extra clone
+// — the old buffer is about to drop), then walk the fresh
+// table with the Robin Hood swap policy. The final move into
+// the located EMPTY slot happens once after the inner loop so
+// the checker's linear move-tracking sees a single textual
+// move-out for `ins_v`.
 Set.resize_to(self ref Set of T, new_cap int) {
   fresh_data is array of T with cap new_cap
   fresh_states is array of byte with cap new_cap
   old_cap is self.data.cap
   through (i from 0 to old_cap by 1) {
     self.states[i] eq 1 ?{
-      h is self.data[i].hash()
-      // F-005: linear-probe cursor-with-wrap, same shape as
-      // the lookup paths above.
+      ins_v is now self.data[i]
+      self.states[i] be 0
+      h is ins_v.hash()
       j is set_probe_index(h, new_cap)
+      pdist is 0
+      target_j is 0 - 1
       through (off from 0 to new_cap by 1) {
         fresh_states[j] eq 0 ?{
-          v is rep self.data[i]
-          fresh_data[j] be now v
-          fresh_states[j] be 1
+          target_j be j
           off be new_cap
+          skip
+        }
+        o_h is fresh_data[j].hash()
+        o_dist is set_probe_distance(j, o_h, new_cap)
+        pdist gt o_dist ?{
+          slot_v is now fresh_data[j]
+          fresh_data[j] be now ins_v
+          ins_v be now slot_v
+          pdist be o_dist
         }
         j be j + 1
         j ge new_cap ?{ j be j - new_cap }
+        pdist be pdist + 1
+      }
+      target_j ge 0 ?{
+        fresh_data[target_j] be now ins_v
+        fresh_states[target_j] be 1
       }
     }
   }
