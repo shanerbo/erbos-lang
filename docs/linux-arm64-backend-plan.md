@@ -351,23 +351,26 @@ the validation run; they do not need to be checked in.
 
 ### Bare-metal Linux/aarch64 alternative
 
-If running on a real Linux/aarch64 host instead of a container:
+If you want to validate the generated ELF on a real Linux/aarch64 host
+instead of inside Apple's container, keep the distinction straight:
 
-1. Copy the repo onto the host. `make` requires a C11 compiler
-   (gcc or clang). No other dependencies. The host needs GNU `as`
-   and `ld` (binutils) on `PATH`. No libc, no glibc startup, no
-   SDK.
+1. The compiler frontend itself is still macOS-host-only in this
+   batch. `compiler/main.c` still depends on `_NSGetExecutablePath`
+   for bundled-stdlib resolution, so a native Linux-host `make`
+   path is not shipped yet.
 
-2. `make`. The resulting `erbos` binary is a native compiler that
-   can target either Darwin or Linux via `--target`.
+2. Build `erbos` on the supported macOS host, then use
+   `./erbos --target=linux-arm64 ir path/to/prog.ptt` to emit the
+   Linux-targeted assembly exactly as in the container workflow above.
 
-3. `./erbos --target=linux-arm64 run examples/hello.ptt` should
-   print `30` and exit 0.
+3. Assemble and link that `.s` into a static ELF, then copy the ELF
+   onto the Linux/aarch64 machine and run it there. The Linux host
+   needs GNU `as` and `ld` (or LLVM equivalents) on `PATH`; no libc,
+   no glibc startup, no SDK.
 
-4. To drive the full test matrix on Linux, mirror the Makefile's
-   `make test` lists and run each program via `--target=linux-arm64
-   run` instead of `run`. A future `make test-linux-arm64` could
-   automate this.
+4. Once a Linux host port lands, the expected workflow becomes
+   `make` followed by `./erbos --target=linux-arm64 run ...`. That
+   workflow is not part of the current acceptance claim.
 
 If the Linux backend produces an `as` error, the most likely cause
 is a constant value in `compiler/target_linux_arm64.c` that was
