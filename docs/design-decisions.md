@@ -32,9 +32,10 @@ Format:
 ## Struct construction syntax (named-arg vs positional)
 **Date:** 2026-05-16
 **Status:** decided (shipped — commit `b18a4df`)
-**Decision:** Two construction forms — `Point()` (zero-default) and
-`Point(x is 1, y is 2)` (atomic named-arg). Positional struct
-constructors `Point(1, 2)` are rejected.
+**Decision:** Two value-formation forms — `Point()` (zero-value
+formation) and `Point(x is 1, y is 2)` (atomic named-field
+formation). Positional struct expressions `Point(1, 2)` are
+rejected.
 
 ### Pain that motivated the change
 
@@ -44,7 +45,7 @@ left every value struct in a half-initialized state between
 construction and the last `be`, made `nomut` a no-op for value
 structs (you couldn't ever assign anything after the bind), and
 silently survived field-reorder refactors. Positional struct
-constructors `Foo(1, 2)` were also half-supported in `irgen.c`
+expressions `Foo(1, 2)` were also half-supported in `irgen.c`
 with no checker enforcement — silent truncation on arity mismatch,
 no type checking.
 
@@ -106,11 +107,11 @@ on `&mut self`), spelled in Potato vocabulary.
    from the element type.
 
 2. **The PascalCase rule is also what keeps the parser cheap.**
-   Today `Foo()` is unambiguously a struct constructor and `foo()`
-   is unambiguously a function call. That's a deliberate design
-   choice (`docs/language-guide.md` Methods section). Lowercasing
-   stdlib types would force a lookup table at parse time or defer
-   disambiguation to the checker.
+   Today `Foo()` is unambiguously a struct value-formation
+   expression and `foo()` is unambiguously a function call. That's
+   a deliberate design choice (`docs/language-guide.md` Methods
+   section). Lowercasing stdlib types would force a lookup table
+   at parse time or defer disambiguation to the checker.
 
 3. **The C++ analogy doesn't transfer.** `std::string` works in C++
    because every use site carries `std::` as the disambiguator.
@@ -508,9 +509,9 @@ serves cohesion over completeness).
 **Status:** decided (shipped — bug #114 fix)
 **Decision:** When a struct's field has a type that is itself a
 struct (user-defined OR stdlib generic like `List of T`,
-`Map of K, V`, `String`), the parent's `_alloc_<X>`
-constructor recursively calls `_alloc_<FieldType>` for that
-field and stores the resulting pointer.
+`Map of K, V`, `String`), the parent's `_alloc_<X>` init helper
+recursively calls `_alloc_<FieldType>` for that field and stores
+the resulting pointer.
 
 ### The bug
 
@@ -941,7 +942,7 @@ tests. Real-project testing is the only way to find them.
 Six classes of bug, all real, all fixed:
 
 1. **Parser oversights** — `--help` not recognized; multiline
-   named-arg constructors rejected; `field be now src`
+   named-field value-formation rejected; `field be now src`
    rejected; `module.func(ref x, ...)` rejected at call site;
    `field is List of T` (no parens) rejected as a value.
 
@@ -1213,7 +1214,7 @@ struct-typed fields, a latent bug surfaced through `_drop_String`:
 lowers to:
 1. `_alloc_Package` zero-fills then auto-inits the `name` field
    via `_alloc_String` (a heap-allocated empty String).
-2. The named-arg constructor stores the rodata literal pointer
+2. Named-field value-formation stores the rodata literal pointer
    `_str0` over the auto-init'd `name` field.
 3. End of test scope: `_drop_Package` calls
    `_drop_String(_str0)` which walks the rodata header,
@@ -1264,13 +1265,13 @@ String literal layout in `iremit.c::iremit_finalize_data`.
 
 ### Secondary leak (not fixed in this commit)
 
-The named-arg constructor still leaks the auto-init'd empty
+Named-field value-formation still leaks the auto-init'd empty
 String when overwritten by the literal pointer. With the
 borrow fix landed, this is a *leak*, not a crash — the
 auto-init'd String becomes orphaned heap memory that lives
 until the program exits.
 
-A clean fix needs the constructor lowering to either
+A clean fix needs the named-field formation lowering to either
 (a) skip auto-init for fields that the named-arg list
 explicitly initialises, or (b) emit a drop on each
 named-arg-initialised field before the literal pointer
@@ -1291,7 +1292,7 @@ time was rodata rather than heap. The crash was latent
 behind two preconditions:
 
 1. A struct field of type `String`.
-2. A named-arg constructor that stores a literal into
+2. A named-field value-formation that stores a literal into
    that field (so the field holds rodata, not the
    auto-init'd heap String).
 
@@ -1709,7 +1710,7 @@ can replace the hardcoded list cleanly.
 
 Why not extend the walker to every method-call: that would
 reject legitimate transient cases like `make_counter().bump()`
-where the method is a free constructor. The walker
+where the receiver is a free factory's return value. The walker
 distinguishes:
 
 - `NODE_CALL` (free function): always transient, no walk.

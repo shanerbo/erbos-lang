@@ -15,7 +15,9 @@ document.
 - **Enum factory formation**: `none of T ()`, `some of T (v)`,
   `ok of T, E (v)`, `err of T, E (e)`.
 
-Do not describe these as OO "constructors".
+Potato has no concept of a "constructor". Use *zero-value
+formation*, *named-field formation*, and *enum factory formation*
+as the only terms for forming values.
 
 ## Law
 
