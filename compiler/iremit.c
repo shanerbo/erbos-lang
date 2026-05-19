@@ -54,9 +54,9 @@ static int string_pool_intern(const char *s) {
     return g_string_pool.count++;
 }
 
-void iremit_finalize_data(FILE *out) {
+void iremit_finalize_data(FILE *out, const Target *target) {
     if (g_string_pool.count == 0) return;
-    fprintf(out, ".section __DATA,__data\n");
+    target->emit_data_section(out);
     for (int i = 0; i < g_string_pool.count; i++) {
         // β4: every string literal is now lowered to a `String`
         // struct value (cap, count, data, owned), where `data` is
@@ -227,7 +227,8 @@ static void emit_to_dst(FILE *out, RegAllocResult *a, VReg dst, int src_reg) {
     }
 }
 
-void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
+void iremit_func(FILE *out, const Target *target,
+                 IRFunc *func, RegAllocResult *alloc) {
     int local_base = 16;
     int locals_size = (func->local_slots > 0 ? func->local_slots : 1) * 8;
     // Each regalloc spill consumes SPILL_BASE (16) bytes of frame, not
@@ -344,11 +345,15 @@ void iremit_func(FILE *out, IRFunc *func, RegAllocResult *alloc) {
                 case IR_LOAD_STR: {
                     // Intern the string into the pool (caller may have
                     // referenced the same literal multiple times) and
-                    // emit a 2-instruction pointer load via @PAGE/@PAGEOFF.
+                    // emit a 2-instruction pointer load. The relocation
+                    // syntax is target-specific (Darwin @PAGE/@PAGEOFF
+                    // vs Linux :lo12:), so the actual emission is
+                    // delegated to the active target.
                     int idx = string_pool_intern(inst->str);
                     int d = is_spilled(alloc, inst->dst) ? 9 : phys(alloc, inst->dst);
-                    fprintf(out, "    adrp x%d, _str%d@PAGE\n", d, idx);
-                    fprintf(out, "    add x%d, x%d, _str%d@PAGEOFF\n", d, d, idx);
+                    char sym[32];
+                    snprintf(sym, sizeof(sym), "_str%d", idx);
+                    target->emit_addr_load(out, d, sym);
                     if (is_spilled(alloc, inst->dst))
                         store_spill(out, alloc, inst->dst, 9);
                     break;

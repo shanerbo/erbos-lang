@@ -3,9 +3,9 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>        // access(2), realpath()
-#include <spawn.h>         // posix_spawn, posix_spawnp
+#include <spawn.h>         // posix_spawn (used to run the compiled binary)
 #include <errno.h>
-#include <mach-o/dyld.h>   // _NSGetExecutablePath (macOS)
+#include <mach-o/dyld.h>   // _NSGetExecutablePath (macOS host bootstrap)
 extern char **environ;
 #include "lexer.h"
 #include "parser.h"
@@ -16,7 +16,7 @@ extern char **environ;
 #include "iropt.h"
 #include "regalloc.h"
 #include "iremit.h"
-#include "runtime_emit.h"
+#include "target.h"
 
 static char *read_file(const char *path) {
     FILE *f = fopen(path, "r");
@@ -29,77 +29,6 @@ static char *read_file(const char *path) {
     buf[len] = '\0';
     fclose(f);
     return buf;
-}
-
-// Codex P1-13 round 2: spawn an external command without going
-// through the shell. `system()` runs `/bin/sh -c`, which means
-// every argument has to be quoted/escaped against the shell's
-// rules — and single quotes in a path can't be escaped inside
-// single quotes. `posix_spawn` takes argv directly, so the path
-// text never reaches a shell parser.
-//
-// Returns the wait-status convention used elsewhere:
-//   - WIFEXITED: returns WEXITSTATUS
-//   - WIFSIGNALED: returns 128 + WTERMSIG (shell convention)
-//   - everything else: 1
-//
-// `prog` is looked up via posix_spawnp (PATH search). Pass an
-// absolute path if PATH search is undesirable. argv must be
-// NULL-terminated.
-static int spawn_argv(const char *prog, char *const argv[]) {
-    pid_t pid;
-    int rc = posix_spawnp(&pid, prog, NULL, NULL, argv, environ);
-    if (rc != 0) {
-        fprintf(stderr, "error: failed to spawn '%s': %s\n", prog, strerror(rc));
-        return 1;
-    }
-    int status = 0;
-    if (waitpid(pid, &status, 0) < 0) {
-        fprintf(stderr, "error: waitpid failed for '%s'\n", prog);
-        return 1;
-    }
-    if (WIFEXITED(status)) return WEXITSTATUS(status);
-    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
-    return 1;
-}
-
-// Capture stdout from a command. Used to read `xcrun --show-sdk-path`
-// once at link time. Returns 1 on success; writes the trimmed output
-// into `out`. The captured output's trailing newline is stripped.
-static int capture_stdout(const char *prog, char *const argv[],
-                          char *out, size_t out_size) {
-    int pipefd[2];
-    if (pipe(pipefd) != 0) return 0;
-    posix_spawn_file_actions_t fa;
-    posix_spawn_file_actions_init(&fa);
-    posix_spawn_file_actions_addclose(&fa, pipefd[0]);
-    posix_spawn_file_actions_adddup2(&fa, pipefd[1], STDOUT_FILENO);
-    posix_spawn_file_actions_addclose(&fa, pipefd[1]);
-    pid_t pid;
-    int rc = posix_spawnp(&pid, prog, &fa, NULL, argv, environ);
-    posix_spawn_file_actions_destroy(&fa);
-    close(pipefd[1]);
-    if (rc != 0) {
-        close(pipefd[0]);
-        return 0;
-    }
-    size_t n = 0;
-    while (n + 1 < out_size) {
-        ssize_t r = read(pipefd[0], out + n, out_size - 1 - n);
-        if (r <= 0) break;
-        n += (size_t)r;
-    }
-    out[n] = '\0';
-    close(pipefd[0]);
-    int status = 0;
-    waitpid(pid, &status, 0);
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) return 0;
-    // Trim trailing newline / whitespace.
-    while (n > 0 && (out[n - 1] == '\n' || out[n - 1] == '\r' ||
-                     out[n - 1] == ' ' || out[n - 1] == '\t')) {
-        out[--n] = '\0';
-    }
-    return n > 0;
 }
 
 // Locate the directory containing this compiler binary. On macOS,
@@ -830,32 +759,63 @@ int main(int argc, char **argv) {
     if (want_help) {
         FILE *out = (argc < 2) ? stderr : stdout;
         fprintf(out,
-            "usage: erbos [-O0|-O1|-O2] <file.ptt>      # build to binary\n"
-            "       erbos [-O0|-O1|-O2] run <file.ptt>  # build and run, then clean up\n"
-            "       erbos [-O0|-O1|-O2] test <file.ptt> # same as run; the test framework runs in the binary\n"
-            "       erbos [-O0|-O1|-O2] ir <file.ptt>   # emit the .s only, don't assemble\n"
+            "usage: erbos [-O0|-O1|-O2] [--target=<t>] <file.ptt>      # build to binary\n"
+            "       erbos [-O0|-O1|-O2] [--target=<t>] run <file.ptt>  # build and run, then clean up\n"
+            "       erbos [-O0|-O1|-O2] [--target=<t>] test <file.ptt> # same as run; the test framework runs in the binary\n"
+            "       erbos [-O0|-O1|-O2] [--target=<t>] ir <file.ptt>   # emit the .s only, don't assemble\n"
             "\n"
-            "  -O0  skip iropt entirely (no IR-level transformations)\n"
-            "  -O1  default — every iropt pass runs\n"
-            "  -O2  reserved for tuning; identical to -O1 today\n");
+            "  -O0          skip iropt entirely (no IR-level transformations)\n"
+            "  -O1          default — every iropt pass runs\n"
+            "  -O2          reserved for tuning; identical to -O1 today\n"
+            "  --target=<t> select a backend. Both verified end-to-end.\n"
+            "                 darwin-arm64  (default; Mach-O + Darwin syscalls)\n"
+            "                 linux-arm64   (ELF + Linux syscalls)\n");
         return (argc < 2) ? 1 : 0;
     }
 
-    // First pass: extract any -O0/-O1/-O2 anywhere in argv. Default
-    // is -O1 if no flag is given. The flag may appear before or
-    // after the subcommand (`-O0 run file.ptt` and `run -O0 file.ptt`
-    // are equivalent), since CLI ergonomics shouldn't depend on
+    // First pass: extract any -O0/-O1/-O2 and --target=<name> from
+    // argv, regardless of position. Both may appear before or after
+    // the subcommand (`-O0 run file.ptt` and `run -O0 file.ptt` are
+    // equivalent), since CLI ergonomics shouldn't depend on
     // memorising flag-vs-subcommand order. After this pass, argv is
     // compacted to remove the consumed flag(s).
     IROptLevel opt_level = IROPT_O1;
+    const char *target_name = NULL;
     int j = 1;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-O0"))      opt_level = IROPT_O0;
         else if (!strcmp(argv[i], "-O1")) opt_level = IROPT_O1;
         else if (!strcmp(argv[i], "-O2")) opt_level = IROPT_O2;
+        else if (!strncmp(argv[i], "--target=", 9)) target_name = argv[i] + 9;
         else                              argv[j++] = argv[i];
     }
     argc = j;
+
+    // Resolve the active backend. No flag → host default. With a flag,
+    // distinguish three outcomes:
+    //   - OK:               proceed
+    //   - NOT_IMPLEMENTED:  recognized identifier, no backend yet
+    //                       (today: linux-arm64 — lands in Phase 3)
+    //   - UNKNOWN:          typo / unrecognized name
+    const Target *target = target_default();
+    if (target_name) {
+        const Target *requested = NULL;
+        TargetLookupResult r = target_by_name(target_name, &requested);
+        if (r == TARGET_LOOKUP_OK) {
+            target = requested;
+        } else if (r == TARGET_LOOKUP_NOT_IMPLEMENTED) {
+            fprintf(stderr,
+                "error: --target=%s is recognized but its backend is "
+                "not yet implemented in this build.\n", target_name);
+            return 1;
+        } else {
+            fprintf(stderr,
+                "error: --target=%s is not a recognized target.\n"
+                "  supported: darwin-arm64, linux-arm64\n",
+                target_name);
+            return 1;
+        }
+    }
 
     // Subcommand parsing. The IR backend is the only backend now;
     // `run` / `test` add execute-and-cleanup, `ir` stops after .s
@@ -1348,16 +1308,16 @@ int main(int argc, char **argv) {
 
     // Helper: write the IR-pipeline assembly to `asm_path`. Splits its
     // work via the irgen + iremit + finalise sequence; runtime helpers
-    // (yell, heap allocator, str/list/map/imap helpers, panic and
-    // assert handlers, data section) come from src/runtime_emit.c.
+    // (yell, heap allocator, str/list/map helpers, panic and
+    // assert handlers, data section) come from the target's runtime
+    // emission callback.
     // Returns the number of IR functions emitted.
     #define EMIT_IR_TO_FILE(asm_path_arg) ({                                    \
         IRProgram *ir = irgen_generate(program);                                \
         iropt_run(ir, opt_level, program);                                      \
         FILE *ir_out = fopen((asm_path_arg), "w");                              \
-        fprintf(ir_out, ".global _start\n.align 2\n");                          \
-        fprintf(ir_out, ".section __TEXT,__text\n\n");                          \
-        runtime_emit_builtins(ir_out);                                          \
+        target->emit_prologue(ir_out);                                          \
+        target->emit_runtime_builtins(ir_out);                                  \
         /* Emit one `_drop_array_<E>` and `_clone_array_<E>` helper           \
          * per heap-shaped element struct E referenced as                     \
          * `array of E` in some struct field. Set/Map/Pool delegate           \
@@ -1781,46 +1741,21 @@ int main(int argc, char **argv) {
         }                                                                       \
         for (int i = 0; i < ir->func_count; i++) {                              \
             RegAllocResult alloc = regalloc_run(&ir->funcs[i]);                 \
-            iremit_func(ir_out, &ir->funcs[i], &alloc);                         \
+            iremit_func(ir_out, target, &ir->funcs[i], &alloc);                 \
             fprintf(ir_out, "\n");                                              \
             free(alloc.vreg_to_phys);                                           \
             free(alloc.vreg_to_spill);                                          \
         }                                                                       \
         int test_count = program->program.tests.count;                          \
+        target->emit_entry(ir_out, test_count);                                 \
+        iremit_finalize_data(ir_out, target);                                   \
         if (test_count > 0) {                                                   \
-            fprintf(ir_out, ".globl _start\n.p2align 2\n_start:\n");            \
+            const char **names = malloc(test_count * sizeof(char *));           \
             for (int i = 0; i < test_count; i++) {                              \
-                fprintf(ir_out, "    adrp x0, _pass_prefix@PAGE\n    add x0, x0, _pass_prefix@PAGEOFF\n"); \
-                fprintf(ir_out, "    bl _yell_str\n");                          \
-                fprintf(ir_out, "    adrp x0, _test_name_%d@PAGE\n    add x0, x0, _test_name_%d@PAGEOFF\n", i, i); \
-                fprintf(ir_out, "    bl _yell_str\n");                          \
-                fprintf(ir_out, "    bl _test_%d\n", i);                        \
+                names[i] = program->program.tests.items[i]->test_def.name;      \
             }                                                                   \
-            fprintf(ir_out, "    mov x16, #1\n    mov x0, #0\n    svc #0x80\n\n"); \
-        } else {                                                                \
-            fprintf(ir_out, "_start:\n    bl _spark\n    mov x16, #1\n    mov x0, #0\n    svc #0x80\n\n"); \
-        }                                                                       \
-        iremit_finalize_data(ir_out);                                           \
-        if (test_count > 0) {                                                   \
-            /* P3.4: each test name is a `String` header (4 quads:              \
-             * cap, count, data, owned=0) so the runtime test runner            \
-             * can pass it to `_yell_str` (which now reads count from           \
-             * the header instead of scanning bytes). The bytes live            \
-             * in `_test_name_<i>_bytes`; the header is at                      \
-             * `_test_name_<i>`. */                                              \
-            fprintf(ir_out, ".section __DATA,__data\n");                        \
-            for (int i = 0; i < test_count; i++) {                              \
-                Node *t = program->program.tests.items[i];                      \
-                int tn = (int)strlen(t->test_def.name);                         \
-                fprintf(ir_out, "_test_name_%d_bytes: .asciz \"%s\"\n", i,      \
-                    t->test_def.name);                                          \
-                fprintf(ir_out, ".p2align 3\n_test_name_%d_arr:\n", i);         \
-                fprintf(ir_out, "    .quad %d\n    .quad _test_name_%d_bytes\n", tn, i); \
-                fprintf(ir_out, "_test_name_%d:\n", i);                         \
-                fprintf(ir_out, "    .quad %d\n    .quad %d\n", tn, tn);        \
-                fprintf(ir_out, "    .quad _test_name_%d_arr\n    .quad 0\n", i); \
-            }                                                                   \
-            fprintf(ir_out, ".section __TEXT,__text\n");                        \
+            target->emit_test_data(ir_out, test_count, names);                  \
+            free(names);                                                        \
         }                                                                       \
         fclose(ir_out);                                                         \
         ir->func_count;                                                         \
@@ -1842,48 +1777,16 @@ int main(int argc, char **argv) {
     EMIT_IR_TO_FILE(asm_path);
     if (!run_mode) printf("generated %s\n", asm_path);
 
-    // Assemble + link via posix_spawn — no shell, so paths with
-    // spaces, apostrophes, or any other shell-special characters
-    // pass straight through to the assembler/linker as argv
-    // strings. Codex P1-13 round 2.
+    // Assemble + link through the active target's toolchain driver.
+    // The driver invokes the target's assembler and linker via
+    // posix_spawn — no shell, so paths with spaces, apostrophes, or
+    // any other shell-special characters pass straight through as
+    // argv strings.
     char obj_path[1024];
     snprintf(obj_path, sizeof(obj_path), "%s.o", out_name);
 
-    {
-        char *as_argv[] = {
-            "as", "-o", obj_path, asm_path, NULL
-        };
-        if (spawn_argv("as", as_argv) != 0) {
-            fprintf(stderr, "error: assembly failed\n");
-            return 1;
-        }
-    }
-
-    // Capture the SDK path once. `xcrun --show-sdk-path` was
-    // previously embedded as `$(xcrun ...)` in a shell command;
-    // now we run xcrun ourselves and pass the output as an
-    // explicit `-syslibroot <path>` argv pair.
-    char sdk_path[1024] = {0};
-    {
-        char *xcrun_argv[] = { "xcrun", "--show-sdk-path", NULL };
-        if (!capture_stdout("xcrun", xcrun_argv,
-                            sdk_path, sizeof(sdk_path))) {
-            fprintf(stderr, "error: failed to query SDK path "
-                            "(`xcrun --show-sdk-path`)\n");
-            return 1;
-        }
-    }
-
-    {
-        char *ld_argv[] = {
-            "ld", "-o", out_name, obj_path,
-            "-lSystem", "-syslibroot", sdk_path,
-            "-e", "_start", NULL
-        };
-        if (spawn_argv("ld", ld_argv) != 0) {
-            fprintf(stderr, "error: linking failed\n");
-            return 1;
-        }
+    if (target->assemble_and_link(asm_path, obj_path, out_name) != 0) {
+        return 1;
     }
 
     // Cleanup intermediate artifacts. unlink() takes a path

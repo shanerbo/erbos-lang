@@ -17,7 +17,7 @@
 #include <stdio.h>
 #include "runtime_emit.h"
 
-static void emit_yell_int(FILE *out) {
+static void emit_yell_int(FILE *out, const Target *target) {
     fprintf(out, "// built-in: _yell_int (signed)\n.globl _yell_int\n.p2align 2\n_yell_int:\n");
     fprintf(out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n    sub sp, sp, #64\n");
     fprintf(out, "    mov x2, x0\n    add x1, sp, #32\n    mov x3, #0\n");
@@ -38,11 +38,14 @@ static void emit_yell_int(FILE *out) {
     fprintf(out, "    ldrb w6, [x1, x4]\n    ldrb w7, [x1, x5]\n    strb w7, [x1, x4]\n    strb w6, [x1, x5]\n");
     fprintf(out, "    add x4, x4, #1\n    sub x5, x5, #1\n    b _yi_rev\n");
     fprintf(out, "_yi_write:\n    mov w4, #10\n    strb w4, [x1, x3]\n    add x3, x3, #1\n");
-    fprintf(out, "    mov x16, #4\n    mov x0, #1\n    mov x2, x3\n    svc #0x80\n");
+    // x1 already points at the digit buffer; copy length into x2 and
+    // hand off to the per-target write(2) syscall.
+    fprintf(out, "    mov x2, x3\n");
+    target->emit_sys_write_stdout(out);
     fprintf(out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 }
 
-static void emit_String_yell(FILE *out) {
+static void emit_String_yell(FILE *out, const Target *target) {
     // γ2: this is the canonical `String.yell(self)` symbol —
     // every `yell(s String)` call in user code routes here at
     // compile time (γ1 rewrites `yell` to `String_yell` based
@@ -73,31 +76,31 @@ static void emit_String_yell(FILE *out) {
     fprintf(out, "    ldr x1, [x0, #16]\n");     // array-of-byte hdr -> x1
     fprintf(out, "    cbz x1, _Sy_newline\n");
     fprintf(out, "    ldr x1, [x1, #8]\n");      // byte ptr -> x1
-    fprintf(out, "    mov x0, #1\n");            // fd=stdout
-    fprintf(out, "    mov x16, #4\n    svc #0x80\n");
+    target->emit_sys_write_stdout(out);
     fprintf(out, "_Sy_newline:\n");
     // Trailing newline.
     fprintf(out, "    sub sp, sp, #16\n    mov w4, #10\n    strb w4, [sp]\n");
-    fprintf(out, "    mov x16, #4\n    mov x0, #1\n    mov x1, sp\n    mov x2, #1\n    svc #0x80\n");
+    fprintf(out, "    mov x1, sp\n    mov x2, #1\n");
+    target->emit_sys_write_stdout(out);
     fprintf(out, "    add sp, sp, #16\n");
     fprintf(out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 }
 
 // P3.3a primitive: _write_bytes(x0=ptr, x1=len) -> void
-// Writes `len` bytes starting at `ptr` to stdout via the macOS
+// Writes `len` bytes starting at `ptr` to stdout via the host's
 // write(2) syscall. No null terminator scanning, no trailing
 // newline — pure raw byte output. Used as the building block for
 // pure-Potato String.yell once String becomes a stdlib struct.
-static void emit_write_bytes(FILE *out) {
+static void emit_write_bytes(FILE *out, const Target *target) {
     fprintf(out, "// built-in: _write_bytes(x0=ptr, x1=len)\n");
     fprintf(out, ".globl _write_bytes\n.p2align 2\n_write_bytes:\n");
     fprintf(out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
-    // syscall write(fd=1, buf=x0_in, len=x1_in): x16=4, x0=fd, x1=buf, x2=len.
+    // The kernel write(2) syscall on AArch64 uses x1=buf, x2=len,
+    // x0=fd. Move incoming args into the syscall registers, then let
+    // the per-target callback set fd=stdout and emit the syscall.
     fprintf(out, "    mov x2, x1\n");        // len -> x2
     fprintf(out, "    mov x1, x0\n");        // ptr -> x1
-    fprintf(out, "    mov x0, #1\n");        // fd=1 (stdout)
-    fprintf(out, "    mov x16, #4\n");       // SYS_write on Darwin
-    fprintf(out, "    svc #0x80\n");
+    target->emit_sys_write_stdout(out);
     fprintf(out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 }
 
@@ -109,7 +112,8 @@ static void emit_write_bytes(FILE *out) {
 // elements of a legacy untyped `list` reached via chained
 // indexing). Once ε drops the legacy `list` / `map` keyword
 // forms every value carries a concrete type and this shim can go.
-static void emit_yell_dispatch(FILE *out) {
+static void emit_yell_dispatch(FILE *out, const Target *target) {
+    (void)target; // no target-specific instructions in this dispatcher
     fprintf(out, "// transitional: _yell (magic-number int/str dispatch)\n");
     fprintf(out, ".globl _yell\n.p2align 2\n_yell:\n");
     fprintf(out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
@@ -124,14 +128,15 @@ static void emit_yell_dispatch(FILE *out) {
     fprintf(out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 }
 
-static void emit_task_builtins(FILE *out) {
+static void emit_task_builtins(FILE *out, const Target *target) {
+    (void)target;
     // In single-threaded compiled mode, task.fire(fn()) already calls fn,
     // so _task_fire and _task_collapse are no-ops.
     fprintf(out, ".globl _task_fire\n.p2align 2\n_task_fire:\n    ret\n\n");
     fprintf(out, ".globl _task_collapse\n.p2align 2\n_task_collapse:\n    ret\n\n");
 }
 
-static void emit_heap_alloc(FILE *out) {
+static void emit_heap_alloc(FILE *out, const Target *target) {
     // Free list: singly-linked list of freed blocks.
     // Each free block: [next_ptr(8) | size(8) | unused space ...]
     // _heap_free_list points to the first free block (or 0).
@@ -157,8 +162,7 @@ static void emit_heap_alloc(FILE *out) {
     fprintf(out, "    b.ge _hf_meta\n");
     fprintf(out, "    mov x1, #16\n");
     fprintf(out, "_hf_meta:\n");
-    fprintf(out, "    adrp x2, _heap_free_list@PAGE\n");
-    fprintf(out, "    add x2, x2, _heap_free_list@PAGEOFF\n");
+    target->emit_addr_load(out, 2, "_heap_free_list");
     fprintf(out, "    ldr x3, [x2]\n");
     fprintf(out, "    str x3, [x0]\n");
     fprintf(out, "    str x1, [x0, #8]\n");
@@ -171,8 +175,7 @@ static void emit_heap_alloc(FILE *out) {
     fprintf(out, "    add x0, x0, #15\n");
     fprintf(out, "    and x0, x0, #-16\n");
     fprintf(out, "    mov x9, x0\n");
-    fprintf(out, "    adrp x10, _heap_free_list@PAGE\n");
-    fprintf(out, "    add x10, x10, _heap_free_list@PAGEOFF\n");
+    target->emit_addr_load(out, 10, "_heap_free_list");
     fprintf(out, "    ldr x11, [x10]\n");
     fprintf(out, "    cbz x11, _ha_bump\n");
     fprintf(out, "    mov x12, x10\n");
@@ -205,23 +208,14 @@ static void emit_heap_alloc(FILE *out) {
     fprintf(out, "_ha_zero_done:\n");
     fprintf(out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n");
     fprintf(out, "_ha_bump:\n");
-    fprintf(out, "    adrp x10, _heap_ptr@PAGE\n");
-    fprintf(out, "    add x10, x10, _heap_ptr@PAGEOFF\n");
+    target->emit_addr_load(out, 10, "_heap_ptr");
     fprintf(out, "    ldr x11, [x10]\n");
-    fprintf(out, "    adrp x12, _heap_end@PAGE\n");
-    fprintf(out, "    add x12, x12, _heap_end@PAGEOFF\n");
+    target->emit_addr_load(out, 12, "_heap_end");
     fprintf(out, "    ldr x13, [x12]\n");
     fprintf(out, "    add x14, x11, x9\n");
     fprintf(out, "    cmp x14, x13\n");
     fprintf(out, "    b.le _ha_ok\n");
-    fprintf(out, "    mov x0, #0\n");
-    fprintf(out, "    mov x1, #0x10000\n");
-    fprintf(out, "    mov x2, #3\n");
-    fprintf(out, "    mov x3, #0x1002\n");
-    fprintf(out, "    mov x4, #-1\n");
-    fprintf(out, "    mov x5, #0\n");
-    fprintf(out, "    mov x16, #197\n");
-    fprintf(out, "    svc #0x80\n");
+    target->emit_sys_mmap_anon_64k(out);
     fprintf(out, "    mov x11, x0\n");
     fprintf(out, "    add x13, x0, #0x10000\n");
     fprintf(out, "    add x14, x11, x9\n");
@@ -425,13 +419,13 @@ static void emit_int_to_str(FILE *out) {
 // codegen path.
 
 
-void runtime_emit_builtins(FILE *out) {
-    emit_yell_int(out);
-    emit_String_yell(out);
-    emit_write_bytes(out);
-    emit_yell_dispatch(out);
-    emit_task_builtins(out);
-    emit_heap_alloc(out);
+void runtime_emit_builtins(FILE *out, const Target *target) {
+    emit_yell_int(out, target);
+    emit_String_yell(out, target);
+    emit_write_bytes(out, target);
+    emit_yell_dispatch(out, target);
+    emit_task_builtins(out, target);
+    emit_heap_alloc(out, target);
     emit_str_eq(out);
     emit_str_concat(out);
     emit_int_to_str(out);
@@ -446,27 +440,32 @@ void runtime_emit_builtins(FILE *out) {
     // Panic handlers — used by the IR backend's bounds-check emission
     // and capacity-overflow paths in the helpers above. After P3.4
     // _yell_str takes a String header; the runtime-internal messages
-    // below get hand-rolled `_*_str` headers in the __DATA section.
+    // below get hand-rolled `_*_str` headers in the data section.
     fprintf(out, ".globl _panic_oob\n.p2align 2\n_panic_oob:\n");
-    fprintf(out, "    adrp x0, _oob_str@PAGE\n    add x0, x0, _oob_str@PAGEOFF\n");
-    fprintf(out, "    bl _yell_str\n    mov x16, #1\n    mov x0, #1\n    svc #0x80\n\n");
+    target->emit_addr_load(out, 0, "_oob_str");
+    fprintf(out, "    bl _yell_str\n");
+    target->emit_sys_exit(out, 1);
+    fprintf(out, "\n");
     fprintf(out, ".globl _panic_capacity\n.p2align 2\n_panic_capacity:\n");
-    fprintf(out, "    adrp x0, _cap_str@PAGE\n    add x0, x0, _cap_str@PAGEOFF\n");
-    fprintf(out, "    bl _yell_str\n    mov x16, #1\n    mov x0, #1\n    svc #0x80\n\n");
+    target->emit_addr_load(out, 0, "_cap_str");
+    fprintf(out, "    bl _yell_str\n");
+    target->emit_sys_exit(out, 1);
+    fprintf(out, "\n");
 
     // Assert handler — used by `assert(...)` calls in user test bodies.
     // Prints the line number, then " assertion failed", then exits 1.
     fprintf(out, ".globl _assert_fail\n.p2align 2\n_assert_fail:\n");
     fprintf(out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
     fprintf(out, "    bl _yell_int\n");
-    fprintf(out, "    adrp x0, _assert_str@PAGE\n    add x0, x0, _assert_str@PAGEOFF\n");
+    target->emit_addr_load(out, 0, "_assert_str");
     fprintf(out, "    bl _yell_str\n");
-    fprintf(out, "    mov x16, #1\n    mov x0, #1\n    svc #0x80\n\n");
+    target->emit_sys_exit(out, 1);
+    fprintf(out, "\n");
 
-    // β4: panic / pass / assert messages need both an
-    // array-of-byte header (cap, data) and a String header
-    // (cap, count, data=arr_hdr, owned=0). Each lives in __DATA.
-    fprintf(out, ".section __DATA,__data\n");
+    // β4: panic / pass / assert messages need both an array-of-byte
+    // header (cap, data) and a String header (cap, count,
+    // data=arr_hdr, owned=0). Each lives in the data section.
+    target->emit_data_section(out);
     fprintf(out, "_oob_msg: .asciz \"panic: index out of bounds\"\n");
     fprintf(out, ".p2align 3\n_oob_arr:\n");
     fprintf(out, "    .quad 26\n    .quad _oob_msg\n");
@@ -487,9 +486,11 @@ void runtime_emit_builtins(FILE *out) {
     fprintf(out, "    .quad 6\n    .quad _pass_prefix_msg\n");
     fprintf(out, "_pass_prefix:\n");
     fprintf(out, "    .quad 6\n    .quad 6\n    .quad _pass_prefix_arr\n    .quad 0\n");
-    fprintf(out, ".section __DATA,__bss\n.p2align 3\n");
+    target->emit_bss_section(out);
+    fprintf(out, ".p2align 3\n");
     fprintf(out, "_heap_ptr: .quad 0\n");
     fprintf(out, "_heap_end: .quad 0\n");
     fprintf(out, "_heap_free_list: .quad 0\n");
-    fprintf(out, ".section __TEXT,__text\n\n");
+    target->emit_text_section(out);
+    fprintf(out, "\n");
 }

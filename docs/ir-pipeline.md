@@ -78,8 +78,12 @@ both reads must succeed across `-O0`, `-O1`, and `-O2`.
 
 ```
 Source (.ptt) → Lexer → Parser → Monomorph → Checker → Optimizer
-              → IR Generator → IROpt → Register Allocator → ARM64 Emitter
-                  (irgen.c)   (iropt.c)  (regalloc.c)         (iremit.c)
+              → IR Generator → IROpt → Register Allocator → ARM64 Emitter ──┐
+                  (irgen.c)   (iropt.c)  (regalloc.c)         (iremit.c)    │
+                                                                            ▼
+                                                       target_{darwin,linux}_arm64.c
+                                                       (sections, syscalls, address-load
+                                                        relocations, entry-point, toolchain)
 ```
 
 ### Key Files
@@ -87,8 +91,9 @@ Source (.ptt) → Lexer → Parser → Monomorph → Checker → Optimizer
 - `compiler/irgen.c` — AST → IR translation, RAII heap-free bookkeeping
 - `compiler/iropt.c` — Optimization-pass framework, gated by `-O0`/`-O1`/`-O2`
 - `compiler/regalloc.c` — Cross-block, call-aware linear-scan register allocator
-- `compiler/iremit.c` — IR → ARM64 assembly emission, prologue/epilogue, string pool
-- `compiler/runtime_emit.c` — C-emitted runtime helpers (yell, heap, panics, asserts) — see [`runtime.md`](runtime.md)
+- `compiler/iremit.c` — IR → ARM64 assembly emission, prologue/epilogue, string pool. Takes a `Target *` so a single emitter serves both `darwin-arm64` and `linux-arm64`.
+- `compiler/runtime_emit.c` — C-emitted runtime helpers (yell, heap, panics, asserts) — see [`runtime.md`](runtime.md). Same target-parameterised pattern.
+- `compiler/target.h` + `compiler/target_darwin_arm64.c` + `compiler/target_linux_arm64.c` — per-target callbacks (sections, syscall ABI, address-load relocations, entry-point emission, toolchain driver). See [`linux-arm64-backend-plan.md`](linux-arm64-backend-plan.md).
 
 ### Design Decisions
 

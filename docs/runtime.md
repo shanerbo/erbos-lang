@@ -8,6 +8,16 @@ because each one is tightly coupled to a syscall ABI, a calling
 convention, or a literal layout that the rest of the pipeline
 treats as a fixed contract.
 
+`runtime_emit_builtins(out, target)` takes a `Target *` so the
+same function emits correct code for both `darwin-arm64`
+(Mach-O sections, x16 + `svc #0x80` syscall ABI, `@PAGE` /
+`@PAGEOFF` relocations) and `linux-arm64` (ELF sections, x8 +
+`svc #0`, `:lo12:` relocations). The per-target differences are
+isolated to a handful of `Target` callbacks: `emit_text_section`,
+`emit_data_section`, `emit_bss_section`, `emit_addr_load`,
+`emit_sys_write_stdout`, `emit_sys_exit`, `emit_sys_mmap_anon_64k`.
+Everything else is shared.
+
 This document is the source of truth for which symbols survive
 and why.
 

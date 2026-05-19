@@ -1,9 +1,9 @@
 # Potato 🥔
 
 A small, opinionated systems language that reads like English,
-compiles to native code, and has no garbage collector, no
-runtime, no libc dependency. Source files use the `.ptt`
-extension.
+compiles to native ARM64 binaries on **macOS (Mach-O)** and
+**Linux (ELF)**, and has no garbage collector, no runtime, no
+libc dependency. Source files use the `.ptt` extension.
 
 ```
 use std/string
@@ -143,10 +143,49 @@ make                              # build the compiler
 ./erbos -O2 run hello.ptt         # reserved, currently == -O1
 ```
 
+By default the compiler targets the host. Pass `--target=<t>`
+to switch backends:
+
+```bash
+./erbos --target=darwin-arm64 run hello.ptt   # macOS / Mach-O (default on Mac)
+./erbos --target=linux-arm64  ir  hello.ptt   # Linux / ELF — emit .s
+```
+
 For projects bigger than one file, drop a `potato.toml` (empty is
 fine) at the project root. The compiler walks up to find it.
 Stdlib (`use std/list`, `use std/string`, etc.) is bundled with
 the compiler binary — no copying needed.
+
+---
+
+## Platforms
+
+Two native ARM64 backends ship in-tree, both validated end-to-end:
+
+| Target | Object format | Syscall ABI | Toolchain | Status |
+|---|---|---|---|---|
+| `darwin-arm64` | Mach-O | x16 + `svc #0x80` | Apple `as` + `ld` (`xcrun --show-sdk-path`, `-lSystem`) | default; full repo test suite passes |
+| `linux-arm64` | ELF | x8 + `svc #0` | GNU `as` + `ld` (`-nostdlib -static`) | 182 program runs validated identical to Darwin (examples + framework + leetcode + IR matrix at `-O0/-O1/-O2` + runtime panics) |
+
+Linux output was validated by cross-assembling on macOS (clang
+`--target=aarch64-linux-gnu` + `ld.lld -static`) and executing
+inside an arm64 Alpine Linux container on Apple Silicon. Bare-metal
+`erbos --target=linux-arm64 run …` requires GNU `as` and `ld`
+on the host PATH; on a real Linux/aarch64 host the existing
+`./erbos --target=linux-arm64 run hello.ptt` path is the same as
+Darwin's.
+
+Linux backend implementation: `compiler/target_linux_arm64.c`;
+every Linux-specific constant (`__NR_write=64`, `__NR_exit=93`,
+`__NR_mmap=222`, `MAP_PRIVATE|MAP_ANONYMOUS=0x22`, `:lo12:`
+relocations) is cited inline to its source-of-truth document.
+Validation playbook + acceptance-gate evidence:
+[`docs/linux-arm64-backend-plan.md`](docs/linux-arm64-backend-plan.md).
+
+The host machine the compiler itself builds on is currently macOS
+only (`compiler/main.c` uses `_NSGetExecutablePath` for stdlib
+resolution); a Linux host port is straightforward but not
+shipped.
 
 ---
 
@@ -225,6 +264,8 @@ Generics + monomorphization. Enums + `match` with typed bindings;
 Built-in test framework. Five-pass IR optimizer (inlining, SRA,
 escape analysis, BCE, LICM). Bounds-checked array/list/map access.
 Helpful import-error messages (suggests `potato.toml`, etc.).
+**Two native backends: `darwin-arm64` (Mach-O) and `linux-arm64`
+(ELF), selectable via `--target=<t>`.**
 
 **In flight.**
 - Green-thread runtime exists in `compiler/runtime/` but isn't
@@ -266,12 +307,22 @@ rules in [`docs/language-guide.md`](docs/language-guide.md).
 ```
 source.ptt → Lexer → Parser → Monomorph → Checker → Optimizer
           → IRGen → IROpt → RegAlloc → IREmit → ARM64 .s → as + ld → binary
+                                          │
+                                          ▼
+                    target_{darwin,linux}_arm64.c
+                    (sections, syscall ABI, address-load relocations,
+                     entry-point emission, toolchain driver)
 ```
 
 C11. Compiler frontend in `compiler/`; green-thread runtime in
 `compiler/runtime/`. No external dependencies. The IR backend is
 the only backend; it does cross-block call-aware register
-allocation. See [`docs/ir-pipeline.md`](docs/ir-pipeline.md).
+allocation, and lowers to ARM64 assembly that's parameterised by
+a small `Target` interface (`compiler/target.h`) so a single
+emitter serves both Mach-O+Darwin and ELF+Linux. See
+[`docs/ir-pipeline.md`](docs/ir-pipeline.md) for the IR side and
+[`docs/linux-arm64-backend-plan.md`](docs/linux-arm64-backend-plan.md)
+for the per-target split.
 
 ---
 

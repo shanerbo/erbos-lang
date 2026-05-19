@@ -709,10 +709,14 @@ marker. Programs that only use stdlib + sibling imports don't
 need a marker.
 
 **Stdlib is bundled with the compiler binary.** Found via
-`_NSGetExecutablePath` on macOS. `use std/list` works regardless
-of cwd or project structure. The Potato repo's own `std/`
-directory IS the bundled stdlib (the binary lives at the same
-level), so dev workflow is unchanged.
+`_NSGetExecutablePath` on macOS hosts (the only host the
+compiler frontend builds on today). `use std/list` works
+regardless of cwd or project structure. The Potato repo's own
+`std/` directory IS the bundled stdlib (the binary lives at the
+same level), so dev workflow is unchanged. Linux host port
+would substitute `readlink("/proc/self/exe", …)`; the linux-arm64
+*backend* (target output) has no stdlib-resolution concern since
+that runs at compile time on the host.
 
 **No auto-loaded modules.** Every `use std/string` (or any
 other import) is explicit. The runtime built-ins (`_String_yell`,
@@ -748,7 +752,11 @@ either.
   potato.toml gets `[dependencies]` and the resolver learns to
   consult a vendor / cache directory.
 - Cross-platform install layout differs from "binary + std/
-  side-by-side." On Linux/Windows we may want
+  side-by-side." The `linux-arm64` backend (validated 2026-05;
+  see `linux-arm64-backend-plan.md`) keeps the same layout —
+  the bundled-stdlib lookup is a host-only concern, and on Linux
+  hosts the equivalent of `_NSGetExecutablePath` is
+  `readlink("/proc/self/exe", …)`. Windows would still need
   `<compiler-dir>/../share/potato/std/` or an environment
   variable override.
 - Selective imports become important enough that wildcard-
@@ -1742,3 +1750,68 @@ storage; the convention is intentional) and acknowledge the
 false-positive risk for user types that adopt the same name
 without the same semantics. When the false-positive case
 shows up, that's the signal to upgrade to a real attribute.
+
+## 2026-05-18 — Linux ARM64 native backend; per-target callback split
+
+**Decision.** Add `linux-arm64` as a second native backend
+alongside `darwin-arm64`. Both ship in-tree, both selectable via
+`--target=<t>`. The compiler frontend itself still builds on
+macOS only (uses `_NSGetExecutablePath`); a Linux host port is
+straightforward but not shipped.
+
+**Plan + acceptance gates:** [`linux-arm64-backend-plan.md`](linux-arm64-backend-plan.md).
+
+### Implementation deviation from the plan
+
+The plan recommended cloning `iremit.c` and `runtime_emit.c`
+into Linux variants, then deduping in a later phase. Implementation
+took the inverted path: extracted the Mach-O / Darwin-specific
+points into a small `Target` callback set
+(`emit_text_section`, `emit_data_section`, `emit_bss_section`,
+`emit_addr_load`, `emit_sys_write_stdout`, `emit_sys_exit`,
+`emit_sys_mmap_anon_64k`), then implemented the Linux variants
+as different callback bodies. One `iremit.c`, one `runtime_emit.c`,
+two backend files (`target_darwin_arm64.c`, `target_linux_arm64.c`).
+
+Why deviate: cloning would have doubled the *unverified* bytes
+during Phase 3 without changing the end state. The callback
+approach kept Linux output empirically diff-able against Darwin
+output for every shared helper (~95% of emitted bytes) and
+concentrated Linux-specific guesses into one file where every
+constant is cited inline to its source-of-truth document.
+
+### What's worth remembering
+
+- **The `_` symbol prefix is part of the symbol, not target-conditional.**
+  Mach-O conventionally adds an underscore for C-source symbols at
+  link time, but we're emitting raw assembly with literal labels —
+  GNU `as` and Mach-O `as` both consume them as-is. Linux ELF object
+  files emitted by this backend contain symbols literally named
+  `_yell_int`, `_alloc_String`, `_start`. They link fine.
+- **AAPCS64 is the calling convention on both targets.** Darwin and
+  Linux on AArch64 use the same procedure call standard. Frame
+  layout, register classes (x0..x7 args, x8..x18 caller-save,
+  x19..x28 callee-save, x29/x30 fp/lr), and `bl`/`ret` are
+  shared. The differences are at the OS boundary: section
+  directives, syscall registers/numbers, address-load relocation
+  syntax, toolchain.
+- **Linux mmap flag values are tiny.** Darwin's `MAP_PRIVATE|MAP_ANON`
+  = `0x1002`; Linux's `MAP_PRIVATE|MAP_ANONYMOUS` = `0x22`. Easy
+  to miscite — kept the constants next to the asm-generic header
+  citations in `target_linux_arm64.c` for that reason.
+- **Apple's `container` CLI is the validation environment of choice
+  on Apple Silicon.** Native Linux/aarch64 containers via
+  Virtualization.framework, no Docker/SSO required. Phase 4
+  validation ran 182 program runs through it (examples + framework
+  + leetcode + IR matrix at -O0/-O1/-O2 + runtime panics) all
+  byte-identical to Darwin output. Recipe in the backend plan's
+  "Phase 4 validation playbook" section.
+
+### Phase 5 dedupe: minor
+
+The only shared C code that actually moved was `posix_spawn` and
+`capture_stdout` (used by both backends' `assemble_and_link`).
+They live in `compiler/target_spawn.{h,c}` now. Everything else
+the plan flagged as "Phase 5 candidate" (ARM64 instruction
+emission, string/data lowering, register/stack helpers) was
+already shared via the Phase 3 callback split.

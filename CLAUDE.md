@@ -6,13 +6,20 @@ load deeper docs only when the task needs them.
 ## What Potato is, in one paragraph
 
 A systems language that reads like English (`is`, `be`, `give`,
-`through`), compiles to native ARM64 macOS, has no garbage
-collector, no runtime, no libc dependency. Written in C11. Source
-files use the `.ptt` extension. Mature enough for real programs
-(stdlib + leetcode + spudlock dependency-resolver demo + IR
-optimizer) but pre-1.0 — language shape is still moving. Major
-2025–2026 overhaul (typed arrays, pure-Potato stdlib, keyword
-retirement, framework-only testing) all shipped.
+`through`), compiles to native ARM64 binaries on macOS (Mach-O)
+and Linux (ELF) — selected via `--target=darwin-arm64` /
+`--target=linux-arm64`, default = host. No garbage collector, no
+runtime, no libc dependency. Written in C11. Source files use the
+`.ptt` extension. Mature enough for real programs (stdlib +
+leetcode + spudlock dependency-resolver demo + IR optimizer) but
+pre-1.0 — language shape is still moving. Major 2025–2026 overhaul
+(typed arrays, pure-Potato stdlib, keyword retirement, framework-
+only testing, linux-arm64 backend) all shipped.
+
+The compiler binary itself currently builds on macOS only
+(`compiler/main.c` uses `_NSGetExecutablePath` for stdlib
+resolution). A Linux host port is straightforward but not
+shipped.
 
 ## Hard rules — non-negotiable
 
@@ -44,6 +51,10 @@ retirement, framework-only testing) all shipped.
 ```
 compiler/          C11 compiler frontend (was src/, renamed in the overhaul)
   *.c, *.h         lexer / parser / monomorph / checker / iropt / regalloc / iremit
+  target.h         Target interface (sections, address-load, syscalls, toolchain)
+  target_darwin_arm64.c  Darwin/Mach-O backend (default)
+  target_linux_arm64.c   Linux/ELF backend (validated end-to-end Phase 4)
+  target_spawn.c   shared posix_spawn helpers used by both backends
   runtime/         green-thread runtime + channels (NOT integrated into compiled .ptt yet)
 std/               Potato stdlib (.ptt source — pure Potato, no C)
   basics.ptt       bundle: re-exports string + list + map
@@ -101,6 +112,7 @@ forward-only and identifier-shaped.
 | `docs/builtins.md` | what `yell`/`assert` and the runtime intrinsics resolve to |
 | `docs/runtime.md` | touching `compiler/runtime_emit.c` or the `_alloc_*` / `_panic_*` symbols |
 | `docs/ir-pipeline.md` | working on irgen / iropt / regalloc / iremit |
+| `docs/linux-arm64-backend-plan.md` | touching `compiler/target.h` or either `compiler/target_*_arm64.c`. Documents the two backends, the per-target callbacks, and how the linux-arm64 path was validated. |
 | `docs/design-decisions.md` | **READ BEFORE proposing language changes.** Append-only historical log of decided/parked discussions. Older entries may show pre-cleanup grammar; `language-law.md` is the live truth. |
 | `std/STDLIB_CHECKLIST.md` | implementing or extending the standard library; lists target API per type. |
 
@@ -114,10 +126,14 @@ make test        # full suite: passing examples, leetcode, errors, IR matrix at 
 ./erbos run path/to/file.ptt   # compile + execute + clean up
 ./erbos test path/to/test.ptt  # run framework tests in a file
 ./erbos ir  path/to/file.ptt   # emit .s without assembling/linking
+
+./erbos --target=darwin-arm64 run file.ptt   # explicit; default on Mac
+./erbos --target=linux-arm64  ir  file.ptt   # ELF aarch64 .s
 ```
 
-Optimization levels (`-O0` / `-O1` / `-O2`) accepted in any
-position relative to the subcommand. Default is `-O1`.
+Optimization levels (`-O0` / `-O1` / `-O2`) and `--target=<t>`
+both accepted in any position relative to the subcommand. Default
+opt level is `-O1`; default target is the host.
 
 ## Commit conventions
 
