@@ -142,23 +142,27 @@ This file is not for:
 ## Header
 
 - `State`: QUIESCENT
-- `Revision`: 12
-- `Last updated`: 2026-05-18T18:07:19-07:00
-- `Audited commit`: c8cdd04 + working tree
-- `Last claim audited`: C-007
-- `Conclusion`: FINDINGS_OPEN
-- `Release action`: HOLD
-- `Release note`: Claim C-007 accepted for F-008; stdlib optimization findings F-005 and F-007 still keep the batch on HOLD.
+- `Revision`: 14
+- `Last updated`: 2026-05-18T19:02:45-07:00
+- `Audited commit`: 7650e2e + working tree
+- `Last claim audited`: C-009
+- `Conclusion`: ALL_CLEAR
+- `Release action`: COMMIT_AND_PUSH
+- `Release note`: Claim C-009 accepted for F-005; the current audited optimization batch is clear to land.
 
 ## Active Findings
 
+None.
+
+## Closed Findings
+
 ### F-005
-- State: OPEN
+- State: CLOSED
 - Severity: P2
 - Area: stdlib | bench
 - Opened at: 2026-05-18T17:23:25-07:00
-- Last reviewed at: 2026-05-18T17:23:25-07:00
-- Audited commit: c8cdd04 + working tree
+- Last reviewed at: 2026-05-18T19:02:45-07:00
+- Audited commit: 7650e2e + working tree
 - Evidence:
   - [std/map.ptt](/Users/erbos/erbos-lang/std/map.ptt:11)
   - [std/map.ptt](/Users/erbos/erbos-lang/std/map.ptt:52)
@@ -168,6 +172,9 @@ This file is not for:
   - [std/set.ptt](/Users/erbos/erbos-lang/std/set.ptt:58)
   - [std/set.ptt](/Users/erbos/erbos-lang/std/set.ptt:84)
   - [tests/bench/map_bench.ptt](/Users/erbos/erbos-lang/tests/bench/map_bench.ptt:31)
+  - [tests/test_hash_distribution.ptt](/Users/erbos/erbos-lang/tests/test_hash_distribution.ptt:1)
+  - [tests/bench/hash_probe_bench.ptt](/Users/erbos/erbos-lang/tests/bench/hash_probe_bench.ptt:1)
+  - [tests/bench/BASELINE.md](/Users/erbos/erbos-lang/tests/bench/BASELINE.md:61)
 - Problem:
   The hash containers still use toy-grade probe math. `Map` and `Set`
   reduce the key hash with a plain `h mod cap`, so power-of-two bucket
@@ -190,17 +197,22 @@ This file is not for:
   - add benchmark coverage for `Map.get` / `Map.set` probe-heavy paths
     and matching `Set.has` / `Set.add` paths
 - Verification notes:
-  Opened from code inspection. No user-visible semantic failure is
-  claimed here; this is a verified algorithmic/perf gap in the current
-  stdlib implementation.
+  Accepted in claim `C-009`. `Map` and `Set` now combine low and
+  high windows of the key hash in the start-bucket function and use a
+  linear cursor-with-wrap probe loop instead of per-step modular
+  reduction. `tests/test_hash_distribution.ptt` passes, the pre-existing
+  `tests/test_map_methods.ptt` and `tests/test_set.ptt` still pass, the
+  new `tests/bench/hash_probe_bench.ptt` emits
+  `2048 / 14672896 / 2048 / 3072 / 49 / 0`, and a full `make test`
+  re-run ends with `All tests passed.`
 
 ### F-007
-- State: OPEN
+- State: CLOSED
 - Severity: P2
 - Area: stdlib | tests | bench
 - Opened at: 2026-05-18T17:23:25-07:00
-- Last reviewed at: 2026-05-18T17:23:25-07:00
-- Audited commit: c8cdd04 + working tree
+- Last reviewed at: 2026-05-18T18:32:53-07:00
+- Audited commit: 7650e2e + working tree
 - Evidence:
   - [std/string.ptt](/Users/erbos/erbos-lang/std/string.ptt:114)
   - [std/string.ptt](/Users/erbos/erbos-lang/std/string.ptt:186)
@@ -208,6 +220,9 @@ This file is not for:
   - [tests/test_string_extended.ptt](/Users/erbos/erbos-lang/tests/test_string_extended.ptt:13)
   - [tests/test_string_extended.ptt](/Users/erbos/erbos-lang/tests/test_string_extended.ptt:43)
   - [tests/test_string_extended.ptt](/Users/erbos/erbos-lang/tests/test_string_extended.ptt:67)
+  - [tests/test_string_search.ptt](/Users/erbos/erbos-lang/tests/test_string_search.ptt:1)
+  - [tests/bench/string_search_bench.ptt](/Users/erbos/erbos-lang/tests/bench/string_search_bench.ptt:1)
+  - [tests/bench/BASELINE.md](/Users/erbos/erbos-lang/tests/bench/BASELINE.md:51)
 - Problem:
   The String search pipeline is still toy-grade. `index_of` linearly
   tries `str_match_at` at every position, `contains` is just a wrapper
@@ -230,10 +245,14 @@ This file is not for:
   - add stress tests that exercise large repeated `split` / `replace`
     workloads without changing semantics
 - Verification notes:
-  Opened from code inspection. This is a verified algorithmic gap, not a
-  claim of incorrect String behavior.
-
-## Closed Findings
+  Accepted in claim `C-008`. The new shared `str_find` primitive now
+  backs `index_of`, `contains`, `split`, and `replace`, including the
+  single-byte fast path and the resume-from-hit cursor for the split and
+  replace walks. `tests/test_string_search.ptt` passes, the pre-existing
+  `tests/test_string_extended.ptt` still passes unchanged, the new
+  `tests/bench/string_search_bench.ptt` emits
+  `28889 / 3000 / 5000 / 23890 / 5000 / 23890`, and a full `make test`
+  re-run ends with `All tests passed.`
 
 ### F-008
 - State: CLOSED
@@ -591,3 +610,14 @@ This file is not for:
   StringBuilder suite, the new `string_builder_push_int_bench.ptt`
   output contract, and a full `make test` pass; F-005 and F-007 remain
   open so the batch stays on HOLD.
+- Revision 13: audited claim `C-008` against `7650e2e + working tree`,
+  accepted and closed F-007 after verifying the new string-search
+  regression suite, the new `string_search_bench.ptt` output contract,
+  the pre-existing string suite, and a full `make test` pass; F-005
+  remains open so the batch stays on HOLD.
+- Revision 14: audited claim `C-009` against `7650e2e + working tree`,
+  accepted and closed F-005 after verifying the new hash-distribution
+  regression suite, the new `hash_probe_bench.ptt` output contract, the
+  pre-existing map/set suites, and a full `make test` pass. No active
+  findings remain, so the current audited batch is now `ALL_CLEAR` with
+  `COMMIT_AND_PUSH`.
