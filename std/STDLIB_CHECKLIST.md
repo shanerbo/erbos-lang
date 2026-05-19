@@ -50,9 +50,9 @@ Verified current state:
 - `Option` and `Result` exist and have framework / panic coverage.
 - `List`, `Stack`, `Queue`, `Deque`, `String`, `StringBuilder`,
   `ByteBuffer`, `Arena`, `RingBuffer`, `std/math`, and `std/algo` exist.
-- `Map` is a linear-scan parallel-array map.
-- `Set`, `Pool`, `Path`, `File`, `Reader`, `Writer`, and `Graph` do not
-  exist yet.
+- `Map` and `Set` exist as open-addressed unordered hash containers.
+- `Pool` and `Path` exist.
+- `File`, `Reader`, `Writer`, and `Graph` do not exist yet.
 - `Arena of T` plus integer handles is now the blessed shared-data pattern
   in both docs and tests.
 - Growable containers now normalize around zero-value formation
@@ -302,11 +302,13 @@ Tests:
 
 ## Phase 2: Hash Containers
 
-### `Map of K, V` — implemented (open-addressed)
+### `Map of K, V` — implemented (Robin Hood)
 
 Purpose: serious associative map. Current implementation is an
-open-addressed hash table with linear probing and tombstone-
-reusing inserts; the linear-scan map it replaced is gone.
+open-addressed hash table with Robin Hood probing and backshift
+deletion; the linear-scan map it replaced is gone, and the
+post-F-005 / pre-F-010 design (linear probing + tombstones) is
+also gone.
 
 Shipped API (all required entries present in `std/map.ptt` and
 covered by `tests/test_map_methods.ptt`):
@@ -320,7 +322,7 @@ covered by `tests/test_map_methods.ptt`):
 - `Map.get(self Map of K, V, k K) V` ✓ (panics on missing)
 - `Map.try_get(self Map of K, V, k K) Option of V` ✓
 - `Map.has(self Map of K, V, k K) bool` ✓
-- `Map.remove(self ref Map of K, V, k K) bool` ✓ (tombstone)
+- `Map.remove(self ref Map of K, V, k K) bool` ✓ (backshift deletion)
 - `Map.clear(self ref Map of K, V)` ✓
 - `Map.keys(self Map of K, V) List of K` ✓
 - `Map.values(self Map of K, V) List of V` ✓
@@ -331,13 +333,31 @@ covered by `tests/test_map_methods.ptt`):
 
 Algorithm / representation:
 
-- open-addressed hash table; power-of-two cap for fast modulo;
+- open-addressed hash table; power-of-two cap; bucket selection
+  combines `h mod cap` (low-bit window) with `(h / cap) mod cap`
+  (high-bit window) via modular sum, so patterned-low-bit inputs
+  do not collapse into a single bucket (F-005);
 - arrays: `keys array of K`, `vals array of V`, `states array of byte`
-  with states 0=EMPTY, 1=FULL, 2=DELETED;
-- resize-before-insert at 70% load (`occupied >= cap*7/10`);
+  with states 0=EMPTY, 1=FULL — DELETED is gone (F-010 backshift
+  deletion heals the chain in place);
+- resize-before-insert at 70% load (`count >= cap*7/10`);
+- Robin Hood insert: each entry tracks distance from its ideal
+  bucket; on insert, if the to-insert's distance exceeds the
+  slot's, swap and continue with the displaced entry. Lookups
+  (`has` / `get` / `try_get` / `remove`) use the Robin Hood
+  early-out: if `pdist > slot's distance`, the searched key is
+  not in the table;
+- backshift deletion: on remove, walk forward shifting any FULL
+  slot whose probe distance is positive one slot leftward, until
+  the chain is healed (EMPTY or distance-0). The post-remove
+  table is byte-equivalent to one where the removed key had
+  never been inserted — no tombstones;
 - hash algorithms:
-  - `int`: Knuth multiplicative (`int.hash` in `std/math`),
-  - `String`: djb2-shaped (`String.hash`, already in `std/string`),
+  - `int`: 64-bit Knuth multiplicative mix (`int.hash` in
+    `std/math`, multiplier `0x9E3779B97F4A7C15` = full 64-bit
+    golden ratio),
+  - `String`: djb2-shaped per-byte fold plus a 64-bit Knuth
+    finalizer (`String.hash` in `std/string`),
   - generic code calls `k.hash()` and `eq`; the compiler resolves
     both to the typed implementation post-monomorph.
 
@@ -388,8 +408,12 @@ Compiler/runtime root-cause fixes that landed alongside Map:
    same fix flows through every stdlib container that delegates
    to `List.set` (`Pool.set`, `Pool.insert` reuse path).
    `Map.set` and `Set.add` already used `be now <clone>` and
-   now correctly drop tombstoned and updated slots' previous
-   occupants because of the new compiler-side drop.
+   now correctly drop slot occupants on update or tombstone-
+   reuse paths (the F-001-era hash-container design). F-010
+   later eliminated DELETED tombstones in favour of backshift
+   deletion, so the only remaining drop-before-overwrite path
+   in `Map.set` / `Set.add` is the in-place value update for
+   an existing key.
 
 6. F-002 fix: parent-drop and `is rep` for structs with
    `array of <heap-shaped E>` fields. The audited C-003 batch
@@ -452,12 +476,22 @@ Tests in place:
 - happy-path set/get/has/try_get/remove/clear/reserve/keys/values
 - update-in-place (re-set replaces value)
 - growth across cap doublings
-- tombstone reuse after remove
-- tombstone-doesn't-block-probe-past-it
+- remove + reinsert preserves probe quality (backshift heals the
+  chain — no tombstone accumulation)
 - panic on `get` of a missing key (`tests/errors/map_get_missing_key_panics.ptt`)
 - String key equality by content, not rodata pointer
 - heap-shaped value type (`Map of int, String`) survives growth
 - negative-key hash bucket index stays in range
+- F-005 adversarial-key regressions
+  (`tests/test_hash_distribution.ptt`): multiples-of-cap,
+  same-low-bits-different-high, powers-of-two, negative
+  adversarial keys
+- F-010 hit-heavy / miss-heavy / delete-reinsert-heavy
+  regressions (`tests/test_hash_robin_hood.ptt`), including
+  Robin Hood swap chains over heap-shaped K and V
+- F-005 / F-010 bench coverage in `tests/bench/`:
+  `hash_probe_bench.ptt`, `hash_churn_bench.ptt`,
+  `hash_string_bench.ptt`
 
 ### `Set of T` — implemented
 
@@ -474,7 +508,7 @@ covered by `tests/test_set.ptt`):
 - `Set.empty(self Set of T) bool` ✓
 - `Set.add(self ref Set of T, v T) bool` ✓ (deep-clones v)
 - `Set.has(self Set of T, v T) bool` ✓
-- `Set.remove(self ref Set of T, v T) bool` ✓ (tombstone)
+- `Set.remove(self ref Set of T, v T) bool` ✓ (backshift deletion)
 - `Set.clear(self ref Set of T)` ✓
 - `Set.values(self Set of T) List of T` ✓
 - `Set.union(self Set of T, other Set of T) Set of T` ✓
@@ -509,6 +543,11 @@ Tests:
 - set algebra
 - String values
 
+`Set` tracks `Map`'s hash-table strategy so the two stay in lockstep.
+Robin Hood probing, backshift deletion, the F-005 high-bit-into-low
+bucket fold, and the F-010 64-bit hash finalizers all apply
+identically.
+
 ## Phase 3: Text and Bytes
 
 ### `String`
@@ -542,7 +581,9 @@ Algorithm / representation:
 - `split`: repeated `index_of`, allocate list of owned slices
 - `replace`: two-pass count then allocate exact output size
 - `to_int`: checked base-10 parser with overflow detection
-- `hash`: FNV-1a over active bytes
+- `hash`: djb2-shaped per-byte fold (`h = h * 33 + b + 1`)
+  followed by a 64-bit Knuth-multiplicative finalizer; one
+  extra multiplication regardless of input length
 
 Tests:
 

@@ -64,14 +64,16 @@ If another implementation batch starts before audit:
 ## Header
 
 - `State`: IDLE
-- `Claim ID`: (none — C-010 was consumed and accepted for F-010;
-  batch remains on HOLD because F-011 was opened against the
-  STDLIB_CHECKLIST.md doc lag — the canonical checklist still
-  describes the pre-F-010 hash-container design)
-- `Against findings revision`: 16
-- `Target commit`: 371141f + working tree
-- `Claimed fixed`: (none pending; next claim will target F-011)
-- `Last updated`: 2026-05-19T03:13:21+00:00
+- `Claim ID`: (none — C-011 was consumed by Codex against findings
+  revision 17 and accepted with `Conclusion: ALL_CLEAR` /
+  `Release action: COMMIT_AND_PUSH`; the audited
+  hash-container hardening batch (C-010 + C-011) was landed
+  as two commits in dependency order: C-010 in 2dc82d1 and
+  C-011 in this commit)
+- `Against findings revision`: 17
+- `Target commit`: 2dc82d1 + this commit
+- `Claimed fixed`: (none pending)
+- `Last updated`: 2026-05-19T03:29:41+00:00
 
 ## Claim C-001
 - State: READY_FOR_AUDIT
@@ -1261,6 +1263,100 @@ If another implementation batch starts before audit:
     (F-008, 18 cases), and `tests/test_string_search.ptt`
     (F-007, 19 cases) all still pass unchanged.
 
+## Claim C-011
+- State: READY_FOR_AUDIT
+- Against findings revision: 16
+- Target commit: 371141f + working tree (uncommitted; Codex can
+  verify against `git diff` for the listed files)
+- Claimed fixed: F-011
+- Last updated: 2026-05-19T03:18:23+00:00
+- Bug class (recap from findings.md F-011):
+  C-010 landed Robin Hood + backshift + 64-bit hashing in the
+  code, but `std/STDLIB_CHECKLIST.md` still described the
+  pre-F-010 design in multiple status-bearing lines: it called
+  Map "open-addressed hash table with linear probing and
+  tombstone-reusing inserts", marked Map.remove / Set.remove
+  as `(tombstone)` API notes, listed `states` as
+  `{0=EMPTY, 1=FULL, 2=DELETED}`, used "one Knuth-style
+  multiplicative mix" for `int.hash`, "djb2-shaped" for
+  `String.hash`, and still listed stronger hashing /
+  Robin-Hood-or-equivalent / long-run churn coverage as
+  remaining work. Doc/code mismatch — false against the
+  audited code.
+- Root-cause fix:
+  Pure documentation reconciliation in
+  `std/STDLIB_CHECKLIST.md`. Six edits, each pointed at by
+  the F-011 evidence list:
+  - Heading + intro (line 305 / 307): the "implemented (open-
+    addressed)" + "linear probing and tombstone-reusing
+    inserts" framing becomes "implemented (Robin Hood)" with
+    "Robin Hood probing and backshift deletion".
+  - `Map.remove` / `Set.remove` API notes: `(tombstone)`
+    becomes `(backshift deletion)`.
+  - Algorithm bullets for Map (line 332+): expanded to
+    describe (a) the F-005 `low + high` bucket fold, (b)
+    `{EMPTY=0, FULL=1}` states with "DELETED is gone", (c)
+    Robin Hood insert + lookup early-out, (d) backshift
+    deletion's heal-in-place behaviour, (e) the F-010 64-bit
+    multipliers in `int.hash` and `String.hash`.
+  - Map "Tests in place" list (line 458+): drop the obsolete
+    "tombstone reuse after remove" / "tombstone-doesn't-block-
+    probe-past-it" entries; add the F-005 / F-010 regression
+    + bench coverage that landed alongside the algorithm
+    changes.
+  - Map "Still required..." section (line 468+): removed
+    entirely — every listed item (stronger int/String hash,
+    Robin-Hood-or-equivalent probing, long-run churn coverage,
+    hit/miss/mixed bench baselines) has landed in F-005 +
+    F-010. The "industrial-grade" gate is closed.
+  - Set parallel section (line 490+): `Set.remove (tombstone)`
+    → `(backshift deletion)`. Set's "tracks Map's strategy"
+    paragraph rewritten to name Robin Hood + backshift +
+    F-005 / F-010 specifics rather than gesturing at "if probe
+    policy improves".
+  - String `hash:` algorithm bullet (line 565+): changed from
+    the aspirational "FNV-1a over active bytes" to the actual
+    "djb2-shaped per-byte fold followed by a 64-bit
+    Knuth-multiplicative finalizer".
+  - Historical F-001 commentary (line 411): clarified that
+    "tombstoned and updated slots" referred to the F-001-era
+    hash-container design, with a forward-link to F-010's
+    backshift removal — keeps the historical record accurate
+    without being revisionist.
+- Files changed:
+  - `std/STDLIB_CHECKLIST.md` only (doc-only claim).
+- Tests added: none (Codex's required-tests list explicitly
+  said "no new runtime tests required; verify the checklist
+  by reading it back against the code").
+- Verification context:
+  - `make test` ends with `All tests passed.` (no code change,
+    so no behavioural risk).
+  - Read-back verification: each updated line in
+    `STDLIB_CHECKLIST.md` was cross-checked against
+    `std/map.ptt`, `std/set.ptt`, `std/math.ptt`, and
+    `std/string.ptt`. Concretely:
+    - `int.hash` body in `std/math.ptt:99`:
+      `give self * (0 - 7046029254386353131)` matches the
+      doc's "64-bit Knuth multiplicative mix".
+    - `String.hash` body in `std/string.ptt:328`:
+      djb2 fold `h be h * 33 + b + 1` followed by
+      `give h * (0 - 7046029254386353131)` matches the doc's
+      "djb2-shaped per-byte fold plus a 64-bit Knuth
+      finalizer".
+    - `Map.remove` in `std/map.ptt:256+` walks the backshift
+      heal loop, no `states[i] be 2` write site exists; the
+      doc's `(backshift deletion)` API note is faithful.
+    - Same for `Set.remove` in `std/set.ptt:175+`.
+    - `Map.set` in `std/map.ptt:382+` does the two-pass
+      Robin Hood insert with a single textual move-out site
+      gated by `target_i`; the doc's algorithm bullets
+      describe the exact policy.
+    - `Set` mirrors all of the above (`std/set.ptt`).
+  - The F-011-listed evidence files (`std/STDLIB_CHECKLIST.md`
+    line refs 307 / 323 / 334 / 458 / 468 / 490) are all
+    addressed; line numbers shift after the edits but the
+    substance at each evidence reference is now accurate.
+
 ## Claim Template
 
 ```md
@@ -1432,3 +1528,30 @@ If another implementation batch starts before audit:
   probing, tombstone-reusing inserts, `{EMPTY, FULL, DELETED}`
   states, stronger-hashing-as-future-work) — false against the
   audited code. Header reset to `IDLE`.
+- Claim C-011 submitted: F-011 fix (doc reconciliation in
+  `std/STDLIB_CHECKLIST.md`). Pure documentation change. Six
+  edits cover the Map heading + intro, Map.remove / Set.remove
+  API notes, Map algorithm bullets (Robin Hood + backshift +
+  64-bit hashes + EMPTY/FULL only), Map test list, removal of
+  the now-obsolete "Still required..." Map section, the Set
+  parallel section, the String `hash:` algorithm bullet, and a
+  small clarification on the F-001 historical commentary.
+  Doc-only — `make test` still ends with `All tests passed.`.
+- Claim C-011 consumed by Codex against findings revision 17 and
+  accepted with `Conclusion: ALL_CLEAR` /
+  `Release action: COMMIT_AND_PUSH`. The audited hash-container
+  hardening batch covers both C-010 (F-010 — Robin Hood +
+  backshift + 64-bit hashes, plus the supporting compiler
+  emit / checker fixes) and C-011 (F-011 doc reconciliation).
+  Landing as two separate commits in dependency order: C-010
+  first (the code change that makes the doc claim true), then
+  C-011 (the doc itself catching up). Header reset to `IDLE`.
+- Claim C-005 consumed by Codex against findings revision 9 and
+  accepted with `Conclusion: ALL_CLEAR` /
+  `Release action: COMMIT_AND_PUSH`. The audited batch covers
+  both C-004 (F-002, accepted earlier but held pending F-003 /
+  F-004) and C-005 (F-003 + F-004). Landing as two separate
+  commits in dependency order: C-004 first (F-002 compiler +
+  List stdlib changes that C-005 builds on), then C-005
+  (Queue / Deque stdlib changes plus their tests). Header reset
+  to `IDLE`.
