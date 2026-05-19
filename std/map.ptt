@@ -85,9 +85,15 @@ Map.empty(self Map of K, V) bool {
 // insertion order — the hash table reshuffles entries on
 // resize. Each emitted key is a deep clone of the stored entry
 // so the returned List owns its keys independently of the map.
+//
+// F-006: pre-size the result List to `self.count`. The output
+// holds exactly that many elements; without the reserve, a
+// large materialization grows the backing array log2(count)
+// times, copying every previous slot at each grow.
 Map.keys(self Map of K, V) List of K {
   out is List of K()
   self.keys eq 0 ?{ give out }
+  out.reserve(self.count)
   through (i from 0 to self.keys.cap by 1) {
     self.states[i] eq 1 ?{
       el is rep self.keys[i]
@@ -98,9 +104,13 @@ Map.keys(self Map of K, V) List of K {
 }
 
 // Walk and emit every FULL value. Same ownership note as keys().
+//
+// F-006: same pre-sizing as keys() — the result holds exactly
+// `self.count` values.
 Map.values(self Map of K, V) List of V {
   out is List of V()
   self.vals eq 0 ?{ give out }
+  out.reserve(self.count)
   through (i from 0 to self.vals.cap by 1) {
     self.states[i] eq 1 ?{
       el is rep self.vals[i]

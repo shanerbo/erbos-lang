@@ -1,0 +1,59 @@
+// Microbenchmark for Set.values / Set.intersect / Set.difference
+// materialization paths.
+//
+// F-006: pre-fix, none of these methods reserved their result's
+// capacity. Set.values' List grew log2(N) times; Set.intersect
+// and Set.difference's result Sets grew through every 70%-load
+// rehash. Post-fix all three reserve `self.count` (or
+// `min(self.count, other.count)` for intersect) up front.
+//
+// Phases:
+//   1. build: two large Sets a and b with overlap.
+//   2. values: enumerate a, sum its int contents.
+//   3. intersect: a & b, enumerate, sum.
+//   4. difference: a - b, enumerate, sum.
+
+use std/list
+use std/set
+
+spark {
+  // Build a = [0..2048), b = [1024..3072). Overlap: [1024..2048).
+  a is Set of int()
+  b is Set of int()
+  through (i from 0 to 2048 by 1) {
+    a.add(i)
+  }
+  through (j from 1024 to 3072 by 1) {
+    b.add(j)
+  }
+  yell(a.len())                         // 2048
+  yell(b.len())                         // 2048
+
+  // Phase 2: values enumeration.
+  xs is a.values()
+  total is 0
+  through (idx from 0 to xs.len() by 1) {
+    total be total + xs.get(idx)
+  }
+  yell(total)                           // 0+1+...+2047 = 2096128
+
+  // Phase 3: intersect enumeration. Result is [1024..2048).
+  inter is a.intersect(b)
+  yell(inter.len())                     // 1024
+  isum is 0
+  iv is inter.values()
+  through (idx from 0 to iv.len() by 1) {
+    isum be isum + iv.get(idx)
+  }
+  yell(isum)                            // 1024+...+2047 = 1572352
+
+  // Phase 4: difference enumeration. Result is [0..1024).
+  diff is a.difference(b)
+  yell(diff.len())                      // 1024
+  dsum is 0
+  dv is diff.values()
+  through (idx from 0 to dv.len() by 1) {
+    dsum be dsum + dv.get(idx)
+  }
+  yell(dsum)                            // 0+1+...+1023 = 523776
+}

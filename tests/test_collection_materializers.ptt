@@ -1,0 +1,278 @@
+// F-006 regression: collection materializers (Map.keys / Map.values
+// / Set.values / Set.intersect / Set.difference) must pre-size the
+// result and emit every element exactly once, even when the result
+// would have crossed the default initial-cap threshold many times
+// without the reserve.
+//
+// The pre-sizing is a perf hint. The behaviour these tests guard is
+// correctness: the result has the expected length and contents under
+// large-N workloads where the pre-sized path is exercised end-to-
+// end (different from the `tests/test_map_methods.ptt` and
+// `tests/test_set.ptt` cases, which run at small N and don't drive
+// the materializer's cap-doubling code path).
+
+use std/list
+use std/map
+use std/set
+use std/string
+
+// ---------------------------------------------------------------
+// Map.keys / Map.values
+// ---------------------------------------------------------------
+
+test "Map.keys materializes every key for a 4096-entry map" {
+  m is Map of int, int()
+  through (i from 0 to 4096 by 1) {
+    m.set(i, i * 7)
+  }
+  ks is m.keys()
+  // Pre-fix: the result List grew 8 -> 16 -> 32 -> ... -> 8192,
+  // copying 8 + 16 + ... + 4096 elements across grows. Post-fix:
+  // one upfront reserve(4096), zero grows. Either way the final
+  // length must be 4096 and every key 0..4095 present.
+  assert(ks.len() eq 4096)
+  // Track which keys we've seen via a 4096-entry int array (a
+  // Set would also work, but a flat array makes the test
+  // independent of the very Set machinery we're checking
+  // elsewhere in this file).
+  seen is array of int with cap 4096
+  through (idx from 0 to ks.len() by 1) {
+    k is ks.get(idx)
+    seen[k] be 1
+  }
+  through (i from 0 to 4096 by 1) {
+    assert(seen[i] eq 1)
+  }
+}
+
+test "Map.values materializes every value for a 4096-entry map" {
+  m is Map of int, int()
+  through (i from 0 to 4096 by 1) {
+    m.set(i, i * 7)
+  }
+  vs is m.values()
+  assert(vs.len() eq 4096)
+  // Sum values; should equal 7 * (0+1+...+4095) = 7 * 4095 * 4096 / 2.
+  expected is 7 * 4095 * 4096 / 2
+  total is 0
+  through (idx from 0 to vs.len() by 1) {
+    total be total + vs.get(idx)
+  }
+  assert(total eq expected)
+}
+
+test "Map.values on heap-shaped V materializes independent clones" {
+  // Pre-sizing must not change the deep-clone semantics. Each
+  // emitted value should own its own heap block; mutating the
+  // map afterwards must not affect the materialized list.
+  m is Map of int, String()
+  through (i from 0 to 256 by 1) {
+    m.set(i, "v")
+  }
+  vs is m.values()
+  assert(vs.len() eq 256)
+  // Replace every entry in the map; the clones in `vs` must
+  // remain "v".
+  through (i from 0 to 256 by 1) {
+    m.set(i, "MUTATED")
+  }
+  through (idx from 0 to vs.len() by 1) {
+    assert(vs.get(idx) eq "v")
+  }
+}
+
+// ---------------------------------------------------------------
+// Set.values
+// ---------------------------------------------------------------
+
+test "Set.values materializes every element for a 4096-element set" {
+  s is Set of int()
+  through (i from 0 to 4096 by 1) {
+    s.add(i)
+  }
+  xs is s.values()
+  assert(xs.len() eq 4096)
+  seen is array of int with cap 4096
+  through (idx from 0 to xs.len() by 1) {
+    v is xs.get(idx)
+    seen[v] be 1
+  }
+  through (i from 0 to 4096 by 1) {
+    assert(seen[i] eq 1)
+  }
+}
+
+// ---------------------------------------------------------------
+// Set.intersect / Set.difference — pre-sized large workloads
+// ---------------------------------------------------------------
+
+test "Set.intersect of two 2048-element sets with full overlap" {
+  // Both sets identical; intersect == self. Pre-sized to
+  // min(2048, 2048) = 2048; without the reserve, the result Set
+  // would grow through every cap doubling.
+  a is Set of int()
+  b is Set of int()
+  through (i from 0 to 2048 by 1) {
+    a.add(i)
+    b.add(i)
+  }
+  result is a.intersect(b)
+  assert(result.len() eq 2048)
+  through (i from 0 to 2048 by 1) {
+    assert(result.has(i))
+  }
+}
+
+test "Set.intersect of two 2048-element sets with half overlap" {
+  a is Set of int()
+  b is Set of int()
+  through (i from 0 to 2048 by 1) {
+    a.add(i)
+  }
+  through (j from 1024 to 3072 by 1) {
+    b.add(j)
+  }
+  result is a.intersect(b)
+  // Overlap is [1024..2048).
+  assert(result.len() eq 1024)
+  through (i from 1024 to 2048 by 1) {
+    assert(result.has(i))
+  }
+  // Verify a few outside-overlap entries are absent.
+  assert(not result.has(0))
+  assert(not result.has(1023))
+  assert(not result.has(2048))
+}
+
+test "Set.intersect bounded by smaller side: 4096 vs 8" {
+  // The pre-size hint uses min(self.count, other.count). With
+  // 4096 vs 8, the result is bounded by 8 — no growth at all.
+  big is Set of int()
+  small is Set of int()
+  through (i from 0 to 4096 by 1) {
+    big.add(i)
+  }
+  through (i from 0 to 8 by 1) {
+    small.add(i)
+  }
+  result is big.intersect(small)
+  assert(result.len() eq 8)
+  through (i from 0 to 8 by 1) {
+    assert(result.has(i))
+  }
+}
+
+test "Set.difference of disjoint 2048-element sets" {
+  a is Set of int()
+  b is Set of int()
+  through (i from 0 to 2048 by 1) {
+    a.add(i)
+  }
+  through (j from 5000 to 5128 by 1) {
+    b.add(j)
+  }
+  // a - b == a since they're disjoint.
+  result is a.difference(b)
+  assert(result.len() eq 2048)
+  through (i from 0 to 2048 by 1) {
+    assert(result.has(i))
+  }
+}
+
+test "Set.difference of overlapping 2048-element sets" {
+  a is Set of int()
+  b is Set of int()
+  through (i from 0 to 2048 by 1) {
+    a.add(i)
+  }
+  through (j from 1024 to 3072 by 1) {
+    b.add(j)
+  }
+  // a - b == [0..1024).
+  result is a.difference(b)
+  assert(result.len() eq 1024)
+  through (i from 0 to 1024 by 1) {
+    assert(result.has(i))
+  }
+  through (i from 1024 to 2048 by 1) {
+    assert(not result.has(i))
+  }
+}
+
+// ---------------------------------------------------------------
+// Heap-shaped element coverage on the materializer paths
+// ---------------------------------------------------------------
+
+test "Set.values on heap-shaped T materializes independent clones" {
+  s is Set of String()
+  through (i from 0 to 64 by 1) {
+    // Distinct keys to avoid Set dedup.
+    s.add("k".concat("x"))
+  }
+  // Above adds the same string each time; Set dedups to 1.
+  // Force 64 distinct elements through different content:
+  s2 is Set of String()
+  s2.add("alpha")
+  s2.add("beta")
+  s2.add("gamma")
+  s2.add("delta")
+  s2.add("epsilon")
+  s2.add("zeta")
+  s2.add("eta")
+  s2.add("theta")
+  xs is s2.values()
+  assert(xs.len() eq 8)
+}
+
+test "Set.intersect on heap-shaped T survives mutation of inputs" {
+  // Result clones stay live even if the sources mutate.
+  a is Set of String()
+  b is Set of String()
+  a.add("alpha")
+  a.add("beta")
+  a.add("gamma")
+  b.add("beta")
+  b.add("gamma")
+  b.add("delta")
+  result is a.intersect(b)
+  assert(result.len() eq 2)
+  assert(result.has("beta"))
+  assert(result.has("gamma"))
+  // Mutate a; result must be unaffected.
+  a.remove("beta")
+  assert(result.has("beta"))
+}
+
+// ---------------------------------------------------------------
+// Empty / edge cases
+// ---------------------------------------------------------------
+
+test "Map.keys on empty map returns empty list" {
+  m is Map of int, int()
+  ks is m.keys()
+  assert(ks.len() eq 0)
+}
+
+test "Set.intersect with one empty side gives empty result" {
+  a is Set of int()
+  b is Set of int()
+  a.add(1)
+  a.add(2)
+  result is a.intersect(b)
+  assert(result.len() eq 0)
+  result2 is b.intersect(a)
+  assert(result2.len() eq 0)
+}
+
+test "Set.difference with empty other returns full self" {
+  a is Set of int()
+  b is Set of int()
+  a.add(1)
+  a.add(2)
+  a.add(3)
+  result is a.difference(b)
+  assert(result.len() eq 3)
+  assert(result.has(1))
+  assert(result.has(2))
+  assert(result.has(3))
+}

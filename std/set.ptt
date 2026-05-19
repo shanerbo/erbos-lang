@@ -165,9 +165,13 @@ Set.reserve(self ref Set of T, cap_request int) {
 // values() — every present element in undefined order. Each
 // emitted element is a deep clone, so the returned List owns
 // its values independently of the set.
+//
+// F-006: pre-size the result List to `self.count` so a large
+// materialization doesn't pay log2(count) re-grows + copies.
 Set.values(self Set of T) List of T {
   out is List of T()
   self.data eq 0 ?{ give out }
+  out.reserve(self.count)
   through (i from 0 to self.data.cap by 1) {
     self.states[i] eq 1 ?{
       el is rep self.data[i]
@@ -204,10 +208,18 @@ Set.union(self Set of T, other Set of T) Set of T {
 
 // intersect(self, other) — fresh Set with only elements present
 // in both inputs.
+//
+// F-006: pre-size to `min(self.count, other.count)`. The result
+// can have at most that many elements (an element must be in
+// both, so it's bounded by the smaller side's count). Without
+// the reserve, growth fires every time `out.count` crosses the
+// 70% load threshold — cheap probes turn into a chain of
+// rebuild-and-rehash passes for large inputs.
 Set.intersect(self Set of T, other Set of T) Set of T {
   out is Set of T()
   self.data eq 0 ?{ give out }
   other.data eq 0 ?{ give out }
+  out.reserve(math.min(self.count, other.count))
   // Walk the smaller side for fewer hash probes.
   self.count le other.count ?{
     through (i from 0 to self.data.cap by 1) {
@@ -231,9 +243,14 @@ Set.intersect(self Set of T, other Set of T) Set of T {
 
 // difference(self, other) — fresh Set with elements of self
 // that are NOT in other.
+//
+// F-006: pre-size to `self.count`. The result is bounded by the
+// number of elements in self (every output came from self), so
+// reserving that many slots avoids growth-driven rehashes.
 Set.difference(self Set of T, other Set of T) Set of T {
   out is Set of T()
   self.data eq 0 ?{ give out }
+  out.reserve(self.count)
   through (i from 0 to self.data.cap by 1) {
     self.states[i] eq 1 ?{
       not other.has(self.data[i]) ?{

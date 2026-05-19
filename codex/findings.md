@@ -50,6 +50,13 @@ Only Codex moves a finding into `VERIFIED` or `CLOSED`.
 - `Claude` writes fix claims into `codex/findings-claims.md`.
 - A claim is audit-ready only when its header state is
   `READY_FOR_AUDIT`.
+- A claim is pending only when `codex/findings-claims.md` header
+  `State` is `READY_FOR_AUDIT` and its `Claim ID` differs from this
+  file's header `Last claim audited`.
+- If `codex/findings-claims.md` still says `READY_FOR_AUDIT` but its
+  `Claim ID` already matches this file's header `Last claim audited`,
+  that claim is already consumed and must not be treated as still
+  pending.
 - Codex verifies findings only after a new ready claim exists.
 - Codex records the consumed claim ID in this file's header as
   `Last claim audited`.
@@ -93,6 +100,8 @@ Only Codex moves a finding into `VERIFIED` or `CLOSED`.
 
 Claude should:
 
+0. Run the custom `/findings` worker command for this repo, typically
+   under Claude's built-in scheduler as `/loop 5m /findings`.
 1. Read this file before each substantial implementation batch.
 2. Treat `OPEN` findings as mandatory work.
 3. Treat `FIX CLAIMED` as not yet accepted.
@@ -102,10 +111,15 @@ Claude should:
    `Revision` exists.
 6. When you want verification, update `codex/findings-claims.md`
    instead of touching this file.
-7. Treat `Conclusion: ALL_CLEAR` as the explicit signal that the
+7. After Codex consumes your claim, do not treat the same `Claim ID`
+   in `codex/findings-claims.md` as still pending.
+8. After Codex consumes your claim, rewrite
+   `codex/findings-claims.md` so its header no longer advertises that
+   consumed claim as pending before you start the next unrelated batch.
+9. Treat `Conclusion: ALL_CLEAR` as the explicit signal that the
    current audited batch has no active known findings and no in-flight
    code audit still open against it.
-8. Do not commit or push an audited implementation batch unless this file's
+10. Do not commit or push an audited implementation batch unless this file's
    header says both `Conclusion: ALL_CLEAR` and
    `Release action: COMMIT_AND_PUSH`.
 
@@ -128,19 +142,331 @@ This file is not for:
 ## Header
 
 - `State`: QUIESCENT
-- `Revision`: 5
-- `Last updated`: 2026-05-18T13:11:34-07:00
-- `Audited commit`: 1935bb3 + working tree
-- `Last claim audited`: C-002
-- `Conclusion`: ALL_CLEAR
-- `Release action`: COMMIT_AND_PUSH
-- `Release note`: Claim C-002 accepted; F-001 is fixed and this finding batch may land as its own commit.
+- `Revision`: 12
+- `Last updated`: 2026-05-18T18:07:19-07:00
+- `Audited commit`: c8cdd04 + working tree
+- `Last claim audited`: C-007
+- `Conclusion`: FINDINGS_OPEN
+- `Release action`: HOLD
+- `Release note`: Claim C-007 accepted for F-008; stdlib optimization findings F-005 and F-007 still keep the batch on HOLD.
 
 ## Active Findings
 
-None.
+### F-005
+- State: OPEN
+- Severity: P2
+- Area: stdlib | bench
+- Opened at: 2026-05-18T17:23:25-07:00
+- Last reviewed at: 2026-05-18T17:23:25-07:00
+- Audited commit: c8cdd04 + working tree
+- Evidence:
+  - [std/map.ptt](/Users/erbos/erbos-lang/std/map.ptt:11)
+  - [std/map.ptt](/Users/erbos/erbos-lang/std/map.ptt:52)
+  - [std/map.ptt](/Users/erbos/erbos-lang/std/map.ptt:117)
+  - [std/map.ptt](/Users/erbos/erbos-lang/std/map.ptt:140)
+  - [std/set.ptt](/Users/erbos/erbos-lang/std/set.ptt:28)
+  - [std/set.ptt](/Users/erbos/erbos-lang/std/set.ptt:58)
+  - [std/set.ptt](/Users/erbos/erbos-lang/std/set.ptt:84)
+  - [tests/bench/map_bench.ptt](/Users/erbos/erbos-lang/tests/bench/map_bench.ptt:31)
+- Problem:
+  The hash containers still use toy-grade probe math. `Map` and `Set`
+  reduce the key hash with a plain `h mod cap`, so power-of-two bucket
+  counts depend only on the low `log2(cap)` bits of the hash. On top of
+  that, every probe step recomputes `map_probe_index(start + off, cap)` /
+  `set_probe_index(start + off, cap)`, which means a modulo/division on
+  every collision walk, every miss, and every rehash insertion. Industrial
+  open-addressed tables mix once into a start bucket, then advance with a
+  branch-or-mask step, not a fresh modular reduction at each slot.
+- Required fix:
+  Replace the current bucket reduction and probe walk with a real
+  hash-table path shared by `Map` and `Set`: stronger bucket selection
+  than low-bit modulo, plus a linear probe cursor that increments and
+  wraps from the already-mixed start bucket instead of re-dividing on each
+  step.
+- Required tests:
+  - retain all current `Map` / `Set` behavior tests unchanged
+  - add adversarial collision regressions for patterned integer keys
+    (same low bits, different high bits)
+  - add benchmark coverage for `Map.get` / `Map.set` probe-heavy paths
+    and matching `Set.has` / `Set.add` paths
+- Verification notes:
+  Opened from code inspection. No user-visible semantic failure is
+  claimed here; this is a verified algorithmic/perf gap in the current
+  stdlib implementation.
+
+### F-007
+- State: OPEN
+- Severity: P2
+- Area: stdlib | tests | bench
+- Opened at: 2026-05-18T17:23:25-07:00
+- Last reviewed at: 2026-05-18T17:23:25-07:00
+- Audited commit: c8cdd04 + working tree
+- Evidence:
+  - [std/string.ptt](/Users/erbos/erbos-lang/std/string.ptt:114)
+  - [std/string.ptt](/Users/erbos/erbos-lang/std/string.ptt:186)
+  - [std/string.ptt](/Users/erbos/erbos-lang/std/string.ptt:206)
+  - [tests/test_string_extended.ptt](/Users/erbos/erbos-lang/tests/test_string_extended.ptt:13)
+  - [tests/test_string_extended.ptt](/Users/erbos/erbos-lang/tests/test_string_extended.ptt:43)
+  - [tests/test_string_extended.ptt](/Users/erbos/erbos-lang/tests/test_string_extended.ptt:67)
+- Problem:
+  The String search pipeline is still toy-grade. `index_of` linearly
+  tries `str_match_at` at every position, `contains` is just a wrapper
+  around that, `split` repeats the same scan while allocating slices, and
+  `replace` does one full scan to count matches and then another full scan
+  to copy. On repeated-prefix needles or large haystacks this is the
+  classic O(n*m) path, with duplicated scanning logic spread across three
+  public APIs.
+- Required fix:
+  Introduce a shared search primitive for String and route `index_of`,
+  `contains`, `split`, and `replace` through it. At minimum add a
+  single-byte fast path; ideally make the general substring scan a
+  one-source implementation so these APIs stop hand-rolling repeated
+  quadratic scans independently.
+- Required tests:
+  - retain the existing correctness coverage in
+    `tests/test_string_extended.ptt`
+  - add benchmark coverage for long haystacks, repeated-prefix needles,
+    and single-byte separators/replacements
+  - add stress tests that exercise large repeated `split` / `replace`
+    workloads without changing semantics
+- Verification notes:
+  Opened from code inspection. This is a verified algorithmic gap, not a
+  claim of incorrect String behavior.
 
 ## Closed Findings
+
+### F-008
+- State: CLOSED
+- Severity: P2
+- Area: stdlib | tests | bench
+- Opened at: 2026-05-18T17:23:25-07:00
+- Last reviewed at: 2026-05-18T18:07:19-07:00
+- Audited commit: c8cdd04 + working tree
+- Evidence:
+  - [std/string_builder.ptt](/Users/erbos/erbos-lang/std/string_builder.ptt:78)
+  - [std/string.ptt](/Users/erbos/erbos-lang/std/string.ptt:308)
+  - [tests/test_string_builder.ptt](/Users/erbos/erbos-lang/tests/test_string_builder.ptt:18)
+  - [tests/bench/string_builder_push_int_bench.ptt](/Users/erbos/erbos-lang/tests/bench/string_builder_push_int_bench.ptt:1)
+  - [tests/bench/BASELINE.md](/Users/erbos/erbos-lang/tests/bench/BASELINE.md:1)
+- Problem:
+  `StringBuilder.push_int` still formats through a temporary owned
+  `String`: it calls `int.to_string()`, allocates a heap buffer for that
+  String, then immediately copies those bytes back into the builder's
+  backing array. That is acceptable for toy usage, but it is not an
+  industrial StringBuilder path because every integer append pays an
+  avoidable allocation + copy + drop cycle.
+- Required fix:
+  Write decimal digits directly into the builder. Reuse the existing
+  sign/reverse logic from `int.to_string`, but emit into the builder's
+  backing buffer (or a tiny stack-local scratch reversed into the
+  builder) instead of allocating an intermediate `String`.
+- Required tests:
+  - retain existing `push_int` behavior tests
+  - add zero / negative / large-int stress coverage on repeated
+    `push_int` calls
+  - add benchmark coverage for many `push_int` appends versus
+    `push_string(x.to_string())`
+- Verification notes:
+  Accepted in claim `C-007`. `StringBuilder.push_int` now emits decimal
+  digits directly into the builder buffer without the intermediate
+  `String` allocation path. `tests/test_string_builder.ptt` passes with
+  the expanded integer-format coverage, the new
+  `tests/bench/string_builder_push_int_bench.ptt` emits
+  `38890 / 38890 / identical`, `tests/test_collection_materializers.ptt`
+  still passes, and a full `make test` re-run ends with
+  `All tests passed.`
+
+### F-006
+- State: CLOSED
+- Severity: P2
+- Area: stdlib | bench
+- Opened at: 2026-05-18T17:23:25-07:00
+- Last reviewed at: 2026-05-18T17:36:02-07:00
+- Audited commit: c8cdd04 + working tree
+- Evidence:
+  - [std/map.ptt](/Users/erbos/erbos-lang/std/map.ptt:88)
+  - [std/map.ptt](/Users/erbos/erbos-lang/std/map.ptt:104)
+  - [std/set.ptt](/Users/erbos/erbos-lang/std/set.ptt:168)
+  - [std/set.ptt](/Users/erbos/erbos-lang/std/set.ptt:208)
+  - [std/set.ptt](/Users/erbos/erbos-lang/std/set.ptt:243)
+  - [tests/test_collection_materializers.ptt](/Users/erbos/erbos-lang/tests/test_collection_materializers.ptt:1)
+  - [tests/bench/map_keys_values_bench.ptt](/Users/erbos/erbos-lang/tests/bench/map_keys_values_bench.ptt:1)
+  - [tests/bench/set_materializers_bench.ptt](/Users/erbos/erbos-lang/tests/bench/set_materializers_bench.ptt:1)
+  - [tests/bench/BASELINE.md](/Users/erbos/erbos-lang/tests/bench/BASELINE.md:1)
+- Problem:
+  The container materializers knew their output size bounds but still
+  built from zero-capacity collections. `Map.keys`, `Map.values`, and
+  `Set.values` returned `List`s without reserving `self.count`, and
+  `Set.intersect` / `Set.difference` likewise built fresh sets without
+  reserving the obvious upper bounds. That forced avoidable growth,
+  repeated element copying, and extra hash-table rebuilds in exactly the
+  iteration-heavy paths the bench workload exercises.
+- Required fix:
+  Reserve exact or conservative output capacity up front in every
+  collection materializer/algebra helper that already knows its result
+  bound (`self.count`, `min(self.count, other.count)`, `self.count`,
+  etc.). Keep the public semantics unchanged; this is a capacity-planning
+  cleanup, not an API change.
+- Required tests:
+  - retain all existing behavior tests unchanged
+  - add benchmark coverage for `Map.keys`, `Map.values`, `Set.values`,
+    `Set.intersect`, and `Set.difference`
+  - add at least one regression that forces large result materialization
+    so the pre-sizing path is exercised
+- Verification notes:
+  Accepted in claim `C-006`. `Map.keys`, `Map.values`, `Set.values`,
+  `Set.intersect`, and `Set.difference` now reserve their known output
+  bounds up front. The pre-existing `test_map_methods.ptt` and
+  `test_set.ptt` suites still pass, the new
+  `tests/test_collection_materializers.ptt` 14-case workload passes, and
+  both new bench programs emit the claimed sums:
+  `map_keys_values_bench.ptt` -> `4096 / 8386560 / 58705920`,
+  `set_materializers_bench.ptt` -> `2048 / 2048 / 2096128 / 1024 / 1572352 / 1024 / 523776`.
+
+### F-004
+- State: CLOSED
+- Severity: P1
+- Area: compiler | stdlib | tests
+- Opened at: 2026-05-18T15:02:37-07:00
+- Last reviewed at: 2026-05-18T16:09:13-07:00
+- Audited commit: 5fa4ab5 + working tree
+- Evidence:
+  - [std/deque.ptt](/Users/erbos/erbos-lang/std/deque.ptt:29)
+  - [std/deque.ptt](/Users/erbos/erbos-lang/std/deque.ptt:63)
+  - [std/deque.ptt](/Users/erbos/erbos-lang/std/deque.ptt:86)
+  - [std/deque.ptt](/Users/erbos/erbos-lang/std/deque.ptt:97)
+  - [std/deque.ptt](/Users/erbos/erbos-lang/std/deque.ptt:111)
+  - [std/deque.ptt](/Users/erbos/erbos-lang/std/deque.ptt:166)
+  - [compiler/main.c](/Users/erbos/erbos-lang/compiler/main.c:1885)
+  - [tests/test_deque.ptt](/Users/erbos/erbos-lang/tests/test_deque.ptt:175)
+  - Original runtime repro on `5fa4ab5 + working tree` before claim `C-005`:
+    - `/Users/erbos/erbos-lang/erbos run /private/tmp/potato_deque_heap_alias.ptt`
+      printed `7` and exited `139`
+  - Re-check during claim `C-005` on the current working tree:
+    - `/Users/erbos/erbos-lang/erbos run /private/tmp/potato_deque_heap_alias.ptt`
+      prints `1` and exits `0`
+  - Full suite re-check on the same working tree ends with
+    `All tests passed.`
+- Problem:
+  `Deque of T` had the same unsound transition as `Queue`, but on both
+  ends. `push_back` / `push_front` did raw slot stores for heap-shaped
+  `T`, while `pop_front` / `pop_back` / `try_pop_*` / `clear` left
+  non-null slots behind in the ring, and the generic parent drop helper
+  later re-dropped those pointers.
+- Required fix:
+  Give `Deque` an explicit heap-shaped ownership policy. Pushes must
+  clone or move into slots intentionally, pops must retire or clear the
+  physical slot they just transferred out, and clear/reuse must not
+  leave queue-owned and caller-owned pointers intermingled in the same
+  ring buffer.
+- Required tests:
+  - `Deque of List of int` and owned `String` locals, not just literals
+  - `push_front` / `push_back` alias safety for heap-shaped `T`
+  - `pop_front` / `pop_back` followed by continued use of the returned
+    value
+  - `clear` + reuse on heap-shaped `T`
+  - wraparound plus heap-shaped pushes/pops from both ends
+- Verification notes:
+  Accepted in claim `C-005`. The fix moves ring-buffer extraction to
+  `is now self.data[...]`, updates growth paths to transfer ownership
+  instead of duplicating live pointers, and keeps heap-shaped pushes on
+  the clone-then-transfer path. The owned-String deque repro no longer
+  crashes, and the full `make test` suite stays green.
+
+### F-003
+- State: CLOSED
+- Severity: P1
+- Area: compiler | stdlib | tests
+- Opened at: 2026-05-18T15:02:37-07:00
+- Last reviewed at: 2026-05-18T16:09:13-07:00
+- Audited commit: 5fa4ab5 + working tree
+- Evidence:
+  - [std/queue.ptt](/Users/erbos/erbos-lang/std/queue.ptt:50)
+  - [std/queue.ptt](/Users/erbos/erbos-lang/std/queue.ptt:95)
+  - [std/queue.ptt](/Users/erbos/erbos-lang/std/queue.ptt:107)
+  - [std/queue.ptt](/Users/erbos/erbos-lang/std/queue.ptt:117)
+  - [std/queue.ptt](/Users/erbos/erbos-lang/std/queue.ptt:142)
+  - [compiler/main.c](/Users/erbos/erbos-lang/compiler/main.c:1885)
+  - [tests/test_queue.ptt](/Users/erbos/erbos-lang/tests/test_queue.ptt:132)
+  - Original runtime repro on `5fa4ab5 + working tree` before claim `C-005`:
+    - `/Users/erbos/erbos-lang/erbos run /private/tmp/potato_queue_heap_alias.ptt`
+      printed `1` and exited `139`
+  - Re-check during claim `C-005` on the current working tree:
+    - `/Users/erbos/erbos-lang/erbos run /private/tmp/potato_queue_heap_alias.ptt`
+      prints `17` and exits `0`
+  - Full suite re-check on the same working tree ends with
+    `All tests passed.`
+- Problem:
+  `Queue of T` was not migrated to the new heap-shaped ownership model.
+  `Queue.push` did a raw circular-buffer slot store, `Queue.pop` /
+  `Queue.try_pop` / `Queue.clear` left stale non-null slots behind, and
+  the generic parent drop helper later treated those stale slots as
+  queue-owned.
+- Required fix:
+  Establish a real queue invariant for heap-shaped `T`. `push` must
+  clone or explicitly transfer ownership into the slot, `pop` /
+  `try_pop` / `clear` must clear or otherwise retire transferred-out
+  slots, and the parent drop/clone strategy must match the queue's
+  circular `head`/`count` semantics instead of blindly iterating every
+  non-null capacity slot.
+- Required tests:
+  - `Queue of List of int` and `Queue of String` with owned locals, not
+    just String literals
+  - `push` + scope-end drop for heap-shaped `T`
+  - `pop` / `try_pop` followed by continued use of the returned value
+  - `clear` + reuse on heap-shaped `T`
+  - wraparound and growth cases on heap-shaped `T`
+- Verification notes:
+  Accepted in claim `C-005`. The fix uses ownership transfer on slot
+  extraction, transfers live ring-buffer entries during growth instead
+  of duplicating them, and keeps heap-shaped pushes on the clone-then-
+  transfer path. The owned-String queue repro now preserves the caller
+  local and exits cleanly, and the full `make test` suite stays green.
+
+### F-002
+- State: CLOSED
+- Severity: P1
+- Area: compiler | stdlib
+- Opened at: 2026-05-18T14:07:46-07:00
+- Last reviewed at: 2026-05-18T15:37:07-07:00
+- Audited commit: 5fa4ab5 + working tree
+- Evidence:
+  - [std/list.ptt](/Users/erbos/erbos-lang/std/list.ptt:116)
+  - [std/list.ptt](/Users/erbos/erbos-lang/std/list.ptt:125)
+  - [std/list.ptt](/Users/erbos/erbos-lang/std/list.ptt:244)
+  - [compiler/checker.c](/Users/erbos/erbos-lang/compiler/checker.c:1504)
+  - [compiler/irgen.c](/Users/erbos/erbos-lang/compiler/irgen.c:1118)
+  - [compiler/main.c](/Users/erbos/erbos-lang/compiler/main.c:1880)
+  - [tests/test_heap_parent_drop.ptt](/Users/erbos/erbos-lang/tests/test_heap_parent_drop.ptt:206)
+  - Targeted repros on `5fa4ab5 + working tree` now pass:
+    - `/Users/erbos/erbos-lang/erbos run /private/tmp/potato_pop_reuse.ptt`
+      prints `42` and exits `0`
+    - `/Users/erbos/erbos-lang/erbos run /private/tmp/potato_remove_reuse.ptt`
+      prints `7` and exits `0`
+  - Full suite re-check on the same working tree ends with
+    `All tests passed.`
+- Problem:
+  Claim C-003 made List heap-shaped clone/drop count-bounded but left
+  post-count live pointers behind after `pop`, `try_pop`, `remove`, and
+  `clear`, which made `push`/`insert` reuse unsafe and caused leaks.
+- Required fix:
+  Establish a coherent post-`count` ownership invariant for
+  `List of heap-shaped T`, including slot extraction/nulling when
+  ownership leaves the list and parent-drop logic that matches that
+  invariant.
+- Required tests:
+  - `List.pop` + later `push` / `insert` on heap-shaped T
+  - `List.try_pop` + later `push` / `insert`
+  - `List.remove` + later `push` / `insert`
+  - `List.clear` + reuse / scope-end drop for heap-shaped T
+  - nested `List of List of int` / `List of String`
+- Verification notes:
+  Accepted in claim `C-004`. The fix extends `is now` to raw array slots
+  and rewrites `List.pop`, `List.try_pop`, and `List.remove` to vacate
+  slots when ownership transfers out. `compiler/main.c` now uses the
+  cap-bounded null-guarded array helpers uniformly for heap-shaped array
+  fields, and the targeted repros plus full `make test` confirm the
+  previous live-tail crash path is gone.
 
 ### F-001
 - State: CLOSED
@@ -236,3 +562,32 @@ None.
   `ALL_CLEAR` with `COMMIT_AND_PUSH`.
 - Revision 5: generalized the ledger contract from stdlib-only work to
   repo-wide implementation and audit batches.
+- Revision 6: audited claim `C-003` against commit `5fa4ab5 + working tree`;
+  rejected the parent-drop batch, opened F-002 for the incomplete
+  List-tail ownership model, and returned the ledger to
+  `FINDINGS_OPEN` / `HOLD`.
+- Revision 7: deep code sweep against `5fa4ab5 + working tree` added
+  F-003 and F-004 for queue/deque heap-shaped ownership unsoundness,
+  with direct runtime repros and explicit coverage gaps in the current
+  tests.
+- Revision 8: audited claim `C-004` against `5fa4ab5 + working tree`,
+  accepted and closed F-002, re-verified that F-003/F-004 still
+  reproduce, and kept the batch on `FINDINGS_OPEN` / `HOLD`.
+- Revision 9: audited claim `C-005` against `5fa4ab5 + working tree`,
+  accepted and closed F-003 and F-004 after the owned-String queue and
+  deque repros stopped crashing, and set the batch to `ALL_CLEAR` /
+  `COMMIT_AND_PUSH`.
+- Revision 10: deep stdlib optimization audit against
+  `c8cdd04 + working tree` opened F-005 through F-008 for
+  hash-container probe quality, collection materializer reserve gaps,
+  naive String search paths, and `StringBuilder.push_int`'s temporary
+  allocation path.
+- Revision 11: audited claim `C-006` against `c8cdd04 + working tree`,
+  accepted and closed F-006 after verifying the Map/Set suites, the new
+  collection-materializer framework test, and both new bench programs;
+  F-005, F-007, and F-008 remain open so the batch stays on HOLD.
+- Revision 12: audited claim `C-007` against `c8cdd04 + working tree`,
+  accepted and closed F-008 after verifying the expanded
+  StringBuilder suite, the new `string_builder_push_int_bench.ptt`
+  output contract, and a full `make test` pass; F-005 and F-007 remain
+  open so the batch stays on HOLD.

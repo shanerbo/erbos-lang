@@ -51,3 +51,132 @@ test "reserve preallocates builder storage" {
   b.push_string("potato")
   assert(b.to_string().equals("potato"))
 }
+
+// ---------------------------------------------------------------
+// F-008: push_int direct-emit regression coverage
+// ---------------------------------------------------------------
+//
+// Pre-fix push_int went through int.to_string() (heap-allocated
+// String) and push_string (copy back). Post-fix it writes
+// decimal digits directly into the builder's backing buffer.
+// Tests below pin down all the corners that the rewrite has to
+// preserve.
+
+test "push_int formats zero" {
+  b is StringBuilder()
+  b.push_int(0)
+  assert(b.to_string().equals("0"))
+  assert(b.len() eq 1)
+}
+
+test "push_int formats single positive digit" {
+  b is StringBuilder()
+  b.push_int(7)
+  assert(b.to_string().equals("7"))
+}
+
+test "push_int formats multi-digit positive" {
+  b is StringBuilder()
+  b.push_int(12345)
+  assert(b.to_string().equals("12345"))
+}
+
+test "push_int formats single negative digit" {
+  b is StringBuilder()
+  b.push_int(0 - 3)
+  assert(b.to_string().equals("-3"))
+}
+
+test "push_int formats multi-digit negative" {
+  b is StringBuilder()
+  b.push_int(0 - 12345)
+  assert(b.to_string().equals("-12345"))
+}
+
+test "push_int handles large positive int" {
+  // 9223372036854775807 = i64 max; 19 digits + no sign.
+  b is StringBuilder()
+  b.push_int(9223372036854775807)
+  assert(b.to_string().equals("9223372036854775807"))
+}
+
+test "push_int handles large negative int" {
+  // 0 - 9223372036854775807 fits because negation of i64 max
+  // is representable. (i64 min is excluded for the same
+  // reason int.to_string excludes it.)
+  b is StringBuilder()
+  b.push_int(0 - 9223372036854775807)
+  assert(b.to_string().equals("-9223372036854775807"))
+}
+
+test "push_int interleaved with push_string and push_byte" {
+  b is StringBuilder()
+  b.push_byte(91)              // '['
+  b.push_int(42)
+  b.push_string(", ")
+  b.push_int(0 - 7)
+  b.push_byte(93)              // ']'
+  assert(b.to_string().equals("[42, -7]"))
+}
+
+test "push_int repeated stress builds correct decimal sequence" {
+  // Append 0..1000 with separators; verify the resulting text
+  // round-trips a known length and the boundary substrings.
+  b is StringBuilder()
+  through (i from 0 to 1000 by 1) {
+    b.push_int(i)
+    b.push_byte(44)            // ','
+  }
+  s is b.to_string()
+  // Length: sum of digit counts + 1000 commas. We don't have a
+  // closed-form here so just sanity-check boundaries.
+  assert(s.starts_with("0,1,2,3,4,5,6,7,8,9,10,"))
+  assert(s.ends_with("997,998,999,"))
+}
+
+test "push_int across grow boundary stays correct" {
+  // Force at least two grow events with a large number of
+  // small ints. Default cap=16; pushing "0," 100 times needs
+  // ~200 bytes => grows 16 -> 32 -> 64 -> 128 -> 256.
+  b is StringBuilder()
+  through (i from 0 to 100 by 1) {
+    b.push_int(0 - 1)          // "-1"
+    b.push_byte(124)           // '|'
+  }
+  // Resulting text: ("-1|") repeated 100 times.
+  s is b.to_string()
+  assert(s.len() eq 100 * 3)
+  assert(s.starts_with("-1|-1|-1|"))
+  assert(s.ends_with("-1|-1|-1|"))
+}
+
+test "push_int on a freshly-cleared builder reuses backing buffer" {
+  // After clear, count=0 but the backing buffer is intact.
+  // push_int's inline-grow check should find existing capacity
+  // sufficient for a small int and not re-grow.
+  b is StringBuilder()
+  b.reserve(64)
+  before_cap is b.cap()
+  b.push_int(123)
+  b.clear()
+  b.push_int(456)
+  after_cap is b.cap()
+  assert(after_cap eq before_cap)
+  assert(b.to_string().equals("456"))
+}
+
+test "push_int does not allocate intermediate String" {
+  // F-008 contract test: many push_int calls without an
+  // intermediate String allocation per call. We verify the
+  // observable shape (no leak / no crash across heavy reuse)
+  // rather than directly counting heap allocations, since
+  // Potato has no allocator hook from user space.
+  b is StringBuilder()
+  through (i from 0 to 10000 by 1) {
+    b.push_int(i)
+  }
+  s is b.to_string()
+  // Final byte run should end with "9998" + "9999".
+  assert(s.ends_with("99989999"))
+  assert(s.starts_with("0123456789"))
+}

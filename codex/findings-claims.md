@@ -64,15 +64,13 @@ If another implementation batch starts before audit:
 ## Header
 
 - `State`: IDLE
-- `Claim ID`: (none — C-005 was consumed by Codex against findings
-  revision 9 and accepted with `Conclusion: ALL_CLEAR` /
-  `Release action: COMMIT_AND_PUSH`; the audited batch (C-004 +
-  C-005) is being landed as two commits in dependency order:
-  C-004 in 9a1ffad, C-005 in this commit)
-- `Against findings revision`: 9
-- `Target commit`: 9a1ffad + this commit
-- `Claimed fixed`: (none pending)
-- `Last updated`: 2026-05-18T23:15:00+00:00
+- `Claim ID`: (none — C-007 was consumed and accepted for F-008;
+  batch remains on HOLD because F-005 / F-007 are still open
+  against the post-C-007 working tree)
+- `Against findings revision`: 12
+- `Target commit`: c8cdd04 + working tree
+- `Claimed fixed`: (none pending; next claim will target F-007)
+- `Last updated`: 2026-05-19T01:13:36+00:00
 
 ## Claim C-001
 - State: READY_FOR_AUDIT
@@ -696,6 +694,208 @@ If another implementation batch starts before audit:
     (18 cases, F-001 regressions) still pass at all three
     -O levels.
 
+## Claim C-006
+- State: READY_FOR_AUDIT
+- Against findings revision: 10
+- Target commit: c8cdd04 + working tree (uncommitted; Codex can
+  verify against `git diff` for the listed files)
+- Claimed fixed: F-006
+- Last updated: 2026-05-19T00:33:29+00:00
+- Bug class (recap from findings.md F-006):
+  Container materializers / algebra helpers built their result
+  collections from zero-capacity even though the output bound is
+  known up front. `Map.keys` / `Map.values` returned a
+  `List of K` / `List of V` of length `self.count` after growing
+  through `log2(self.count)` cap doublings; `Set.values` did the
+  same; `Set.intersect` and `Set.difference` returned a fresh
+  `Set of T` whose load crossed the 70% threshold many times,
+  triggering rebuild-and-rehash on every doubling. F-006 is a
+  capacity-planning gap, not a semantic bug — public API
+  unchanged.
+- Root-cause fix:
+  Pure stdlib change. Each materializer now reserves its known
+  output bound before the loop:
+  - `std/map.ptt::Map.keys`: `out.reserve(self.count)`.
+  - `std/map.ptt::Map.values`: `out.reserve(self.count)`.
+  - `std/set.ptt::Set.values`: `out.reserve(self.count)`.
+  - `std/set.ptt::Set.intersect`:
+    `out.reserve(math.min(self.count, other.count))`. The
+    intersect output is bounded by the smaller side's count
+    because every output element must be in both inputs.
+  - `std/set.ptt::Set.difference`: `out.reserve(self.count)`.
+    The output is bounded by `self`'s count because every
+    output element came from `self`.
+  - `Set.union` already reserved `self.count + other.count`
+    before this work; left unchanged.
+  Both `List.reserve` and `Set.reserve` already exist and are
+  no-ops on a smaller-or-equal request, so the new calls compose
+  cleanly with downstream growth if it does happen (e.g. an
+  upper-bounded reserve plus an actually-smaller realised
+  result).
+- Files changed:
+  - `std/map.ptt` (Map.keys, Map.values pre-sizing)
+  - `std/set.ptt` (Set.values, Set.intersect, Set.difference
+    pre-sizing)
+  - `tests/test_collection_materializers.ptt` (new, 14 framework
+    cases)
+  - `tests/bench/map_keys_values_bench.ptt` (new bench file)
+  - `tests/bench/set_materializers_bench.ptt` (new bench file)
+  - `tests/bench/BASELINE.md` (rewritten as a stdlib-bench
+    baseline doc covering all three bench files)
+- Tests added (`tests/test_collection_materializers.ptt`, all
+  pass at `-O0`/`-O1`/`-O2`):
+  - **Large-N materialization regressions**: `Map.keys` and
+    `Map.values` against a 4096-entry `Map of int, int`,
+    verifying every key 0..4095 present and the value sum
+    matches `7 * sum(0..4095)`. Pre-fix this path grew the
+    result List ~9 times; the test guards correctness under
+    the post-fix single-allocation path.
+  - **Heap-shaped V independence**: `Map.values` on
+    `Map of int, String` materializes 256 entries, then mutates
+    the map; the materialized list's clones must remain
+    unchanged.
+  - **Set.values large-N**: 4096-element `Set of int` →
+    `xs.values()` returns a 4096-length list with every value
+    seen exactly once.
+  - **Set.intersect**: full overlap (2048 ∩ 2048 = 2048),
+    half overlap (2048 + 2048 with 1024-element overlap =
+    1024), small-side bound (4096 ∩ 8 = 8 — verifies the
+    `min(self.count, other.count)` reserve hint).
+  - **Set.difference**: disjoint (2048 - disjoint = 2048),
+    overlapping (2048 - half-overlap = 1024).
+  - **Heap-shaped element coverage**: `Set.values` returning
+    independent String clones; `Set.intersect` clones survive
+    mutation of the input Sets.
+  - **Empty / edge cases**: `Map.keys` on empty map returns
+    empty list; `Set.intersect` with one empty side returns
+    empty (both directions); `Set.difference` with empty
+    other returns full self.
+- Bench coverage added (`tests/bench/`, all stand-alone `spark`
+  programs):
+  - `map_keys_values_bench.ptt`: 4096-entry
+    `Map of int, int` → `.keys()` and `.values()` enumerated
+    + summed. Output: `4096 / 8386560 / 58705920`.
+  - `set_materializers_bench.ptt`: two 2048-element
+    `Set of int`s with `[1024..2048)` overlap →
+    `.values()`, `.intersect().values()`,
+    `.difference().values()` enumerated + summed. Output:
+    `2048 / 2048 / 2096128 / 1024 / 1572352 / 1024 /
+    523776`.
+  - `tests/bench/BASELINE.md` rewritten to document all three
+    bench programs and a uniform per-(file, -O level)
+    methodology.
+- Verification context:
+  - `make clean && make test` ends with `All tests passed.`
+    from a cold rebuild on the working tree.
+  - `tests/test_collection_materializers.ptt` (14 cases)
+    passes at `-O0`, `-O1`, `-O2`.
+  - Pre-existing `tests/test_map_methods.ptt` and
+    `tests/test_set.ptt` still pass.
+  - The new bench programs run cleanly and emit their
+    expected output sums, locking the materialization shape
+    against silent regressions.
+
+## Claim C-007
+- State: READY_FOR_AUDIT
+- Against findings revision: 11
+- Target commit: c8cdd04 + working tree (uncommitted; Codex can
+  verify against `git diff` for the listed files)
+- Claimed fixed: F-008
+- Last updated: 2026-05-19T00:43:43+00:00
+- Bug class (recap from findings.md F-008):
+  `StringBuilder.push_int` formatted through a temporary owned
+  `String` — it called `int.to_string()` (heap-alloc the
+  digit-bytes buffer + a `String` header), then `push_string`
+  (copy those bytes into the builder), then dropped the
+  temporary on scope exit. Three allocations + a copy + a
+  drop per integer append. Acceptable for one-off use, but
+  the per-call allocation profile rules out the
+  industrial-grade builder hot path the stdlib needs.
+- Root-cause fix:
+  Pure stdlib change in `std/string_builder.ptt`. `push_int`
+  now writes decimal digits directly into the builder's
+  backing buffer:
+  - Fast path for `x == 0`: one `push_byte(48)`.
+  - Capture sign and magnitude (`is_neg`, `v`).
+  - Count `v`'s decimal digits in a small mod/divide loop.
+  - Compute `needed = self.count + sign + digit_count` and
+    grow the backing buffer in one shot if it is short
+    (mirrors `push_string`'s inline-grow shape so the digit
+    loop never re-checks capacity per byte).
+  - Write the `'-'` sign byte if negative.
+  - Write digits right-to-left into
+    `[pos, pos + digit_count)` so they land in correct
+    left-to-right order without a separate reverse pass.
+  - Bump `self.count` to `needed`.
+  Sign handling mirrors `int.to_string`'s existing constraint:
+  `i64.MIN` is excluded from the negation step (`0 - i64.MIN`
+  is undefined). Calling `push_int(i64.MIN)` was already
+  unsupported via the legacy `int.to_string` path; the new
+  path inherits that limitation and does not regress it.
+- Files changed:
+  - `std/string_builder.ptt` (push_int rewritten)
+  - `tests/test_string_builder.ptt` (12 new framework cases
+    appended; existing 6 cases left untouched)
+  - `tests/bench/string_builder_push_int_bench.ptt` (new bench
+    file)
+  - `tests/bench/BASELINE.md` (added a section documenting
+    the new bench file's workload and expected output shape)
+- Tests added (`tests/test_string_builder.ptt`, all pass at
+  `-O0`/`-O1`/`-O2`):
+  - **Zero / single-digit corners** (3): `push_int formats
+    zero`, `push_int formats single positive digit`,
+    `push_int formats single negative digit`.
+  - **Multi-digit corners** (2): `push_int formats multi-
+    digit positive`, `push_int formats multi-digit
+    negative`.
+  - **Range edges** (2): `push_int handles large positive
+    int` (i64 max, 19 digits), `push_int handles large
+    negative int` (negation of i64 max).
+  - **Mixing with other appends** (1): `push_int interleaved
+    with push_string and push_byte` produces `[42, -7]`.
+  - **Repeated stress** (1): `push_int repeated stress
+    builds correct decimal sequence` — append 0..1000 with
+    comma separators; verify the boundary substrings.
+  - **Across grow boundary** (1): `push_int across grow
+    boundary stays correct` — 100 iterations of
+    `push_int(-1); push_byte('|')` forces several inline
+    grow events; result is `("-1|") * 100`.
+  - **Builder reuse** (1): `push_int on a freshly-cleared
+    builder reuses backing buffer` — verifies that the
+    direct-emit path's grow check finds existing capacity
+    sufficient and does not re-grow unnecessarily after
+    `clear`.
+  - **No-allocation contract** (1): `push_int does not
+    allocate intermediate String` — 10000 push_int calls
+    against a single builder; the test verifies the final
+    byte content boundaries (`"0123456789..."` prefix,
+    `"99989999"` suffix). The intent is to exercise the
+    direct-emit hot path under heavy reuse, locking it in
+    against a future regression that quietly reverts to the
+    intermediate-String path.
+- Bench coverage added (`tests/bench/`, stand-alone `spark`
+  program):
+  - `string_builder_push_int_bench.ptt`: appends `0..10000`
+    to a `StringBuilder` two ways — direct `push_int` (the
+    post-fix path) and `push_string(i.to_string())` (the
+    legacy path). Both phases must produce byte-identical
+    output (verified by `s1.equals(s2)` and an
+    `identical` / `MISMATCH` print), so the bench also
+    serves as a semantic anchor for the fix. Output:
+    `38890 / 38890 / identical`.
+  - `tests/bench/BASELINE.md` extended with a
+    `string_builder_push_int_bench.ptt` section.
+- Verification context:
+  - `make clean && make test` ends with `All tests passed.`
+    from a cold rebuild.
+  - `tests/test_string_builder.ptt` (18 cases total: 6
+    pre-existing + 12 new) passes at `-O0`, `-O1`, `-O2`.
+  - The new bench produces matching 38890-byte outputs from
+    both the direct-emit and legacy paths, locking the fix
+    in semantically.
+  - Pre-existing `tests/test_collection_materializers.ptt`
+    (F-006 regressions, 14 cases) still passes.
+
 ## Claim Template
 
 ```md
@@ -766,6 +966,42 @@ If another implementation batch starts before audit:
   and List of int, push/pop/try_pop, wraparound, growth, clear,
   primitive-T fast paths). Cold-rebuild `make test` green at
   default plus all three -O levels for the new file.
+- Claim C-006 submitted: F-006 fix (collection-materializer
+  pre-sizing). Pure stdlib change. Map.keys / Map.values pre-
+  reserve `self.count`; Set.values pre-reserves `self.count`;
+  Set.intersect pre-reserves `math.min(self.count,
+  other.count)`; Set.difference pre-reserves `self.count`.
+  Public semantics unchanged. 14 new framework cases verify
+  correctness under large-N workloads (4096-entry Map, 2048
+  vs 2048 Sets) plus heap-shaped V/T independence and empty
+  edges. Two new bench programs locked in as Codex required
+  (`map_keys_values_bench.ptt`, `set_materializers_bench.ptt`).
+  Cold-rebuild `make test` green; new file passes at -O0/-O1/-O2.
+- Claim C-006 consumed by Codex against findings revision 11 and
+  accepted for F-006. Batch stays on HOLD because F-005 / F-007 /
+  F-008 are still open against the post-C-006 working tree;
+  those need their own claims before the batch can land. Header
+  reset to `IDLE`.
+- Claim C-007 submitted: F-008 fix (StringBuilder.push_int
+  direct-digit emit). Pure stdlib change. Pre-fix push_int went
+  through int.to_string() + push_string — three allocations +
+  a copy + a drop per integer append. Post-fix it counts digits,
+  grows the backing buffer in one shot, writes the sign byte,
+  then writes digits right-to-left into a contiguous slot. 12
+  new framework cases cover zero, single-digit positive /
+  negative, multi-digit positive / negative, i64-range edges,
+  interleaving with push_byte / push_string, repeated 1000-
+  iteration stress, across-grow boundary, builder reuse after
+  clear, and a 10000-call no-allocation contract test. New bench
+  `string_builder_push_int_bench.ptt` runs the direct-emit and
+  legacy paths against the same 0..10000 workload and asserts
+  byte-identical output. Cold-rebuild `make test` green; new
+  cases pass at -O0/-O1/-O2.
+- Claim C-007 consumed by Codex against findings revision 12 and
+  accepted for F-008. Batch stays on HOLD because F-005 / F-007
+  are still open against the post-C-007 working tree; those need
+  their own claims before the batch can land. Header reset to
+  `IDLE`.
 - Claim C-005 consumed by Codex against findings revision 9 and
   accepted with `Conclusion: ALL_CLEAR` /
   `Release action: COMMIT_AND_PUSH`. The audited batch covers

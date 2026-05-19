@@ -75,9 +75,94 @@ StringBuilder.push_string(self ref StringBuilder, s String) {
   self.count be needed
 }
 
+// F-008: emit decimal digits directly into the builder's
+// backing buffer. The previous implementation called
+// `int.to_string()` (which heap-allocates a fresh
+// `array of byte` + a `String` header), then `push_string`
+// (which copies those bytes into the builder), then dropped
+// the temporary String — three allocations + a copy + a drop
+// per call. The direct-emit path costs zero allocations beyond
+// any growth the builder would do anyway.
+//
+// Algorithm:
+//   1. Handle x == 0 directly via `push_byte(48)` (the '0' byte).
+//   2. Capture sign; absolute value into `v`.
+//   3. Count decimal digits of `v` so we can reserve capacity
+//      and place the digits in correct order without a reverse.
+//   4. Grow the builder once to accommodate the sign + digits.
+//   5. Write the '-' sign if negative.
+//   6. Write digits right-to-left into the contiguous slot
+//      `[start, start + digit_count)`.
+//   7. Bump `self.count`.
+//
+// Sign handling note: int.to_string negates a negative value
+// before formatting, which would overflow on the most-negative
+// 64-bit int (`0 - i64.MIN` is undefined). We mirror that
+// existing limitation here; a robust unsigned-divide path is
+// out of F-008 scope.
 StringBuilder.push_int(self ref StringBuilder, x int) {
-  s is x.to_string()
-  self.push_string(s)
+  // Fast path for 0; one byte append.
+  x eq 0 ?{
+    self.push_byte(48)
+    give
+  }
+  // Capture sign + magnitude.
+  is_neg is 0
+  v is x
+  x lt 0 ?{
+    is_neg be 1
+    v be 0 - x
+  }
+  // Count digits of v (v > 0 here).
+  digit_count is 0
+  m is v
+  infi (m gt 0) {
+    digit_count be digit_count + 1
+    m be m / 10
+  }
+  // Total bytes to append = sign byte + digit count.
+  added is digit_count + is_neg
+  needed is self.count + added
+  // Grow the backing buffer in one shot if needed. Mirrors
+  // push_string's inline grow shape so we avoid per-byte
+  // amortised pushes, which would re-check capacity every
+  // iteration through the digit loop.
+  self.data eq 0 ?{
+    cap is 16
+    infi (cap lt needed) {
+      cap be cap * 2
+    }
+    self.data be array of byte with cap cap
+  } self.data.cap lt needed ?{
+    cap is self.data.cap
+    infi (cap lt needed) {
+      cap be cap * 2
+    }
+    fresh is array of byte with cap cap
+    through (i from 0 to self.count by 1) {
+      fresh[i] be self.data[i]
+    }
+    self.data be now fresh
+  }
+  // Write the sign byte (45 = '-') if negative.
+  pos is self.count
+  is_neg eq 1 ?{
+    self.data[pos] be 45
+    pos be pos + 1
+  }
+  // Write digits right-to-left into [pos, pos + digit_count).
+  // After the loop, slot[pos..pos+digit_count) holds the
+  // decimal digits in correct left-to-right order.
+  end is pos + digit_count - 1
+  k is end
+  vv is v
+  infi (vv gt 0) {
+    d is vv mod 10
+    self.data[k] be 48 + d
+    k be k - 1
+    vv be vv / 10
+  }
+  self.count be needed
 }
 
 StringBuilder.clear(self ref StringBuilder) {

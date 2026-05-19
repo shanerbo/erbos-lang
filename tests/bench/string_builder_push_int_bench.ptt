@@ -1,0 +1,47 @@
+// Microbenchmark for StringBuilder.push_int direct-emit path.
+//
+// F-008: pre-fix, push_int formatted via int.to_string() (heap
+// String allocation) then push_string (copy-back) then dropped
+// the temporary — three allocations + a copy + a drop per
+// integer. Post-fix, digits are written directly into the
+// builder's backing buffer; the only allocations are the
+// builder's own backing buffer grows (amortised O(1)).
+//
+// Phases:
+//   1. push_int direct: append 0..N to a StringBuilder.
+//   2. push_string(x.to_string()) reference: same workload via
+//      the legacy path, for wall-clock comparison.
+//
+// Both phases must produce byte-identical output to lock the
+// fix in semantically as well as for perf.
+
+use std/string
+use std/string_builder
+
+spark {
+  // Phase 1: direct push_int.
+  b1 is StringBuilder()
+  through (i from 0 to 10000 by 1) {
+    b1.push_int(i)
+  }
+  s1 is b1.to_string()
+  yell(s1.len())                        // byte length, semantic anchor
+
+  // Phase 2: legacy path through int.to_string + push_string.
+  b2 is StringBuilder()
+  through (i from 0 to 10000 by 1) {
+    tmp is i.to_string()
+    b2.push_string(tmp)
+  }
+  s2 is b2.to_string()
+  yell(s2.len())                        // must equal phase-1 length
+
+  // Cross-check: same content. Equality covers both length and
+  // byte sequence, locking direct-emit and legacy paths to the
+  // same observable output.
+  s1.equals(s2) ?{
+    yell("identical")
+  } nah {
+    yell("MISMATCH")
+  }
+}

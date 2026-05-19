@@ -1,0 +1,43 @@
+// Microbenchmark for Map.keys / Map.values materialization paths.
+//
+// F-006: pre-fix, both methods built their result List from cap=0
+// and grew through every cap doubling. Post-fix they reserve
+// `self.count` up front, so the materialization is a single loop
+// with no growth-driven copies.
+//
+// Phases:
+//   1. set: insert N distinct int keys.
+//   2. keys: enumerate via .keys() and sum.
+//   3. values: enumerate via .values() and sum.
+//
+// N=4096 forces ~9 cap doublings on the result List under the
+// pre-fix path; the post-fix path has zero growth events.
+
+use std/list
+use std/map
+
+spark {
+  m is Map of int, int()
+
+  // Phase 1: set 4096 distinct int keys.
+  through (i from 0 to 4096 by 1) {
+    m.set(i, i * 7)
+  }
+  yell(m.len())                         // 4096
+
+  // Phase 2: enumerate keys; sum to keep dead-code-elim away.
+  ks is m.keys()
+  ksum is 0
+  through (idx from 0 to ks.len() by 1) {
+    ksum be ksum + ks.get(idx)
+  }
+  yell(ksum)                            // 0+1+...+4095 = 8386560
+
+  // Phase 3: enumerate values; sum.
+  vs is m.values()
+  vsum is 0
+  through (idx from 0 to vs.len() by 1) {
+    vsum be vsum + vs.get(idx)
+  }
+  yell(vsum)                            // 7 * ksum = 58705920
+}
