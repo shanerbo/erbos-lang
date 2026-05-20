@@ -1334,7 +1334,8 @@ static char *parse_type_name(Parser *p) {
     if (!head) {
         switch (cur(p)->type) {
             case TOK_INT: head = "int"; break;
-            case TOK_STR_TYPE: head = "str"; break;
+            // TOK_STR_TYPE never reaches here; the teaching error
+            // above (line 1314) exits before falling through.
             case TOK_BOOL: head = "bool"; break;
             case TOK_VOID: head = "void"; break;
             case TOK_TASK: head = "task"; break;

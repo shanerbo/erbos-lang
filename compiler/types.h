@@ -3,7 +3,13 @@
 
 typedef enum {
     TYPE_INT,
-    TYPE_STR,
+    TYPE_STRING,        // Result of operator + on String operands. The
+                        // concrete carrier is `String` from std/string;
+                        // this kind exists because the binary `+`
+                        // typing path predates the struct-based
+                        // representation (see audit-plan-2026-05.md
+                        // T06; was previously named TYPE_STR with a
+                        // stale "no longer produced" comment).
     TYPE_BOOL,
     TYPE_VOID,
     TYPE_LIST,

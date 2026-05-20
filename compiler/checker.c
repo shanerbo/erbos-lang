@@ -77,13 +77,14 @@ static Type make_array_of(Type elem) {
 }
 
 static int types_equal(Type a, Type b) {
-    // γ7: TYPE_STR is no longer produced — `parse_type_str("str")`
-    // returns TYPE_STRUCT("String") and `NODE_STR_LIT` resolves to
-    // the same. The TYPE_STR arm survives in this comparison as a
-    // dead branch (cosmetic; nothing creates a TYPE_STR value).
-    int a_is_string = (a.kind == TYPE_STR) ||
+    // String values flow as either TYPE_STRING (from operator + on
+    // String operands) or TYPE_STRUCT("String") (from any other
+    // String source — literal, variable, function return). Both
+    // shapes denote the same on-disk representation; treat them as
+    // equal for type-comparison purposes.
+    int a_is_string = (a.kind == TYPE_STRING) ||
         (a.kind == TYPE_STRUCT && a.struct_name && !strcmp(a.struct_name, "String"));
-    int b_is_string = (b.kind == TYPE_STR) ||
+    int b_is_string = (b.kind == TYPE_STRING) ||
         (b.kind == TYPE_STRUCT && b.struct_name && !strcmp(b.struct_name, "String"));
     if (a_is_string && b_is_string) return 1;
     // α8: TYPE_BYTE and TYPE_INT are interchangeable at the value
@@ -256,11 +257,12 @@ static int struct_has_field(Checker *c, const char *struct_name, const char *fie
 static Type parse_type_str(Checker *c, const char *t) {
     if (!t) return make_type(TYPE_VOID);
     if (!strcmp(t, "int")) return make_type(TYPE_INT);
-    // γ7: `str` is now an alias for the canonical `String` stdlib
-    // struct. The legacy TYPE_STR kind is no longer produced by
-    // anything in the checker. Programs that say `s str` and
-    // programs that say `s String` produce identical types, both
-    // backed by the std/string struct definition.
+    // γ7: `str` is an alias for the canonical `String` stdlib
+    // struct. Programs that say `s str` and programs that say
+    // `s String` produce identical types, both backed by the
+    // std/string struct definition. (The TYPE_STRING enum kind
+    // exists only as the result of binary `+` on String operands;
+    // `parse_type_str` itself never produces it.)
     if (!strcmp(t, "str")) return make_struct("String");
     if (!strcmp(t, "String")) return make_struct("String");
     if (!strcmp(t, "bool")) return make_type(TYPE_BOOL);
@@ -327,11 +329,10 @@ static Type parse_type_str(Checker *c, const char *t) {
 static const char *type_name(Type t) {
     switch (t.kind) {
         case TYPE_INT: return "int";
-        // P2-16: TYPE_STR is fossil; nothing in the source path
-        // produces it now. If we ever surface one in an error
-        // message, show the user-facing name `String` rather than
-        // the retired `str`.
-        case TYPE_STR: return "String";
+        // TYPE_STRING is the result of operator `+` on String
+        // operands. Surfaced in diagnostics as the user-facing name
+        // `String` (never the retired `str`).
+        case TYPE_STRING: return "String";
         case TYPE_BOOL: return "bool";
         case TYPE_VOID: return "void";
         case TYPE_LIST: return "list";
@@ -412,23 +413,25 @@ static Type check_expr(Checker *c, Node *n) {
             Type right = check_expr(c, n->binary.right);
             switch (n->binary.op) {
                 case TOK_PLUS: case TOK_ADD_WORD: {
-                    // γ4: TYPE_STR and TYPE_STRUCT("String") are
-                    // interchangeable for `+` until γ7 deletes the
-                    // legacy TYPE_STR. Both lower to `_str_concat`.
-                    int left_is_str = (left.kind == TYPE_STR) ||
+                    // String + String returns TYPE_STRING. The two
+                    // String shapes (TYPE_STRING from a previous `+`
+                    // and TYPE_STRUCT("String") from anywhere else)
+                    // are interchangeable here; both lower to
+                    // `_str_concat`.
+                    int left_is_str = (left.kind == TYPE_STRING) ||
                         (left.kind == TYPE_STRUCT && left.struct_name &&
                          !strcmp(left.struct_name, "String"));
-                    int right_is_str = (right.kind == TYPE_STR) ||
+                    int right_is_str = (right.kind == TYPE_STRING) ||
                         (right.kind == TYPE_STRUCT && right.struct_name &&
                          !strcmp(right.struct_name, "String"));
                     if (left_is_str && right_is_str) {
                         n->resolved_type = 2;
-                        return make_type(TYPE_STR);
+                        return make_type(TYPE_STRING);
                     }
                     if ((left_is_str && right.kind == TYPE_UNKNOWN) ||
                         (left.kind == TYPE_UNKNOWN && right_is_str)) {
                         n->resolved_type = 2;
-                        return make_type(TYPE_STR);
+                        return make_type(TYPE_STRING);
                     }
                     if (left.kind == TYPE_UNKNOWN || right.kind == TYPE_UNKNOWN) {
                         n->resolved_type = 1;
@@ -455,16 +458,15 @@ static Type check_expr(Checker *c, Node *n) {
                 case TOK_EQ: case TOK_NEQ: case TOK_LT: case TOK_GT: case TOK_LTE: case TOK_GTE:
                 case TOK_EQ_WORD: case TOK_NE_WORD: case TOK_LT_WORD: case TOK_GT_WORD: case TOK_LE_WORD: case TOK_GE_WORD:
                 {
-                    // γ4: until TYPE_STR is deleted (γ7), `String`
-                    // (TYPE_STRUCT("String")) and `str` (TYPE_STR)
-                    // are interchangeable for binary operators.
-                    // Both lower to the same `_str_eq` symbol that
-                    // walks the byte buffer through the array-of-byte
-                    // header.
-                    int left_is_str = (left.kind == TYPE_STR) ||
+                    // String comparisons accept either TYPE_STRING
+                    // (from a previous `+`) or TYPE_STRUCT("String")
+                    // (everywhere else); both lower to `_str_eq`,
+                    // which walks the byte buffer through the
+                    // array-of-byte header.
+                    int left_is_str = (left.kind == TYPE_STRING) ||
                         (left.kind == TYPE_STRUCT && left.struct_name &&
                          !strcmp(left.struct_name, "String"));
-                    int right_is_str = (right.kind == TYPE_STR) ||
+                    int right_is_str = (right.kind == TYPE_STRING) ||
                         (right.kind == TYPE_STRUCT && right.struct_name &&
                          !strcmp(right.struct_name, "String"));
                     if (left_is_str && right_is_str) n->resolved_type = 2;
@@ -583,7 +585,7 @@ static Type check_expr(Checker *c, Node *n) {
                 if (arg_t.kind == TYPE_INT || arg_t.kind == TYPE_BOOL ||
                     arg_t.kind == TYPE_BYTE) {
                     n->call.name = strdup("yell_int");
-                } else if (arg_t.kind == TYPE_STR) {
+                } else if (arg_t.kind == TYPE_STRING) {
                     n->call.name = strdup("String_yell");
                 } else if (arg_t.kind == TYPE_STRUCT) {
                     char buf[256];
@@ -759,7 +761,7 @@ static Type check_expr(Checker *c, Node *n) {
             // via the same find_method machinery as struct receivers — the
             // receiver-type "name" is just the primitive's spelling.
             //
-            // P6.0b: TYPE_STR receivers also look up methods under
+            // P6.0b: TYPE_STRING receivers also look up methods under
             // "String" (the canonical stdlib struct name). This is what
             // lets `s.len()` resolve to `String.len` for any value of
             // type str — same in-memory layout post-P3.4, just two
@@ -767,7 +769,7 @@ static Type check_expr(Checker *c, Node *n) {
             const char *receiver_type_name = NULL;
             if (receiver_was_struct) {
                 receiver_type_name = obj_t.struct_name;
-            } else if (obj_t.kind == TYPE_STR) {
+            } else if (obj_t.kind == TYPE_STRING) {
                 receiver_type_name = "str";
             } else if (obj_t.kind == TYPE_INT) {
                 receiver_type_name = "int";
@@ -778,15 +780,15 @@ static Type check_expr(Checker *c, Node *n) {
                 // values on indexing. Try int methods first — that's
                 // by far the most common case (`list of int`-shaped
                 // data). If no int method matches, fall back to str /
-                // String the same way TYPE_STR receivers do below.
+                // String the same way TYPE_STRING receivers do below.
                 receiver_type_name = "int";
             }
             if (receiver_type_name) {
                 FuncInfo *user_method = find_method(c, receiver_type_name, m);
-                // For TYPE_STR receivers, fall through to the
+                // For TYPE_STRING receivers, fall through to the
                 // String-named struct's methods if the primitive
                 // didn't have a match.
-                if (!user_method && obj_t.kind == TYPE_STR) {
+                if (!user_method && obj_t.kind == TYPE_STRING) {
                     user_method = find_method(c, "String", m);
                     if (user_method) receiver_type_name = "String";
                 }
@@ -1503,7 +1505,7 @@ static void check_stmt(Checker *c, Node *n) {
                 n->var_decl.value->type == NODE_IDENT &&
                 (t.kind == TYPE_STRUCT || t.kind == TYPE_LIST ||
                  t.kind == TYPE_MAP || t.kind == TYPE_ARRAY ||
-                 t.kind == TYPE_STR)) {
+                 t.kind == TYPE_STRING)) {
                 const char *src = n->var_decl.value->ident.name;
                 fprintf(stderr,
                     "error:%d: ambiguous alias: `%s is %s` for a heap-shaped value\n",
@@ -1543,7 +1545,7 @@ static void check_stmt(Checker *c, Node *n) {
             int heap_shaped =
                 (new_t.kind == TYPE_STRUCT || new_t.kind == TYPE_LIST ||
                  new_t.kind == TYPE_MAP || new_t.kind == TYPE_ARRAY ||
-                 new_t.kind == TYPE_STR);
+                 new_t.kind == TYPE_STRING);
             if (!n->assign.is_move && !n->assign.is_rep &&
                 rhs_is_ident && heap_shaped) {
                 fprintf(stderr,
@@ -1713,7 +1715,7 @@ static void check_stmt(Checker *c, Node *n) {
             int field_heap_shaped =
                 (val_t.kind == TYPE_STRUCT || val_t.kind == TYPE_LIST ||
                  val_t.kind == TYPE_MAP || val_t.kind == TYPE_ARRAY ||
-                 val_t.kind == TYPE_STR);
+                 val_t.kind == TYPE_STRING);
             if (!n->field_assign.is_move && !n->field_assign.is_rep &&
                 field_rhs_ident && field_heap_shaped) {
                 fprintf(stderr,
@@ -2079,7 +2081,6 @@ void checker_run(Node *program) {
 
         if (!f->func_def.return_type) c.funcs[i].return_type = make_type(TYPE_VOID);
         else if (!strcmp(f->func_def.return_type, "int")) c.funcs[i].return_type = make_type(TYPE_INT);
-        else if (!strcmp(f->func_def.return_type, "str")) c.funcs[i].return_type = make_type(TYPE_STR);
         else if (!strcmp(f->func_def.return_type, "bool")) c.funcs[i].return_type = make_type(TYPE_BOOL);
         else if (is_struct(&c, f->func_def.return_type)) c.funcs[i].return_type = make_struct(f->func_def.return_type);
         else {
