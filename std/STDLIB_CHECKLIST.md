@@ -41,6 +41,9 @@ Verified current files:
 - `std/byte_buffer.ptt`
 - `std/string_builder.ptt`
 - `std/ring_buffer.ptt`
+- `std/set.ptt`
+- `std/pool.ptt`
+- `std/path.ptt`
 - `std/math.ptt`
 - `std/algo.ptt`
 - `std/basics.ptt`
@@ -602,6 +605,7 @@ Required API:
 - zero-value formation: `b is StringBuilder()`
 - `StringBuilder.reserve(self ref StringBuilder, cap int)`
 - `StringBuilder.len(self StringBuilder) int`
+- `StringBuilder.cap(self StringBuilder) int`
 - `StringBuilder.empty(self StringBuilder) bool`
 - `StringBuilder.push_byte(self ref StringBuilder, b int)`
 - `StringBuilder.push_string(self ref StringBuilder, s String)`
@@ -984,6 +988,14 @@ Tests:
 ## Phase 8: Math and Algorithms
 
 ### `std/math`
+
+Already shipped (verified in `std/math.ptt`):
+
+- `min(a int, b int) int`
+- `max(a int, b int) int`
+- `abs(x int) int`
+- `pow(base int, exp int) int`
+- `int.hash(self int) int`
 
 Required additions:
 

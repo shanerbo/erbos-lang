@@ -10,9 +10,13 @@
 //   o is some of int (7)        // Some(7)
 //   n is none of int ()         // None
 //
-// The legacy `Option of int .Some(...)` / `.None()` value-form is
-// gone under the language-law cleanup; only the factories
-// `none`/`some`/`ok`/`err` materialize enum values.
+// User code uses the factories `none of T ()` / `some of T (v)` to
+// materialize Option values; the legacy `Option of int .Some(...)`
+// / `.None()` value-form is gone in user code under the language-
+// law cleanup. The factory bodies themselves (below) still spell
+// the enum value-form directly; the checker's stdlib-provenance
+// allowlist (compiler/checker.c) limits that privilege to this
+// file and std/result.ptt.
 //
 // All methods use `match` over the variants. `unwrap`'s None arm
 // calls `assert(false)`; the recursive give at the end of unwrap
