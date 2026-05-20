@@ -2,7 +2,7 @@ CC = cc
 CFLAGS = -Wall -Wextra -std=c11
 
 # Compiler frontend (the `erbos` binary).
-COMPILER_SRC = compiler/main.c compiler/lexer.c compiler/parser.c compiler/monomorph.c compiler/checker.c compiler/optimizer.c compiler/runtime_emit.c compiler/irgen.c compiler/iropt.c compiler/regalloc.c compiler/iremit.c compiler/target_spawn.c compiler/target_darwin_arm64.c compiler/target_linux_arm64.c
+COMPILER_SRC = compiler/main.c compiler/lexer.c compiler/parser.c compiler/monomorph.c compiler/checker.c compiler/optimizer.c compiler/runtime_emit.c compiler/irgen.c compiler/iropt.c compiler/regalloc.c compiler/iremit.c compiler/hashmap.c compiler/target_spawn.c compiler/target_darwin_arm64.c compiler/target_linux_arm64.c
 
 # Green-thread runtime + channels — a separate C library that's
 # only linked into the runtime / channel C tests today (not yet
