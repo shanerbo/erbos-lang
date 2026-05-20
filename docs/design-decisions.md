@@ -1815,3 +1815,59 @@ They live in `compiler/target_spawn.{h,c}` now. Everything else
 the plan flagged as "Phase 5 candidate" (ARM64 instruction
 emission, string/data lowering, register/stack helpers) was
 already shared via the Phase 3 callback split.
+
+## 2026-05-20 — `_task_collapse` retained as roadmap scaffolding
+
+**Decision.** Keep `_task_collapse`, even though the post-Linux-arm64
+audit found it has zero callers in the current test/example
+corpus.
+
+### Why kept (despite the "no callers" signal)
+
+The audit-pass framing was "0 bl callers → candidate for deletion."
+That framing applied without context to `_task_collapse` was wrong.
+First-principles reasons not to delete:
+
+- **Symmetry with `_task_fire`.** `fire` and `collapse` are the
+  intended task-runtime pair: `task.fire(fn())` schedules,
+  `task.collapse()` joins. Both are no-ops in single-threaded
+  compiled mode (the runtime emitter ships them as bare `ret`s)
+  because there is nothing to actually schedule or await yet.
+  Deleting `collapse` while keeping `fire` would split the
+  language surface in half.
+- **The green-thread runtime is paused, not retired.** CLAUDE.md
+  lists "Integrating the green-thread runtime into compiled
+  `.ptt` output (the runtime exists in `compiler/runtime/` but is
+  not wired in)" under "Out of scope without explicit ask." When
+  that wire-up lands, `_task_fire` and `_task_collapse` are the
+  symbols a compiled program will call. Keeping the no-op stubs
+  + checker / irgen branches is what makes the eventual wire-up
+  a runtime-side change rather than a re-add of the language
+  surface.
+- **Cost asymmetry.** Keeping costs ~1 line of runtime-emit
+  (`ret`-only stub) + 2 short branches in `checker.c:941` and
+  `irgen.c:795`. Deleting saves those bytes but burns design
+  intent. The cost favors keeping until the green-thread plan
+  is either wired in or formally retired.
+
+### When this decision should be revisited
+
+If the green-thread runtime is removed from the roadmap (e.g.,
+the language adopts a different concurrency model entirely),
+that's the trigger to delete `_task_fire` / `_task_collapse`
+together — not just `collapse`.
+
+### Tracking
+
+- `compiler/runtime_emit.c::emit_task_builtins` — the no-op
+  stubs.
+- `compiler/checker.c:941` — recognises `t.fire(...)` and
+  `t.collapse()` as task-method calls.
+- `compiler/irgen.c:795` — lowers both to `bl _task_fire` /
+  `bl _task_collapse`.
+- `compiler/runtime/` — the actual green-thread runtime that
+  isn't wired in yet.
+- `examples/task_test.ptt` — the only program that exercises
+  `t.fire(...)`. There is no example exercising `.collapse()`;
+  the audit-plan's T07' notes this is acceptable while the
+  feature is paused.

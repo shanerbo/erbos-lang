@@ -27,12 +27,15 @@ Out of scope:
 
 ## Decisions taken before drafting this plan
 
-### D1 — `_task_collapse`
+### D1 — `_task_collapse` — RESOLVED 2026-05-20: KEEP
 
 Symbol exists end-to-end (runtime emission +
-`checker.c:956` recognising `t.collapse()` + `irgen.c:795` lowering),
-but zero test or example caller. Decision: pending user input;
-plan covers both branches as `T07` / `T07'`.
+`checker.c:941` recognising `t.collapse()` + `irgen.c:795` lowering),
+but zero test or example caller.
+
+**Decision: keep, document.** First-principles reasoning recorded
+in `docs/design-decisions.md` (`2026-05-20 — _task_collapse retained
+as roadmap scaffolding`). T07' executed; T07 dropped from the plan.
 
 ### D2 — `TYPE_STR`
 
