@@ -42,9 +42,6 @@ typedef enum {
     TOK_TRUE,
     TOK_FALSE,
     TOK_NIL,
-    TOK_LIST,
-    TOK_MAP,
-    TOK_IMAP,
     TOK_OF,
     TOK_TASK,
     TOK_SPARK,        // entry-point keyword (α0). Reserves the

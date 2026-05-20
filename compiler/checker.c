@@ -266,9 +266,6 @@ static Type parse_type_str(Checker *c, const char *t) {
     if (!strcmp(t, "bool")) return make_type(TYPE_BOOL);
     if (!strcmp(t, "byte")) return make_type(TYPE_BYTE);
     if (!strcmp(t, "void")) return make_type(TYPE_VOID);
-    if (!strcmp(t, "list")) return make_type(TYPE_LIST);
-    if (!strcmp(t, "map")) return make_type(TYPE_MAP);
-    if (!strcmp(t, "imap")) return make_type(TYPE_MAP); // imap is a map variant
     // α3: `array<T>` (legacy <>-bracketed form from
     // parse_type_name) and `array__T` (post-monomorph mangled
     // form) both denote TYPE_ARRAY of the element type. Strip
@@ -550,8 +547,6 @@ static Type check_expr(Checker *c, Node *n) {
                     n->line, name);
                 exit(1);
             }
-            if (!strcmp(name, "list") || !strcmp(name, "list_new")) return make_type(TYPE_LIST);
-            if (!strcmp(name, "map") || !strcmp(name, "map_new") || !strcmp(name, "imap")) return make_type(TYPE_MAP);
             if (!strcmp(name, "task")) return make_type(TYPE_TASK);
             // γ3: `assert(cond)` is a stdlib function (conceptually
             // in std/test). Type-check args; irgen lowers it to the
@@ -629,14 +624,6 @@ static Type check_expr(Checker *c, Node *n) {
             // hatches are no longer needed — typed arrays carry
             // String directly — and the overhaul bans kernel-layer
             // names from being callable in any .ptt file. Removed.
-            if (!strcmp(name, "list_set")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_VOID); }
-            if (!strcmp(name, "imap_set")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_VOID); }
-            if (!strcmp(name, "imap_get")) { for (int j=0;j<n->call.arg_count;j++) check_expr(c, n->call.args[j]); return make_type(TYPE_INT); }
-            if (!strcmp(name, "imap_len")) { if (n->call.arg_count > 0) check_expr(c, n->call.args[0]); return make_type(TYPE_INT); }
-            if (!strcmp(name, "map_get")) return make_type(TYPE_INT);
-            if (!strcmp(name, "map_keys")) return make_type(TYPE_LIST);
-            if (!strcmp(name, "map_set") || !strcmp(name, "map_len") || !strcmp(name, "list_len") || !strcmp(name, "list_push")) return make_type(TYPE_VOID);
-            if (!strcmp(name, "list_pop")) return make_type(TYPE_INT);
             // γ4: str_concat / int_to_str dispatch dropped — user
             // code uses `a + b` and `n.to_string()`. Same machinery
             // resolves them to the existing _str_concat / _int_to_str
@@ -1413,20 +1400,6 @@ static void check_stmt(Checker *c, Node *n) {
     switch (n->type) {
         case NODE_VAR_DECL: {
             Type t = check_expr(c, n->var_decl.value);
-            // Enforce: bare list()/map() constructors must have type annotations
-            if (t.kind == TYPE_LIST && !n->var_decl.elem_type_name &&
-                n->var_decl.value->type == NODE_CALL &&
-                (!strcmp(n->var_decl.value->call.name, "list") || !strcmp(n->var_decl.value->call.name, "list_new"))) {
-                fprintf(stderr, "error:%d: list must specify element type: 'list of <type>'\n", n->line);
-                exit(1);
-            }
-            if (t.kind == TYPE_MAP && !n->var_decl.key_type_name &&
-                n->var_decl.value->type == NODE_CALL &&
-                (!strcmp(n->var_decl.value->call.name, "map") || !strcmp(n->var_decl.value->call.name, "map_new") ||
-                 !strcmp(n->var_decl.value->call.name, "imap"))) {
-                fprintf(stderr, "error:%d: map must specify key and value types: 'map of <key> to <value>'\n", n->line);
-                exit(1);
-            }
             // If declaration has explicit generic type, use it
             if (n->var_decl.elem_type_name && t.kind == TYPE_LIST) {
                 t = make_list_of(parse_type_str(c, n->var_decl.elem_type_name));

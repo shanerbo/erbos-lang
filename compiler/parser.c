@@ -244,14 +244,13 @@ static Node *parse_primary(Parser *p) {
         eat(p, TOK_RPAREN);
         return n;
     }
-    // list(), map(), task() constructors
-    if ((at(p, TOK_LIST) || at(p, TOK_MAP) || at(p, TOK_IMAP) || at(p, TOK_TASK)) && peek_at(p, 1)->type == TOK_LPAREN) {
-        char *name = at(p, TOK_LIST) ? "list" : at(p, TOK_IMAP) ? "imap" : at(p, TOK_MAP) ? "map" : "task";
+    // task() constructor
+    if (at(p, TOK_TASK) && peek_at(p, 1)->type == TOK_LPAREN) {
         p->pos++;
         p->pos++; // skip (
         eat(p, TOK_RPAREN);
         Node *n = alloc_node(NODE_CALL, line);
-        n->call.name = name;
+        n->call.name = "task";
         n->call.args = NULL;
         n->call.arg_count = 0;
         return n;
@@ -338,8 +337,7 @@ static Node *parse_primary(Parser *p) {
                     continue;
                 }
                 if (t == TOK_IDENT || t == TOK_INT || t == TOK_STR_TYPE ||
-                    t == TOK_BOOL || t == TOK_LIST || t == TOK_MAP ||
-                    t == TOK_IMAP || t == TOK_TASK || t == TOK_VOID) {
+                    t == TOK_BOOL || t == TOK_TASK || t == TOK_VOID) {
                     look++;
                     saw_type_token = 1;
                     continue;
@@ -1017,40 +1015,10 @@ static Node *parse_stmt(Parser *p) {
                 exit(1);
             }
             if (at(p, TOK_INT) || at(p, TOK_BOOL) ||
-                ((at(p, TOK_LIST) || at(p, TOK_MAP) || at(p, TOK_IMAP) || at(p, TOK_TASK)) && peek_at(p, 1)->type != TOK_LPAREN)) {
+                (at(p, TOK_TASK) && peek_at(p, 1)->type != TOK_LPAREN)) {
                 if (at(p, TOK_TASK)) {
                     n->var_decl.type_name = "task";
                     p->pos++;
-                } else if (at(p, TOK_LIST)) {
-                    n->var_decl.type_name = "list";
-                    p->pos++;
-                    if (at(p, TOK_OF)) {
-                        p->pos++; // skip 'of'
-                        n->var_decl.elem_type_name = cur(p)->value;
-                        p->pos++; // skip type
-                    }
-                } else if (at(p, TOK_MAP) || at(p, TOK_IMAP)) {
-                    n->var_decl.type_name = at(p, TOK_IMAP) ? "imap" : "map";
-                    p->pos++;
-                    if (at(p, TOK_OF)) {
-                        p->pos++; // skip 'of'
-                        n->var_decl.key_type_name = cur(p)->value;
-                        p->pos++; // skip key type
-                        if (at(p, TOK_COMMA)) {
-                            p->pos++; // skip comma
-                            n->var_decl.val_type_name = cur(p)->value;
-                            p->pos++; // skip val type
-                        }
-                        if (at(p, TOK_TO)) {
-                            fprintf(stderr,
-                                "error:%d: `to` is no longer used between "
-                                "generic type arguments — use a comma\n",
-                                cur(p)->line);
-                            fprintf(stderr,
-                                "  help: write `map of K, V`\n");
-                            exit(1);
-                        }
-                    }
                 } else {
                     n->var_decl.type_name = cur(p)->value;
                     p->pos++;
@@ -1353,8 +1321,7 @@ static char *parse_type_name(Parser *p) {
         exit(1);
     }
     if (!at(p, TOK_IDENT) && !at(p, TOK_INT) &&
-        !at(p, TOK_BOOL) && !at(p, TOK_VOID) && !at(p, TOK_LIST) &&
-        !at(p, TOK_MAP) && !at(p, TOK_IMAP) && !at(p, TOK_TASK)) {
+        !at(p, TOK_BOOL) && !at(p, TOK_VOID) && !at(p, TOK_TASK)) {
         // Caller's responsibility to surface a useful error; just take
         // whatever token's `value` is and advance like the old code did.
         char *v = cur(p)->value;
@@ -1370,9 +1337,6 @@ static char *parse_type_name(Parser *p) {
             case TOK_STR_TYPE: head = "str"; break;
             case TOK_BOOL: head = "bool"; break;
             case TOK_VOID: head = "void"; break;
-            case TOK_LIST: head = "list"; break;
-            case TOK_MAP: head = "map"; break;
-            case TOK_IMAP: head = "imap"; break;
             case TOK_TASK: head = "task"; break;
             default: head = ""; break;
         }
@@ -1412,13 +1376,11 @@ static char *parse_type_name(Parser *p) {
             TokenType nt2 = peek_at(p, 2)->type;
             int next_starts_type =
                 nt == TOK_IDENT || nt == TOK_INT || nt == TOK_BOOL ||
-                nt == TOK_VOID || nt == TOK_LIST || nt == TOK_MAP ||
-                nt == TOK_IMAP || nt == TOK_TASK || nt == TOK_STR_TYPE;
+                nt == TOK_VOID || nt == TOK_TASK || nt == TOK_STR_TYPE;
             int looks_like_param_boundary =
                 nt == TOK_IDENT &&
                 (nt2 == TOK_IDENT || nt2 == TOK_INT || nt2 == TOK_BOOL ||
-                 nt2 == TOK_VOID || nt2 == TOK_LIST || nt2 == TOK_MAP ||
-                 nt2 == TOK_IMAP || nt2 == TOK_TASK || nt2 == TOK_STR_TYPE);
+                 nt2 == TOK_VOID || nt2 == TOK_TASK || nt2 == TOK_STR_TYPE);
             if (!next_starts_type || looks_like_param_boundary) break;
             p->pos++; // consume comma
             if (len + 1 < (int)sizeof(buf)) buf[len++] = ',';
@@ -1633,9 +1595,6 @@ Node *parser_parse(Parser *p) {
             seg = eat(p, TOK_IDENT)->value;
         } else {
             switch (cur(p)->type) {
-                case TOK_LIST: seg = "list"; break;
-                case TOK_MAP:  seg = "map";  break;
-                case TOK_IMAP: seg = "imap"; break;
                 case TOK_TASK: seg = "task"; break;
                 case TOK_INT:  seg = "int";  break;
                 case TOK_STR_TYPE: seg = "str"; break;
@@ -1653,9 +1612,6 @@ Node *parser_parse(Parser *p) {
                 seg2 = eat(p, TOK_IDENT)->value;
             } else {
                 switch (cur(p)->type) {
-                    case TOK_LIST: seg2 = "list"; break;
-                    case TOK_MAP:  seg2 = "map";  break;
-                    case TOK_IMAP: seg2 = "imap"; break;
                     case TOK_TASK: seg2 = "task"; break;
                     case TOK_INT:  seg2 = "int";  break;
                     case TOK_STR_TYPE: seg2 = "str"; break;
