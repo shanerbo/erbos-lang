@@ -86,24 +86,6 @@ static void emit_String_yell(FILE *out, const Target *target) {
     fprintf(out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
 }
 
-// P3.3a primitive: _write_bytes(x0=ptr, x1=len) -> void
-// Writes `len` bytes starting at `ptr` to stdout via the host's
-// write(2) syscall. No null terminator scanning, no trailing
-// newline — pure raw byte output. Used as the building block for
-// pure-Potato String.yell once String becomes a stdlib struct.
-static void emit_write_bytes(FILE *out, const Target *target) {
-    fprintf(out, "// built-in: _write_bytes(x0=ptr, x1=len)\n");
-    fprintf(out, ".globl _write_bytes\n.p2align 2\n_write_bytes:\n");
-    fprintf(out, "    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n");
-    // The kernel write(2) syscall on AArch64 uses x1=buf, x2=len,
-    // x0=fd. Move incoming args into the syscall registers, then let
-    // the per-target callback set fd=stdout and emit the syscall.
-    fprintf(out, "    mov x2, x1\n");        // len -> x2
-    fprintf(out, "    mov x1, x0\n");        // ptr -> x1
-    target->emit_sys_write_stdout(out);
-    fprintf(out, "    mov sp, x29\n    ldp x29, x30, [sp], #16\n    ret\n\n");
-}
-
 // γ1 transitional: most `yell(x)` calls resolve at compile time
 // on x's static type (see checker.c NODE_CALL "yell" branch) and
 // emit `bl _yell_int` / `bl _String_yell` / `bl _<UserType>_yell`
@@ -422,7 +404,6 @@ static void emit_int_to_str(FILE *out) {
 void runtime_emit_builtins(FILE *out, const Target *target) {
     emit_yell_int(out, target);
     emit_String_yell(out, target);
-    emit_write_bytes(out, target);
     emit_yell_dispatch(out, target);
     emit_task_builtins(out, target);
     emit_heap_alloc(out, target);
@@ -446,11 +427,6 @@ void runtime_emit_builtins(FILE *out, const Target *target) {
     fprintf(out, "    bl _yell_str\n");
     target->emit_sys_exit(out, 1);
     fprintf(out, "\n");
-    fprintf(out, ".globl _panic_capacity\n.p2align 2\n_panic_capacity:\n");
-    target->emit_addr_load(out, 0, "_cap_str");
-    fprintf(out, "    bl _yell_str\n");
-    target->emit_sys_exit(out, 1);
-    fprintf(out, "\n");
 
     // Assert handler — used by `assert(...)` calls in user test bodies.
     // Prints the line number, then " assertion failed", then exits 1.
@@ -471,11 +447,6 @@ void runtime_emit_builtins(FILE *out, const Target *target) {
     fprintf(out, "    .quad 26\n    .quad _oob_msg\n");
     fprintf(out, "_oob_str:\n");
     fprintf(out, "    .quad 26\n    .quad 26\n    .quad _oob_arr\n    .quad 0\n");
-    fprintf(out, "_cap_msg: .asciz \"panic: capacity overflow\"\n");
-    fprintf(out, ".p2align 3\n_cap_arr:\n");
-    fprintf(out, "    .quad 24\n    .quad _cap_msg\n");
-    fprintf(out, "_cap_str:\n");
-    fprintf(out, "    .quad 24\n    .quad 24\n    .quad _cap_arr\n    .quad 0\n");
     fprintf(out, "_assert_msg: .asciz \" assertion failed\"\n");
     fprintf(out, ".p2align 3\n_assert_arr:\n");
     fprintf(out, "    .quad 17\n    .quad _assert_msg\n");

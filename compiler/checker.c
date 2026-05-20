@@ -613,10 +613,7 @@ static Type check_expr(Checker *c, Node *n) {
             }
             if (!strcmp(name, "len")) {
                 if (n->call.arg_count != 1) { fprintf(stderr, "error:%d: len() takes 1 argument\n", n->line); exit(1); }
-                Type arg_t = check_expr(c, n->call.args[0]);
-                if (arg_t.kind == TYPE_MAP) n->call.args[0]->resolved_type = 4;
-                else if (arg_t.kind == TYPE_STR) n->call.args[0]->resolved_type = 5;
-                else n->call.args[0]->resolved_type = 3;
+                check_expr(c, n->call.args[0]);
                 return make_type(TYPE_INT);
             }
             // γ4: free-function string builtins (str_len, str_eq,
@@ -646,14 +643,13 @@ static Type check_expr(Checker *c, Node *n) {
             // runtime symbols (binary op via NODE_BINARY tag,
             // method via NODE_METHOD_CALL on int receiver).
             // β5: raw memory primitives (heap_alloc, heap_free,
-            // mem_load, mem_store, mem_load_byte, mem_store_byte,
-            // write_bytes) are NOT user-callable. They were the
-            // bootstrap kernel surface that pure-Potato std/list /
-            // std/map / std/string used before the `array of T`
-            // primitive existed. With α + β1..β4 they're never
-            // referenced from any .ptt file. The compiler emits
-            // `bl _heap_alloc` / `bl _heap_free` / `bl _write_bytes`
-            // / `bl _panic_oob` directly when lowering language
+            // mem_load, mem_store, mem_load_byte, mem_store_byte)
+            // are NOT user-callable. They were the bootstrap kernel
+            // surface that pure-Potato std/list / std/map / std/string
+            // used before the `array of T` primitive existed. With
+            // α + β1..β4 they're never referenced from any .ptt file.
+            // The compiler emits `bl _heap_alloc` / `bl _heap_free` /
+            // `bl _panic_oob` directly when lowering language
             // constructs (array allocation, RAII drop, bounds-check
             // failure). User code that calls these names hits the
             // generic "unknown function" error below.
