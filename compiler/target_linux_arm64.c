@@ -187,7 +187,6 @@ static int linux_arm64_assemble_and_link(const char *asm_path,
 }
 
 static const Target k_target_linux_arm64 = {
-    .name                    = "linux-arm64",
     .emit_prologue           = linux_arm64_emit_prologue,
     .emit_text_section       = linux_arm64_emit_text_section,
     .emit_data_section       = linux_arm64_emit_data_section,

@@ -37,10 +37,7 @@ typedef enum {
     TOK_LT_WORD,    // lt
     TOK_GE_WORD,    // ge
     TOK_LE_WORD,    // le
-    TOK_ADD_WORD,   // unused - reserved
-    TOK_SUB_WORD,   // unused - reserved
-    TOK_MUL_WORD,   // unused - reserved
-    TOK_DIV_WORD,   // unused - reserved
+    TOK_ADD_WORD,   // unused - reserved (defensive `case` arms in checker/irgen)
     TOK_MOD_WORD,   // mod
     TOK_TRUE,
     TOK_FALSE,

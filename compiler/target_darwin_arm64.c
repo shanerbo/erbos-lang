@@ -173,7 +173,6 @@ static int darwin_arm64_assemble_and_link(const char *asm_path,
 }
 
 static const Target k_target_darwin_arm64 = {
-    .name                    = "darwin-arm64",
     .emit_prologue           = darwin_arm64_emit_prologue,
     .emit_text_section       = darwin_arm64_emit_text_section,
     .emit_data_section       = darwin_arm64_emit_data_section,
@@ -193,10 +192,8 @@ const Target *target_darwin_arm64(void) {
 }
 
 // Default-target / by-name resolution lives here for now because
-// darwin-arm64 is the only registered backend. Phase 3 will return
-// the Linux backend from target_by_name("linux-arm64") once it
-// exists; until then `linux-arm64` is recognized (NOT_IMPLEMENTED)
-// but cannot be selected.
+// darwin-arm64 is the host of record. The Linux backend is reachable
+// via target_by_name("linux-arm64").
 const Target *target_default(void) {
     return &k_target_darwin_arm64;
 }

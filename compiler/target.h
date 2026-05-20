@@ -28,10 +28,6 @@
 // stable target identifier surface.
 
 typedef struct Target {
-    // Stable target identifier. Passed back through diagnostics and
-    // matched against --target=<name> CLI input.
-    const char *name;
-
     // Emit the assembly file's leading directives:
     //   .global _start
     //   .align 2
@@ -142,27 +138,22 @@ typedef struct Target {
                              const char *out_name);
 } Target;
 
-// Result of `target_by_name`. Distinguishes three CLI outcomes so the
-// driver can give a different diagnostic for a typo (`drawin-arm64`)
-// vs. a recognized-but-unimplemented target (`linux-arm64` before
-// Phase 3 lands).
+// Result of `target_by_name`. Two outcomes: the requested target
+// resolved, or the name was not recognized.
 typedef enum {
-    TARGET_LOOKUP_OK,                // name resolved; *out is non-NULL
-    TARGET_LOOKUP_UNKNOWN,           // name is not a recognized target
-    TARGET_LOOKUP_NOT_IMPLEMENTED,   // recognized name, no backend yet
+    TARGET_LOOKUP_OK,        // name resolved; *out is non-NULL
+    TARGET_LOOKUP_UNKNOWN,   // name is not a recognized target
 } TargetLookupResult;
 
 // Returns the default target for the host this compiler was built on.
 // Today: always darwin-arm64 (the only host supported).
 const Target *target_default(void);
 
-// Look up a target by its kebab-case name. The plan recognizes
-// "darwin-arm64" and "linux-arm64" as valid target identifiers;
-// linux-arm64 returns NOT_IMPLEMENTED until Phase 3 wires in its
-// backend. Anything else returns UNKNOWN.
+// Look up a target by its kebab-case name. Recognizes "darwin-arm64"
+// and "linux-arm64"; anything else returns UNKNOWN.
 //
-// On OK, `*out_target` receives the backend pointer; on the other
-// outcomes it is left untouched.
+// On OK, `*out_target` receives the backend pointer; on UNKNOWN it
+// is left untouched.
 TargetLookupResult target_by_name(const char *name, const Target **out_target);
 
 #endif

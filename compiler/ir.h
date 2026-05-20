@@ -27,7 +27,6 @@ typedef enum {
     IR_OR,          // %dst = %a || %b (short-circuit)
     IR_NOT,         // %dst = !%a
     IR_CALL,        // %dst = call func(%args...)
-    IR_ARG,         // set arg N = %src (before call)
     IR_RET,         // return %src
     IR_RET_VOID,    // return void
     IR_STORE,       // mem[%addr + offset] = %val (8-byte word)

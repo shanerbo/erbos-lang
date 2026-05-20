@@ -792,22 +792,14 @@ int main(int argc, char **argv) {
     argc = j;
 
     // Resolve the active backend. No flag → host default. With a flag,
-    // distinguish three outcomes:
-    //   - OK:               proceed
-    //   - NOT_IMPLEMENTED:  recognized identifier, no backend yet
-    //                       (today: linux-arm64 — lands in Phase 3)
-    //   - UNKNOWN:          typo / unrecognized name
+    // distinguish two outcomes: OK (proceed) or UNKNOWN (typo /
+    // unrecognized name).
     const Target *target = target_default();
     if (target_name) {
         const Target *requested = NULL;
         TargetLookupResult r = target_by_name(target_name, &requested);
         if (r == TARGET_LOOKUP_OK) {
             target = requested;
-        } else if (r == TARGET_LOOKUP_NOT_IMPLEMENTED) {
-            fprintf(stderr,
-                "error: --target=%s is recognized but its backend is "
-                "not yet implemented in this build.\n", target_name);
-            return 1;
         } else {
             fprintf(stderr,
                 "error: --target=%s is not a recognized target.\n"
