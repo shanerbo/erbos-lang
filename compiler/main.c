@@ -17,6 +17,7 @@ extern char **environ;
 #include "regalloc.h"
 #include "iremit.h"
 #include "target.h"
+#include "hashmap.h"
 
 static char *read_file(const char *path) {
     FILE *f = fopen(path, "r");
@@ -587,6 +588,28 @@ static int struct_in_program(Node *program, const char *name) {
     return 0;
 }
 
+// Hash-backed variant: O(1) lookup against a precomputed
+// Hashmap<struct_name -> Node *> (built once per EMIT_IR_TO_FILE
+// invocation by `build_struct_set`). Returns 1 iff `name` names a
+// struct in the program. Used inside the EMIT_IR_TO_FILE macro
+// where the same query repeats for every (struct, field) pair —
+// O(S * F) lookups per emit, previously each O(S).
+static int struct_in_set(Hashmap *struct_set, const char *name) {
+    if (!name || !struct_set) return 0;
+    return hashmap_contains(struct_set, name);
+}
+
+// Build a fresh hashmap mapping every struct name in the program
+// to its Node *. Caller owns the result and must hashmap_free() it.
+static Hashmap *build_struct_set(Node *program) {
+    Hashmap *m = hashmap_new(0);
+    for (int si = 0; si < program->program.structs.count; si++) {
+        Node *s = program->program.structs.items[si];
+        if (s->struct_def.name) hashmap_put(m, s->struct_def.name, s);
+    }
+    return m;
+}
+
 // Emit `_drop_array_<E>(arr_hdr_ptr)` — frees an `array of E`
 // where E is a heap-shaped struct, using the cap-bounded null-
 // guarded iteration convention. Iterates the data buffer and
@@ -715,7 +738,8 @@ static void emit_clone_array_helper(FILE *ir_out, const char *elem) {
 // appears in some struct field as `array__E`. Result is a malloc'd
 // deduplicated array of strdup'd names. Caller frees each entry
 // and the array.
-static char **collect_heap_array_elems(Node *program, int *count_out) {
+static char **collect_heap_array_elems(Node *program, Hashmap *struct_set,
+                                       int *count_out) {
     int cap = 0, n = 0;
     char **names = NULL;
     for (int si = 0; si < program->program.structs.count; si++) {
@@ -726,7 +750,9 @@ static char **collect_heap_array_elems(Node *program, int *count_out) {
             const char *elem = ft + 7;
             if (!strcmp(elem, "byte") || !strcmp(elem, "int") ||
                 !strcmp(elem, "bool")) continue;
-            if (!struct_in_program(program, elem)) continue;
+            int is_struct = struct_set ? struct_in_set(struct_set, elem)
+                                       : struct_in_program(program, elem);
+            if (!is_struct) continue;
             int dup = 0;
             for (int k = 0; k < n; k++) {
                 if (!strcmp(names[k], elem)) { dup = 1; break; }
@@ -1310,6 +1336,12 @@ int main(int argc, char **argv) {
         FILE *ir_out = fopen((asm_path_arg), "w");                              \
         target->emit_prologue(ir_out);                                          \
         target->emit_runtime_builtins(ir_out);                                  \
+        /* T09: build a single struct-name -> Node* hashmap once per           \
+         * emit. The macro asks "is `ft` a struct in the program?"             \
+         * for every (struct, field) pair below — without the set,             \
+         * each query was O(S), and the cumulative cost was O(S^2 * F)         \
+         * per emit. With the set: O(S * F) build + O(1) per query. */         \
+        Hashmap *struct_set = build_struct_set(program);                        \
         /* Emit one `_drop_array_<E>` and `_clone_array_<E>` helper           \
          * per heap-shaped element struct E referenced as                     \
          * `array of E` in some struct field. Set/Map/Pool delegate           \
@@ -1321,7 +1353,8 @@ int main(int argc, char **argv) {
          * existing inline cleanup. */                                        \
         {                                                                       \
             int hae_count = 0;                                                  \
-            char **hae = collect_heap_array_elems(program, &hae_count);         \
+            char **hae = collect_heap_array_elems(program, struct_set,          \
+                                                   &hae_count);                  \
             for (int hi = 0; hi < hae_count; hi++) {                            \
                 emit_drop_array_helper(ir_out, hae[hi]);                        \
                 emit_clone_array_helper(ir_out, hae[hi]);                       \
@@ -1344,12 +1377,10 @@ int main(int argc, char **argv) {
             for (int fi = 0; fi < s->struct_def.field_count; fi++) {            \
                 const char *ft = s->struct_def.field_types[fi];                 \
                 if (!ft) continue;                                              \
-                for (int sj = 0; sj < program->program.structs.count; sj++) {   \
-                    if (sj == si) continue;                                     \
-                    if (!strcmp(program->program.structs.items[sj]->struct_def.name, ft)) { \
-                        needs_field_init = 1;                                   \
-                        break;                                                  \
-                    }                                                           \
+                /* T09: O(1) lookup, with explicit self-skip. */                \
+                if (struct_in_set(struct_set, ft) &&                            \
+                    strcmp(s->struct_def.name, ft) != 0) {                      \
+                    needs_field_init = 1;                                       \
                 }                                                               \
                 if (needs_field_init) break;                                    \
             }                                                                   \
@@ -1395,14 +1426,10 @@ int main(int argc, char **argv) {
                 for (int fi = 0; fi < s->struct_def.field_count; fi++) {        \
                     const char *ft = s->struct_def.field_types[fi];             \
                     if (!ft) continue;                                          \
-                    int is_struct_field = 0;                                    \
-                    for (int sj = 0; sj < program->program.structs.count; sj++) { \
-                        if (sj == si) continue;                                 \
-                        if (!strcmp(program->program.structs.items[sj]->struct_def.name, ft)) { \
-                            is_struct_field = 1;                                \
-                            break;                                              \
-                        }                                                       \
-                    }                                                           \
+                    /* T09: O(1) lookup with self-skip. */                      \
+                    int is_struct_field =                                       \
+                        struct_in_set(struct_set, ft) &&                        \
+                        strcmp(s->struct_def.name, ft) != 0;                    \
                     if (!is_struct_field) continue;                             \
                     fprintf(ir_out, "    bl _alloc_%s\n", ft);                  \
                     fprintf(ir_out, "    str x0, [x19, #%d]\n", fi * 8);        \
@@ -1485,13 +1512,8 @@ int main(int argc, char **argv) {
                  * source's existing chain is what we need to mirror.            \
                  * Only _alloc_<X>'s init loop skips self-types (to              \
                  * avoid infinite recursion at construction time). */            \
-                int is_struct_field = 0;                                        \
-                if (ft) for (int sj = 0; sj < program->program.structs.count; sj++) { \
-                    if (!strcmp(program->program.structs.items[sj]->struct_def.name, ft)) { \
-                        is_struct_field = 1;                                    \
-                        break;                                                  \
-                    }                                                           \
-                }                                                               \
+                /* T09: O(1) lookup. */                                         \
+                int is_struct_field = struct_in_set(struct_set, ft);            \
                 int is_array_field = ft && !strncmp(ft, "array__", 7);          \
                 int is_byte_array  = ft && !strcmp(ft, "array__byte");          \
                 if (is_struct_field) {                                          \
@@ -1520,8 +1542,8 @@ int main(int argc, char **argv) {
                      */                                                         \
                     int esz = is_byte_array ? 1 : 8;                            \
                     const char *elem_name = ft + 7;                             \
-                    int elem_is_struct = struct_in_program(program,             \
-                                                           elem_name);          \
+                    /* T09: O(1) lookup. */                                     \
+                    int elem_is_struct = struct_in_set(struct_set, elem_name);  \
                     if (elem_is_struct) {                                       \
                         /* Cap-bounded null-guarded clone via helper.           \
                          * Helper accepts null-source and short-circuits;       \
@@ -1642,7 +1664,6 @@ int main(int argc, char **argv) {
             for (int fi = 0; fi < s->struct_def.field_count; fi++) {            \
                 const char *ft = s->struct_def.field_types[fi];                 \
                 int off = fi * 8;                                               \
-                int is_struct_field = 0;                                        \
                 /* Codex review fix: self-type fields (e.g. Node.next            \
                  * of type Node) DO need to be dropped — the chain is             \
                  * finite via nil termination, and skipping the self-             \
@@ -1650,12 +1671,8 @@ int main(int argc, char **argv) {
                  * from _alloc_<X>'s init loop, which skips self-type             \
                  * fields specifically to avoid infinite recursion at             \
                  * construction. */                                              \
-                if (ft) for (int sj = 0; sj < program->program.structs.count; sj++) { \
-                    if (!strcmp(program->program.structs.items[sj]->struct_def.name, ft)) { \
-                        is_struct_field = 1;                                    \
-                        break;                                                  \
-                    }                                                           \
-                }                                                               \
+                /* T09: O(1) lookup, no self-skip. */                           \
+                int is_struct_field = struct_in_set(struct_set, ft);            \
                 int is_array_field = ft && !strncmp(ft, "array__", 7);          \
                 int is_byte_array  = ft && !strcmp(ft, "array__byte");          \
                 if (is_struct_field) {                                          \
@@ -1669,8 +1686,8 @@ int main(int argc, char **argv) {
                 } else if (is_array_field) {                                    \
                     int esz = is_byte_array ? 1 : 8;                            \
                     const char *elem_name = ft + 7;                             \
-                    int elem_is_struct = struct_in_program(program,             \
-                                                           elem_name);          \
+                    /* T09: O(1) lookup. */                                     \
+                    int elem_is_struct = struct_in_set(struct_set, elem_name);  \
                     if (elem_is_struct) {                                       \
                         /* F-002: any heap-shaped element array goes            \
                          * through the cap-bounded null-guarded helper,         \
@@ -1750,6 +1767,7 @@ int main(int argc, char **argv) {
             free(names);                                                        \
         }                                                                       \
         fclose(ir_out);                                                         \
+        hashmap_free(struct_set);                                               \
         ir->func_count;                                                         \
     })
 
