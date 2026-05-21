@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "iremit.h"
+#include "hashmap.h"
 
 // Frame layout (positive offsets from x29 == sp):
 //   [x29, #0..15]                                                    saved {x29, x30}
@@ -33,10 +34,17 @@ static const char *g_func_name = NULL;
 // index so iremit can later emit a data section (`_strN: .asciz "..."`)
 // that the load-string sequence's `adrp _strN@PAGE` instructions can
 // point at. iremit_func and iremit_finalize are the only writers.
+//
+// `items[]` is the indexed array (used to drive emit order in
+// `iremit_finalize_data`); `index` is a hashmap from string content to
+// `(idx+1)` (encoded as void*, since the hashmap uses NULL as "absent"
+// and we need to distinguish idx=0 from missing). The hashmap turns
+// the previous O(P) linear-scan dedupe into O(1) per intern.
 typedef struct {
     char **items;
     int count;
     int cap;
+    Hashmap *index;
 } StringPool;
 static StringPool g_string_pool;
 
@@ -44,14 +52,18 @@ static StringPool g_string_pool;
 // index assigned; the caller emits `_str<index>` to reference it.
 static int string_pool_intern(const char *s) {
     if (!s) s = "";
-    for (int i = 0; i < g_string_pool.count; i++)
-        if (!strcmp(g_string_pool.items[i], s)) return i;
+    if (!g_string_pool.index) g_string_pool.index = hashmap_new(0);
+    void *prev = hashmap_get(g_string_pool.index, s);
+    if (prev) return (int)((intptr_t)prev) - 1;
     if (g_string_pool.count >= g_string_pool.cap) {
         g_string_pool.cap = g_string_pool.cap ? g_string_pool.cap * 2 : 8;
         g_string_pool.items = realloc(g_string_pool.items, g_string_pool.cap * sizeof(char *));
     }
-    g_string_pool.items[g_string_pool.count] = (char *)s;
-    return g_string_pool.count++;
+    int idx = g_string_pool.count;
+    g_string_pool.items[idx] = (char *)s;
+    g_string_pool.count++;
+    hashmap_put(g_string_pool.index, s, (void *)(intptr_t)(idx + 1));
+    return idx;
 }
 
 void iremit_finalize_data(FILE *out, const Target *target) {
@@ -99,6 +111,10 @@ void iremit_finalize_data(FILE *out, const Target *target) {
         fprintf(out, "    .quad 0\n");
     }
     g_string_pool.count = 0;
+    if (g_string_pool.index) {
+        hashmap_free(g_string_pool.index);
+        g_string_pool.index = NULL;
+    }
 }
 
 // Emit the epilogue's `ldp x29, x30, [sp], #stack_size` sequence,
