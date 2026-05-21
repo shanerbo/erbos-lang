@@ -52,6 +52,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "monomorph.h"
+#include "hashmap.h"
 
 // ---------- string utilities ----------
 
@@ -783,25 +784,35 @@ static void mangle_in_node(Node *n) {
 // While walking, accumulate every distinct parametric form we see so we
 // know what concrete instantiations to materialise.
 
+// T13: hash-backed StrSet. The items[] array still drives iteration
+// order (monomorph_run wants deterministic output), but membership is
+// now answered by `index` in O(1) instead of an O(N) strcmp scan.
 typedef struct {
     char **items;
     int count;
     int cap;
+    Hashmap *index;  // built lazily on first contains/add
 } StrSet;
 
-static int strset_contains(StrSet *s, const char *v) {
-    for (int i = 0; i < s->count; i++)
-        if (!strcmp(s->items[i], v)) return 1;
-    return 0;
-}
-
 static void strset_add(StrSet *s, const char *v) {
-    if (strset_contains(s, v)) return;
+    if (!s->index) s->index = hashmap_new(0);
+    if (hashmap_contains(s->index, v)) return;
     if (s->count >= s->cap) {
         s->cap = s->cap ? s->cap * 2 : 8;
         s->items = realloc(s->items, s->cap * sizeof(char *));
     }
     s->items[s->count++] = xstrdup(v);
+    hashmap_put(s->index, v, (void *)1);
+}
+
+static void strset_free(StrSet *s) {
+    for (int i = 0; i < s->count; i++) free(s->items[i]);
+    free(s->items);
+    if (s->index) hashmap_free(s->index);
+    s->items = NULL;
+    s->count = 0;
+    s->cap = 0;
+    s->index = NULL;
 }
 
 static void collect_from_string(StrSet *seen, const char *s) {
@@ -1332,6 +1343,31 @@ void monomorph_run(Node *program) {
     program->program.enums = kept_enums;
     program->program.funcs = kept_funcs;
 
+    // T13: O(1) template lookup. The worklist below asks
+    // "find the template whose head matches `head`" three times
+    // per iteration (struct -> enum -> free-func fallback). Build
+    // one hashmap per kind once, here, so each lookup becomes a
+    // single hashmap_get. Values are Node* into the existing
+    // template arrays; the maps are freed when the worklist exits.
+    Hashmap *struct_template_map = hashmap_new(0);
+    for (int i = 0; i < struct_template_count; i++) {
+        hashmap_put(struct_template_map,
+                    struct_templates[i]->struct_def.name,
+                    struct_templates[i]);
+    }
+    Hashmap *enum_template_map = hashmap_new(0);
+    for (int i = 0; i < enum_template_count; i++) {
+        hashmap_put(enum_template_map,
+                    enum_templates[i]->enum_def.name,
+                    enum_templates[i]);
+    }
+    Hashmap *free_func_template_map = hashmap_new(0);
+    for (int i = 0; i < free_func_template_count; i++) {
+        hashmap_put(free_func_template_map,
+                    free_func_templates[i]->func_def.name,
+                    free_func_templates[i]);
+    }
+
     // 2. Worklist: every parametric form discovered anywhere in the
     //    program. Start with the existing concrete code; instantiations
     //    we materialise may introduce more.
@@ -1341,7 +1377,11 @@ void monomorph_run(Node *program) {
     //    a clear monomorph-level error instead of falling through to
     //    a generic "unknown function" message from the checker.
     StrSet seen = {0};
-    StrSet processed = {0};
+    // T13: previously a parallel `processed` StrSet flagged which
+    // `seen` entries the worklist had already handled. With a
+    // monotonic cursor (`processed_index`) the `seen` array is the
+    // worklist; entries are append-only and visited exactly once.
+    int processed_index = 0;
 
     for (int i = 0; i < program->program.structs.count; i++)
         collect_in_struct(program->program.structs.items[i], &seen);
@@ -1375,19 +1415,12 @@ void monomorph_run(Node *program) {
     //    substitute, append. New parametric forms inside the clone go
     //    back onto the worklist.
     while (1) {
-        // Pick a seen form that hasn't been processed yet.
-        const char *form = NULL;
-        for (int i = 0; i < seen.count; i++) {
-            if (!strset_contains(&processed, seen.items[i])) {
-                form = seen.items[i];
-                break;
-            }
-        }
-        if (!form) break;
-
-        // Mark processed early so the loop terminates even if
-        // instantiation fails to add new things.
-        strset_add(&processed, form);
+        // T13: monotonic cursor over the worklist. Each new `seen`
+        // entry was deduped at insertion time (strset_add gates on
+        // hashmap_contains), so visiting `seen[processed_index]`
+        // exactly once and advancing is sufficient.
+        if (processed_index >= seen.count) break;
+        const char *form = seen.items[processed_index++];
 
         // Decompose: head + args.
         char head[128];
@@ -1400,35 +1433,13 @@ void monomorph_run(Node *program) {
             continue;
         }
 
-        // Find matching struct template.
-        Node *st = NULL;
-        for (int i = 0; i < struct_template_count; i++) {
-            if (!strcmp(struct_templates[i]->struct_def.name, head)) { st = struct_templates[i]; break; }
-        }
-        // If no struct template matches, try enum templates.
-        // Enums are a separate class of monomorphic targets; the
-        // emitted shape is also a heap-allocated value, but the
-        // body has variant arrays instead of struct field arrays.
-        Node *et = NULL;
-        if (!st) {
-            for (int i = 0; i < enum_template_count; i++) {
-                if (!strcmp(enum_templates[i]->enum_def.name, head)) {
-                    et = enum_templates[i];
-                    break;
-                }
-            }
-        }
-        // No struct or enum template matched; try free-function
-        // templates next.
-        Node *ft = NULL;
-        if (!st && !et) {
-            for (int i = 0; i < free_func_template_count; i++) {
-                if (!strcmp(free_func_templates[i]->func_def.name, head)) {
-                    ft = free_func_templates[i];
-                    break;
-                }
-            }
-        }
+        // T13: O(1) template lookup via the precomputed maps.
+        // Find matching struct template; fall back to enum, then
+        // free-function (matches the previous fallback chain).
+        Node *st = (Node *)hashmap_get(struct_template_map, head);
+        Node *et = !st ? (Node *)hashmap_get(enum_template_map, head) : NULL;
+        Node *ft = (!st && !et) ?
+            (Node *)hashmap_get(free_func_template_map, head) : NULL;
         if (!st && !et && !ft) {
             // `array<T>` is a built-in type form (Phase α). The
             // checker handles it as TYPE_ARRAY; the monomorphizer
@@ -1697,9 +1708,10 @@ void monomorph_run(Node *program) {
     for (int i = 0; i < program->program.tests.count; i++)
         mangle_in_node(program->program.tests.items[i]->test_def.body);
 
-    // Cleanup of seen / processed sets.
-    for (int i = 0; i < seen.count; i++) free(seen.items[i]);
-    free(seen.items);
-    for (int i = 0; i < processed.count; i++) free(processed.items[i]);
-    free(processed.items);
+    // Cleanup of seen set (T13: `processed` was retired in favor of
+    // a cursor; nothing to free for it).
+    strset_free(&seen);
+    hashmap_free(struct_template_map);
+    hashmap_free(enum_template_map);
+    hashmap_free(free_func_template_map);
 }
