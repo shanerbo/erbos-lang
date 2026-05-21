@@ -26,9 +26,35 @@ static void compute_liveness(IRFunc *func, LiveRange *ranges) {
     }
 
     // Pass 1: first-def + last-use for every vreg, plus per-block
-    // global instruction index ranges for the loop fixup.
+    // global instruction index ranges for the loop fixup. Also
+    // tracks the cumulative count of IR_CALL instructions so Pass 2
+    // can answer "does any call fall strictly inside [start, end)?"
+    // in O(1) per vreg via a prefix-sum subtraction (T14).
     int *block_first = malloc(func->block_count * sizeof(int));
     int *block_last = malloc(func->block_count * sizeof(int));
+
+    // T14: count total instructions to size the call-prefix array.
+    int total_insts = 0;
+    for (int bi = 0; bi < func->block_count; bi++)
+        total_insts += func->blocks[bi].count;
+    // call_prefix[k] = number of IR_CALL with global index < k. Length
+    // total_insts + 1 so call_prefix[total_insts] is well-defined.
+    int *call_prefix = calloc((size_t)total_insts + 1, sizeof(int));
+
+    // T14: header-block lookup table. For every block label that's
+    // actually used as a target, label_to_block[label] is the block
+    // index (or -1 if no block has that label). Sized to max_label+1.
+    int max_label = 0;
+    for (int bi = 0; bi < func->block_count; bi++)
+        if (func->blocks[bi].label > max_label)
+            max_label = func->blocks[bi].label;
+    int *label_to_block = malloc(((size_t)max_label + 1) * sizeof(int));
+    for (int i = 0; i <= max_label; i++) label_to_block[i] = -1;
+    for (int bi = 0; bi < func->block_count; bi++) {
+        int lbl = func->blocks[bi].label;
+        if (lbl >= 0 && lbl <= max_label) label_to_block[lbl] = bi;
+    }
+
     int inst_idx = 0;
     for (int bi = 0; bi < func->block_count; bi++) {
         IRBlock *b = &func->blocks[bi];
@@ -49,6 +75,9 @@ static void compute_liveness(IRFunc *func, LiveRange *ranges) {
                     if (inst->args[ai] >= 0 && inst->args[ai] < func->vreg_count)
                         ranges[inst->args[ai]].end = inst_idx;
             }
+            // T14: extend the call-prefix sum.
+            call_prefix[inst_idx + 1] = call_prefix[inst_idx]
+                                      + (inst->op == IR_CALL ? 1 : 0);
             inst_idx++;
         }
         block_last[bi] = inst_idx - 1;
@@ -89,12 +118,10 @@ static void compute_liveness(IRFunc *func, LiveRange *ranges) {
                 targets[n_targets++] = term->label2;
             }
             for (int t = 0; t < n_targets; t++) {
-                int header_bi = -1;
-                for (int hbi = 0; hbi < func->block_count; hbi++) {
-                    if (func->blocks[hbi].label == targets[t]) {
-                        header_bi = hbi; break;
-                    }
-                }
+                /* T14: O(1) header-block lookup via the precomputed
+                 * label_to_block[] table. */
+                int header_bi = (targets[t] >= 0 && targets[t] <= max_label)
+                              ? label_to_block[targets[t]] : -1;
                 if (header_bi < 0 || header_bi > bi) continue;
                 int header_first = block_first[header_bi];
                 int back_last = block_last[bi];
@@ -114,28 +141,27 @@ static void compute_liveness(IRFunc *func, LiveRange *ranges) {
     }
     free(block_first);
     free(block_last);
+    free(label_to_block);
 
 
     // Pass 2: mark every vreg whose live range strictly contains an
     // IR_CALL. "Strictly contains" means the call instruction index is
     // in (start, end); a call that itself defines or last-uses the
     // vreg doesn't clobber it in flight.
-    inst_idx = 0;
-    for (int bi = 0; bi < func->block_count; bi++) {
-        IRBlock *b = &func->blocks[bi];
-        for (int ii = 0; ii < b->count; ii++) {
-            if (b->insts[ii].op == IR_CALL) {
-                for (int v = 0; v < func->vreg_count; v++) {
-                    if (ranges[v].start >= 0 &&
-                        ranges[v].start < inst_idx &&
-                        ranges[v].end > inst_idx) {
-                        ranges[v].crosses_call = 1;
-                    }
-                }
-            }
-            inst_idx++;
-        }
+    //
+    // T14: O(V) total instead of O(I*V). call_prefix[k] = number of
+    // IR_CALL at indices < k, so the count of calls strictly inside
+    // (start, end) is call_prefix[end] - call_prefix[start + 1].
+    // crosses_call iff that difference > 0.
+    for (int v = 0; v < func->vreg_count; v++) {
+        if (ranges[v].start < 0) continue;
+        int s = ranges[v].start + 1;
+        int e = ranges[v].end;
+        if (s >= e) continue;
+        if (call_prefix[e] - call_prefix[s] > 0)
+            ranges[v].crosses_call = 1;
     }
+    free(call_prefix);
 }
 
 // ARM64 register classes:
