@@ -157,103 +157,105 @@ static int find_project_root(const char *source_file, char *out, size_t out_size
 //
 // Walks the AST recursively. Match is by function name only; we
 // don't change method-call dispatch (methods aren't prefixed).
+//
+// T12: `local_set` is a Hashmap<name -> 1-marker> built once by
+// the caller; the inner-loop strcmp scan over local_names[] became
+// a single hashmap_contains call, taking call-site lookup from
+// O(local_count) to O(1).
 static void rewrite_calls_with_prefix(Node *n,
-                                      char **local_names, int local_count,
+                                      Hashmap *local_set,
                                       const char *alias) {
     if (!n) return;
     switch (n->type) {
         case NODE_CALL: {
-            for (int i = 0; i < local_count; i++) {
-                if (n->call.name && !strcmp(n->call.name, local_names[i])) {
-                    char buf[256];
-                    snprintf(buf, sizeof(buf), "%s_%s", alias, local_names[i]);
-                    n->call.name = strdup(buf);
-                    break;
-                }
+            if (n->call.name && hashmap_contains(local_set, n->call.name)) {
+                char buf[256];
+                snprintf(buf, sizeof(buf), "%s_%s", alias, n->call.name);
+                n->call.name = strdup(buf);
             }
             for (int i = 0; i < n->call.arg_count; i++)
-                rewrite_calls_with_prefix(n->call.args[i], local_names, local_count, alias);
+                rewrite_calls_with_prefix(n->call.args[i], local_set, alias);
             break;
         }
         case NODE_METHOD_CALL:
-            rewrite_calls_with_prefix(n->method_call.object, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->method_call.object, local_set, alias);
             for (int i = 0; i < n->method_call.arg_count; i++)
-                rewrite_calls_with_prefix(n->method_call.args[i], local_names, local_count, alias);
+                rewrite_calls_with_prefix(n->method_call.args[i], local_set, alias);
             break;
         case NODE_BLOCK:
             for (int i = 0; i < n->block.stmts.count; i++)
-                rewrite_calls_with_prefix(n->block.stmts.items[i], local_names, local_count, alias);
+                rewrite_calls_with_prefix(n->block.stmts.items[i], local_set, alias);
             break;
         case NODE_VAR_DECL:
-            rewrite_calls_with_prefix(n->var_decl.value, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->var_decl.value, local_set, alias);
             break;
         case NODE_ASSIGN:
-            rewrite_calls_with_prefix(n->assign.value, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->assign.value, local_set, alias);
             break;
         case NODE_FIELD_ASSIGN:
-            rewrite_calls_with_prefix(n->field_assign.object, local_names, local_count, alias);
-            rewrite_calls_with_prefix(n->field_assign.value, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->field_assign.object, local_set, alias);
+            rewrite_calls_with_prefix(n->field_assign.value, local_set, alias);
             break;
         case NODE_FIELD_ACCESS:
-            rewrite_calls_with_prefix(n->field_access.object, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->field_access.object, local_set, alias);
             break;
         case NODE_BINARY:
-            rewrite_calls_with_prefix(n->binary.left, local_names, local_count, alias);
-            rewrite_calls_with_prefix(n->binary.right, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->binary.left, local_set, alias);
+            rewrite_calls_with_prefix(n->binary.right, local_set, alias);
             break;
         case NODE_UNARY:
-            rewrite_calls_with_prefix(n->unary.operand, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->unary.operand, local_set, alias);
             break;
         case NODE_INDEX:
-            rewrite_calls_with_prefix(n->index_access.object, local_names, local_count, alias);
-            rewrite_calls_with_prefix(n->index_access.index, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->index_access.object, local_set, alias);
+            rewrite_calls_with_prefix(n->index_access.index, local_set, alias);
             break;
         case NODE_INDEX_ASSIGN:
-            rewrite_calls_with_prefix(n->index_assign.object, local_names, local_count, alias);
-            rewrite_calls_with_prefix(n->index_assign.index, local_names, local_count, alias);
-            rewrite_calls_with_prefix(n->index_assign.value, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->index_assign.object, local_set, alias);
+            rewrite_calls_with_prefix(n->index_assign.index, local_set, alias);
+            rewrite_calls_with_prefix(n->index_assign.value, local_set, alias);
             break;
         case NODE_IF:
             for (int i = 0; i < n->if_stmt.branch_count; i++) {
-                rewrite_calls_with_prefix(n->if_stmt.conds[i], local_names, local_count, alias);
-                rewrite_calls_with_prefix(n->if_stmt.bodies[i], local_names, local_count, alias);
+                rewrite_calls_with_prefix(n->if_stmt.conds[i], local_set, alias);
+                rewrite_calls_with_prefix(n->if_stmt.bodies[i], local_set, alias);
             }
-            rewrite_calls_with_prefix(n->if_stmt.nah_body, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->if_stmt.nah_body, local_set, alias);
             break;
         case NODE_THROUGH_RANGE:
-            rewrite_calls_with_prefix(n->through_range.from, local_names, local_count, alias);
-            rewrite_calls_with_prefix(n->through_range.to, local_names, local_count, alias);
-            rewrite_calls_with_prefix(n->through_range.by, local_names, local_count, alias);
-            rewrite_calls_with_prefix(n->through_range.body, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->through_range.from, local_set, alias);
+            rewrite_calls_with_prefix(n->through_range.to, local_set, alias);
+            rewrite_calls_with_prefix(n->through_range.by, local_set, alias);
+            rewrite_calls_with_prefix(n->through_range.body, local_set, alias);
             break;
         case NODE_THROUGH_IN:
-            rewrite_calls_with_prefix(n->through_in.collection, local_names, local_count, alias);
-            rewrite_calls_with_prefix(n->through_in.body, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->through_in.collection, local_set, alias);
+            rewrite_calls_with_prefix(n->through_in.body, local_set, alias);
             break;
         case NODE_INFI:
-            rewrite_calls_with_prefix(n->infi.cond, local_names, local_count, alias);
-            rewrite_calls_with_prefix(n->infi.body, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->infi.cond, local_set, alias);
+            rewrite_calls_with_prefix(n->infi.body, local_set, alias);
             break;
         case NODE_GIVE:
-            rewrite_calls_with_prefix(n->give.value, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->give.value, local_set, alias);
             break;
         case NODE_MATCH:
-            rewrite_calls_with_prefix(n->match_expr.expr, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->match_expr.expr, local_set, alias);
             for (int i = 0; i < n->match_expr.arm_count; i++)
-                rewrite_calls_with_prefix(n->match_expr.arm_bodies[i], local_names, local_count, alias);
+                rewrite_calls_with_prefix(n->match_expr.arm_bodies[i], local_set, alias);
             break;
         case NODE_LIST_LIT:
             for (int i = 0; i < n->list_lit.count; i++)
-                rewrite_calls_with_prefix(n->list_lit.items[i], local_names, local_count, alias);
+                rewrite_calls_with_prefix(n->list_lit.items[i], local_set, alias);
             break;
         case NODE_MAP_LIT:
             for (int i = 0; i < n->map_lit.count; i++) {
-                rewrite_calls_with_prefix(n->map_lit.keys[i], local_names, local_count, alias);
-                rewrite_calls_with_prefix(n->map_lit.values[i], local_names, local_count, alias);
+                rewrite_calls_with_prefix(n->map_lit.keys[i], local_set, alias);
+                rewrite_calls_with_prefix(n->map_lit.values[i], local_set, alias);
             }
             break;
         case NODE_ASSERT:
-            rewrite_calls_with_prefix(n->assert_stmt.condition, local_names, local_count, alias);
+            rewrite_calls_with_prefix(n->assert_stmt.condition, local_set, alias);
             break;
         default:
             break;
@@ -349,16 +351,14 @@ static int scope_contains(const ScopeStack *s, const char *name) {
     return 0;
 }
 
+// T12: alias_map is Hashmap<user_alias -> canonical>. The values
+// are the canonical name strings; lifetime is owned by the caller.
 static void rewrite_alias_idents_walk(Node *n,
-                                      char **aliases,
-                                      char **canonicals,
-                                      int alias_count,
+                                      Hashmap *alias_map,
                                       ScopeStack *scope);
 
 static void rewrite_alias_idents_walk(Node *n,
-                                      char **aliases,
-                                      char **canonicals,
-                                      int alias_count,
+                                      Hashmap *alias_map,
                                       ScopeStack *scope) {
     if (!n) return;
     switch (n->type) {
@@ -367,33 +367,32 @@ static void rewrite_alias_idents_walk(Node *n,
             // no in-scope local shadows it. Stash the user-written
             // alias in `method_call.alias_display` so checker
             // diagnostics report the user's name rather than the
-            // canonical `m<N>` synthetic.
+            // canonical `m<N>` synthetic. T12: O(1) alias lookup.
             Node *obj = n->method_call.object;
             if (obj && obj->type == NODE_IDENT && obj->ident.name &&
                 !scope_contains(scope, obj->ident.name)) {
-                for (int i = 0; i < alias_count; i++) {
-                    if (!strcmp(obj->ident.name, aliases[i])) {
-                        if (!n->method_call.alias_display) {
-                            n->method_call.alias_display = strdup(aliases[i]);
-                        }
-                        obj->ident.name = strdup(canonicals[i]);
-                        break;
+                const char *canon = (const char *)hashmap_get(alias_map,
+                                                              obj->ident.name);
+                if (canon) {
+                    if (!n->method_call.alias_display) {
+                        n->method_call.alias_display = strdup(obj->ident.name);
                     }
+                    obj->ident.name = strdup(canon);
                 }
             }
-            rewrite_alias_idents_walk(obj, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(obj, alias_map, scope);
             for (int i = 0; i < n->method_call.arg_count; i++)
-                rewrite_alias_idents_walk(n->method_call.args[i], aliases, canonicals, alias_count, scope);
+                rewrite_alias_idents_walk(n->method_call.args[i], alias_map, scope);
             break;
         }
         case NODE_CALL:
             for (int i = 0; i < n->call.arg_count; i++)
-                rewrite_alias_idents_walk(n->call.args[i], aliases, canonicals, alias_count, scope);
+                rewrite_alias_idents_walk(n->call.args[i], alias_map, scope);
             break;
         case NODE_BLOCK: {
             int saved = scope->count;
             for (int i = 0; i < n->block.stmts.count; i++)
-                rewrite_alias_idents_walk(n->block.stmts.items[i], aliases, canonicals, alias_count, scope);
+                rewrite_alias_idents_walk(n->block.stmts.items[i], alias_map, scope);
             scope_truncate(scope, saved);
             break;
         }
@@ -402,71 +401,71 @@ static void rewrite_alias_idents_walk(Node *n,
             // name isn't in scope yet) — `x is some.expr()` reads
             // `some` before `x` exists. Then introduce the name
             // for any subsequent statements in the enclosing block.
-            rewrite_alias_idents_walk(n->var_decl.value, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->var_decl.value, alias_map, scope);
             scope_push(scope, n->var_decl.name);
             break;
         case NODE_ASSIGN:
-            rewrite_alias_idents_walk(n->assign.value, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->assign.value, alias_map, scope);
             break;
         case NODE_FIELD_ASSIGN:
-            rewrite_alias_idents_walk(n->field_assign.object, aliases, canonicals, alias_count, scope);
-            rewrite_alias_idents_walk(n->field_assign.value, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->field_assign.object, alias_map, scope);
+            rewrite_alias_idents_walk(n->field_assign.value, alias_map, scope);
             break;
         case NODE_FIELD_ACCESS:
-            rewrite_alias_idents_walk(n->field_access.object, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->field_access.object, alias_map, scope);
             break;
         case NODE_BINARY:
-            rewrite_alias_idents_walk(n->binary.left, aliases, canonicals, alias_count, scope);
-            rewrite_alias_idents_walk(n->binary.right, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->binary.left, alias_map, scope);
+            rewrite_alias_idents_walk(n->binary.right, alias_map, scope);
             break;
         case NODE_UNARY:
-            rewrite_alias_idents_walk(n->unary.operand, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->unary.operand, alias_map, scope);
             break;
         case NODE_INDEX:
-            rewrite_alias_idents_walk(n->index_access.object, aliases, canonicals, alias_count, scope);
-            rewrite_alias_idents_walk(n->index_access.index, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->index_access.object, alias_map, scope);
+            rewrite_alias_idents_walk(n->index_access.index, alias_map, scope);
             break;
         case NODE_INDEX_ASSIGN:
-            rewrite_alias_idents_walk(n->index_assign.object, aliases, canonicals, alias_count, scope);
-            rewrite_alias_idents_walk(n->index_assign.index, aliases, canonicals, alias_count, scope);
-            rewrite_alias_idents_walk(n->index_assign.value, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->index_assign.object, alias_map, scope);
+            rewrite_alias_idents_walk(n->index_assign.index, alias_map, scope);
+            rewrite_alias_idents_walk(n->index_assign.value, alias_map, scope);
             break;
         case NODE_IF:
             for (int i = 0; i < n->if_stmt.branch_count; i++) {
-                rewrite_alias_idents_walk(n->if_stmt.conds[i], aliases, canonicals, alias_count, scope);
-                rewrite_alias_idents_walk(n->if_stmt.bodies[i], aliases, canonicals, alias_count, scope);
+                rewrite_alias_idents_walk(n->if_stmt.conds[i], alias_map, scope);
+                rewrite_alias_idents_walk(n->if_stmt.bodies[i], alias_map, scope);
             }
-            rewrite_alias_idents_walk(n->if_stmt.nah_body, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->if_stmt.nah_body, alias_map, scope);
             break;
         case NODE_THROUGH_RANGE: {
             // Range expressions (from/to/by) are evaluated before
             // the loop var enters scope. Body sees the loop var.
-            rewrite_alias_idents_walk(n->through_range.from, aliases, canonicals, alias_count, scope);
-            rewrite_alias_idents_walk(n->through_range.to,   aliases, canonicals, alias_count, scope);
-            rewrite_alias_idents_walk(n->through_range.by,   aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->through_range.from, alias_map, scope);
+            rewrite_alias_idents_walk(n->through_range.to,   alias_map, scope);
+            rewrite_alias_idents_walk(n->through_range.by,   alias_map, scope);
             int saved = scope->count;
             scope_push(scope, n->through_range.var_name);
-            rewrite_alias_idents_walk(n->through_range.body, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->through_range.body, alias_map, scope);
             scope_truncate(scope, saved);
             break;
         }
         case NODE_THROUGH_IN: {
-            rewrite_alias_idents_walk(n->through_in.collection, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->through_in.collection, alias_map, scope);
             int saved = scope->count;
             scope_push(scope, n->through_in.var_name);
-            rewrite_alias_idents_walk(n->through_in.body, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->through_in.body, alias_map, scope);
             scope_truncate(scope, saved);
             break;
         }
         case NODE_INFI:
-            rewrite_alias_idents_walk(n->infi.cond, aliases, canonicals, alias_count, scope);
-            rewrite_alias_idents_walk(n->infi.body, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->infi.cond, alias_map, scope);
+            rewrite_alias_idents_walk(n->infi.body, alias_map, scope);
             break;
         case NODE_GIVE:
-            rewrite_alias_idents_walk(n->give.value, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->give.value, alias_map, scope);
             break;
         case NODE_MATCH: {
-            rewrite_alias_idents_walk(n->match_expr.expr, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->match_expr.expr, alias_map, scope);
             for (int i = 0; i < n->match_expr.arm_count; i++) {
                 int saved = scope->count;
                 int bcount = n->match_expr.arm_binding_counts ? n->match_expr.arm_binding_counts[i] : 0;
@@ -475,23 +474,23 @@ static void rewrite_alias_idents_walk(Node *n,
                         scope_push(scope, n->match_expr.arm_bindings[i][b]);
                     }
                 }
-                rewrite_alias_idents_walk(n->match_expr.arm_bodies[i], aliases, canonicals, alias_count, scope);
+                rewrite_alias_idents_walk(n->match_expr.arm_bodies[i], alias_map, scope);
                 scope_truncate(scope, saved);
             }
             break;
         }
         case NODE_LIST_LIT:
             for (int i = 0; i < n->list_lit.count; i++)
-                rewrite_alias_idents_walk(n->list_lit.items[i], aliases, canonicals, alias_count, scope);
+                rewrite_alias_idents_walk(n->list_lit.items[i], alias_map, scope);
             break;
         case NODE_MAP_LIT:
             for (int i = 0; i < n->map_lit.count; i++) {
-                rewrite_alias_idents_walk(n->map_lit.keys[i], aliases, canonicals, alias_count, scope);
-                rewrite_alias_idents_walk(n->map_lit.values[i], aliases, canonicals, alias_count, scope);
+                rewrite_alias_idents_walk(n->map_lit.keys[i], alias_map, scope);
+                rewrite_alias_idents_walk(n->map_lit.values[i], alias_map, scope);
             }
             break;
         case NODE_ASSERT:
-            rewrite_alias_idents_walk(n->assert_stmt.condition, aliases, canonicals, alias_count, scope);
+            rewrite_alias_idents_walk(n->assert_stmt.condition, alias_map, scope);
             break;
         default:
             break;
@@ -503,17 +502,19 @@ static void rewrite_alias_idents_walk(Node *n,
 // rewritten as a module call. Aliases that match nothing in scope
 // or in the file's import list are left alone (the checker will
 // surface "undefined variable" for genuinely unknown receivers).
+//
+// T12: alias_map is the precomputed Hashmap<user_alias -> canonical>;
+// the previous (aliases[], canonicals[], alias_count) triple has been
+// folded into a single hash lookup at every NODE_METHOD_CALL site.
 static void rewrite_alias_idents_in_body(Node *body,
                                          char **param_names, int param_count,
-                                         char **aliases,
-                                         char **canonicals,
-                                         int alias_count) {
+                                         Hashmap *alias_map) {
     if (!body) return;
     ScopeStack scope = {0};
     for (int i = 0; i < param_count; i++) {
         scope_push(&scope, param_names[i]);
     }
-    rewrite_alias_idents_walk(body, aliases, canonicals, alias_count, &scope);
+    rewrite_alias_idents_walk(body, alias_map, &scope);
     scope_truncate(&scope, 0);
     free(scope.names);
 }
@@ -989,8 +990,13 @@ int main(int argc, char **argv) {
     {
         int n_uses = program->program.use_count;
         if (n_uses > 0) {
+            // T12: parallel arrays + a Hashmap<user_alias -> canonical>.
+            // The arrays are kept so the canonical strings have a stable
+            // owner the iteration below can free; the hashmap is what
+            // the per-NODE walk consults at lookup time.
             char **user_aliases = malloc(n_uses * sizeof(char *));
             char **canon_aliases = malloc(n_uses * sizeof(char *));
+            Hashmap *alias_map = hashmap_new(0);
             int valid = 0;
             for (int ui = 0; ui < n_uses; ui++) {
                 char rp[512];
@@ -1004,6 +1010,7 @@ int main(int argc, char **argv) {
                 }
                 user_aliases[valid] = strdup(program->program.use_aliases[ui]);
                 canon_aliases[valid] = strdup(canonical_alias_for(rp));
+                hashmap_put(alias_map, user_aliases[valid], canon_aliases[valid]);
                 free(program->program.use_aliases[ui]);
                 program->program.use_aliases[ui] = strdup(canon_aliases[valid]);
                 valid++;
@@ -1014,7 +1021,7 @@ int main(int argc, char **argv) {
                     rewrite_alias_idents_in_body(f->func_def.body,
                                                  f->func_def.param_names,
                                                  f->func_def.param_count,
-                                                 user_aliases, canon_aliases, valid);
+                                                 alias_map);
                 }
             }
             // Also rewrite test bodies (test "name" { ... }). Tests
@@ -1024,9 +1031,10 @@ int main(int argc, char **argv) {
                 if (t && t->test_def.body) {
                     rewrite_alias_idents_in_body(t->test_def.body,
                                                  NULL, 0,
-                                                 user_aliases, canon_aliases, valid);
+                                                 alias_map);
                 }
             }
+            hashmap_free(alias_map);
             for (int i = 0; i < valid; i++) {
                 free(user_aliases[i]);
                 free(canon_aliases[i]);
@@ -1146,6 +1154,7 @@ int main(int argc, char **argv) {
             int nu = imp_prog->program.use_count;
             char **user_aliases = malloc(nu * sizeof(char *));
             char **canon_aliases = malloc(nu * sizeof(char *));
+            Hashmap *alias_map = hashmap_new(0); /* T12 */
             int valid = 0;
             for (int rui = 0; rui < nu; rui++) {
                 char rp[512];
@@ -1158,6 +1167,7 @@ int main(int argc, char **argv) {
                 }
                 user_aliases[valid] = strdup(imp_prog->program.use_aliases[rui]);
                 canon_aliases[valid] = strdup(canonical_alias_for(rp));
+                hashmap_put(alias_map, user_aliases[valid], canon_aliases[valid]);
                 free(imp_prog->program.use_aliases[rui]);
                 imp_prog->program.use_aliases[rui] = strdup(canon_aliases[valid]);
                 valid++;
@@ -1168,9 +1178,10 @@ int main(int argc, char **argv) {
                     rewrite_alias_idents_in_body(f->func_def.body,
                                                  f->func_def.param_names,
                                                  f->func_def.param_count,
-                                                 user_aliases, canon_aliases, valid);
+                                                 alias_map);
                 }
             }
+            hashmap_free(alias_map);
             for (int i = 0; i < valid; i++) {
                 free(user_aliases[i]);
                 free(canon_aliases[i]);
@@ -1203,8 +1214,16 @@ int main(int argc, char **argv) {
         // name; skip generic templates — they're global and stay
         // unprefixed). This is the set we'll rewrite call sites
         // to use.
+        //
+        // T12: also collect into a Hashmap so the per-NODE_CALL
+        // membership check below is O(1) instead of O(local_count).
+        // The local_names[] array survives only because the cleanup
+        // loop at the bottom of this block frees the strdup'd names
+        // it owns — the hashmap's key copies are freed by
+        // hashmap_free.
         char **local_names = NULL;
         int local_count = 0;
+        Hashmap *local_set = hashmap_new(0);
         for (int fi = 0; fi < imp_prog->program.funcs.count; fi++) {
             Node *f = imp_prog->program.funcs.items[fi];
             if (f->func_def.receiver_type) continue;
@@ -1212,15 +1231,17 @@ int main(int argc, char **argv) {
             if (!f->func_def.name) continue;
             local_names = realloc(local_names, (local_count + 1) * sizeof(char *));
             local_names[local_count++] = strdup(f->func_def.name);
+            hashmap_put(local_set, f->func_def.name, (void *)1);
         }
 
         // Pass 2: rewrite intra-file call sites.
         for (int fi = 0; fi < imp_prog->program.funcs.count; fi++) {
             Node *f = imp_prog->program.funcs.items[fi];
             if (f->func_def.body) {
-                rewrite_calls_with_prefix(f->func_def.body, local_names, local_count, alias);
+                rewrite_calls_with_prefix(f->func_def.body, local_set, alias);
             }
         }
+        hashmap_free(local_set);
 
         // Pass 3: rename the function decls themselves and merge.
         //
