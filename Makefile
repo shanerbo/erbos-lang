@@ -30,60 +30,71 @@ test: $(OUT) test-pass test-fail test-runtime test-framework test-ir test-paths 
 	@echo ""
 	@echo "All tests passed."
 
+# Parallelism knob shared across the *.ptt-loop targets. Override
+# with `make TEST_JOBS=N test`. xargs -P<n> distributes per-file
+# work across processes; matches the host's available cores by
+# default (10 on the dev machine).
+TEST_JOBS ?= 10
+
 test-pass: $(OUT)
 	@echo "=== Passing examples ==="
-	@fail=0; \
-	for f in examples/*.ptt; do \
-		b=$$(basename $$f); \
-		case $$b in nomut_test.ptt|oob_test.ptt|move_test.ptt) continue;; esac; \
-		if ! ./$(OUT) run "$$f" > /dev/null 2>&1; then \
-			echo "  FAIL: $$b"; fail=1; \
-		else \
-			echo "  OK:   $$b"; \
-		fi; \
-	done; \
-	echo "=== leetcode library compile check ==="; \
-	for f in tests/lib/leetcode/*.ptt; do \
-		b=$$(basename $$f); \
-		if ! ./$(OUT) ir "$$f" > /dev/null 2>&1; then \
-			echo "  FAIL: $$b (won't compile to IR)"; fail=1; \
-		else \
-			echo "  OK:   $$b"; \
-		fi; \
-		rm -f $${b%.ptt}.s; \
-	done; \
-	[ $$fail -eq 0 ] || (echo "Some passing tests failed"; exit 1)
+	@ls examples/*.ptt | grep -vE 'examples/(nomut_test|oob_test|move_test)\.ptt$$' \
+	  | xargs -P$(TEST_JOBS) -n1 sh -c '\
+	    f="$$1"; b=$$(basename $$f); \
+	    if ! ./$(OUT) run "$$f" > /dev/null 2>&1; then \
+	      echo "  FAIL: $$b"; exit 1; \
+	    else \
+	      echo "  OK:   $$b"; \
+	    fi' _
+	@echo "=== leetcode library compile check ==="
+	@ls tests/lib/leetcode/*.ptt | xargs -P$(TEST_JOBS) -n1 sh -c '\
+	    f="$$1"; b=$$(basename $$f); \
+	    if ! ./$(OUT) ir "$$f" > /dev/null 2>&1; then \
+	      echo "  FAIL: $$b (wont compile to IR)"; rm -f $${b%.ptt}.s; exit 1; \
+	    fi; \
+	    echo "  OK:   $$b"; rm -f $${b%.ptt}.s' _
+
+# Files in tests/errors/ that are RUNTIME panic tests (compile
+# successfully, exit non-zero at runtime) rather than COMPILE-fail
+# tests. Both lists drive separate xargs pipelines below.
+RUNTIME_PANIC_BASES = negative_index empty_pop_panics option_unwrap_none_panics \
+  result_unwrap_err_panics result_unwrap_err_on_ok_panics \
+  list_remove_out_of_range_panics list_insert_out_of_range_panics \
+  stack_pop_empty_panics stack_peek_empty_panics \
+  queue_pop_empty_panics queue_front_empty_panics \
+  deque_pop_front_empty_panics deque_pop_back_empty_panics \
+  deque_front_empty_panics deque_back_empty_panics deque_get_oob_panics \
+  string_slice_oob_panics string_split_empty_sep_panics \
+  string_replace_empty_from_panics string_builder_push_byte_invalid_panics \
+  byte_buffer_get_oob_panics byte_buffer_set_oob_panics \
+  arena_get_oob_panics arena_set_oob_panics \
+  ring_buffer_pop_empty_panics ring_buffer_peek_empty_panics \
+  math_pow_negative_panics math_pow_mod_bad_args_panics math_sqrt_negative_panics \
+  map_get_missing_key_panics pool_get_stale_panics
+
+RUNTIME_PANIC_FILES = examples/oob_test.ptt $(addprefix tests/errors/,$(addsuffix .ptt,$(RUNTIME_PANIC_BASES)))
 
 test-fail: $(OUT)
 	@echo "=== Expected compile failures ==="
-	@fail=0; \
-	for f in tests/errors/*.ptt; do \
-		b=$$(basename $$f); \
-		case $$b in negative_index.ptt|empty_pop_panics.ptt|option_unwrap_none_panics.ptt|result_unwrap_err_panics.ptt|result_unwrap_err_on_ok_panics.ptt|list_remove_out_of_range_panics.ptt|list_insert_out_of_range_panics.ptt|stack_pop_empty_panics.ptt|stack_peek_empty_panics.ptt|queue_pop_empty_panics.ptt|queue_front_empty_panics.ptt|deque_pop_front_empty_panics.ptt|deque_pop_back_empty_panics.ptt|deque_front_empty_panics.ptt|deque_back_empty_panics.ptt|deque_get_oob_panics.ptt|string_slice_oob_panics.ptt|string_split_empty_sep_panics.ptt|string_replace_empty_from_panics.ptt|string_builder_push_byte_invalid_panics.ptt|byte_buffer_get_oob_panics.ptt|byte_buffer_set_oob_panics.ptt|arena_get_oob_panics.ptt|arena_set_oob_panics.ptt|ring_buffer_pop_empty_panics.ptt|ring_buffer_peek_empty_panics.ptt|math_pow_negative_panics.ptt|math_pow_mod_bad_args_panics.ptt|math_sqrt_negative_panics.ptt|map_get_missing_key_panics.ptt|pool_get_stale_panics.ptt) continue;; esac; \
-		if ./$(OUT) "$$f" > /dev/null 2>&1; then \
-			echo "  FAIL (should error): $$b"; fail=1; \
-		else \
-			echo "  OK (errored):        $$b"; \
-		fi; \
-	done; \
-	for f in examples/nomut_test.ptt examples/move_test.ptt; do \
-		b=$$(basename $$f); \
-		if ./$(OUT) "$$f" > /dev/null 2>&1; then \
-			echo "  FAIL (should error): $$b"; fail=1; \
-		else \
-			echo "  OK (errored):        $$b"; \
-		fi; \
-	done; \
-	echo "=== Expected runtime panics ==="; \
-	for f in examples/oob_test.ptt tests/errors/negative_index.ptt tests/errors/empty_pop_panics.ptt tests/errors/option_unwrap_none_panics.ptt tests/errors/result_unwrap_err_panics.ptt tests/errors/result_unwrap_err_on_ok_panics.ptt tests/errors/list_remove_out_of_range_panics.ptt tests/errors/list_insert_out_of_range_panics.ptt tests/errors/stack_pop_empty_panics.ptt tests/errors/stack_peek_empty_panics.ptt tests/errors/queue_pop_empty_panics.ptt tests/errors/queue_front_empty_panics.ptt tests/errors/deque_pop_front_empty_panics.ptt tests/errors/deque_pop_back_empty_panics.ptt tests/errors/deque_front_empty_panics.ptt tests/errors/deque_back_empty_panics.ptt tests/errors/deque_get_oob_panics.ptt tests/errors/string_slice_oob_panics.ptt tests/errors/string_split_empty_sep_panics.ptt tests/errors/string_replace_empty_from_panics.ptt tests/errors/string_builder_push_byte_invalid_panics.ptt tests/errors/byte_buffer_get_oob_panics.ptt tests/errors/byte_buffer_set_oob_panics.ptt tests/errors/arena_get_oob_panics.ptt tests/errors/arena_set_oob_panics.ptt tests/errors/ring_buffer_pop_empty_panics.ptt tests/errors/ring_buffer_peek_empty_panics.ptt tests/errors/math_pow_negative_panics.ptt tests/errors/math_pow_mod_bad_args_panics.ptt tests/errors/math_sqrt_negative_panics.ptt tests/errors/map_get_missing_key_panics.ptt tests/errors/pool_get_stale_panics.ptt; do \
-		b=$$(basename $$f); \
-		if ./$(OUT) run "$$f" > /dev/null 2>&1; then \
-			echo "  FAIL (should panic): $$b"; fail=1; \
-		else \
-			echo "  OK (panicked):       $$b"; \
-		fi; \
-	done; \
-	[ $$fail -eq 0 ] || (echo "Some failure tests did not error"; exit 1)
+	@tmp=$$(mktemp); \
+	  printf 'tests/errors/%s.ptt\n' $(RUNTIME_PANIC_BASES) > $$tmp; \
+	  { ls tests/errors/*.ptt; echo examples/nomut_test.ptt; echo examples/move_test.ptt; } \
+	  | grep -vFf $$tmp \
+	  | xargs -P$(TEST_JOBS) -n1 sh -c '\
+	    f="$$1"; b=$$(basename $$f); \
+	    if ./$(OUT) "$$f" > /dev/null 2>&1; then \
+	      echo "  FAIL (should error): $$b"; exit 1; \
+	    fi; \
+	    echo "  OK (errored):        $$b"' _ ; \
+	  rc=$$?; rm -f $$tmp; exit $$rc
+	@echo "=== Expected runtime panics ==="
+	@printf '%s\n' $(RUNTIME_PANIC_FILES) \
+	  | xargs -P$(TEST_JOBS) -n1 sh -c '\
+	    f="$$1"; b=$$(basename $$f); \
+	    if ./$(OUT) run "$$f" > /dev/null 2>&1; then \
+	      echo "  FAIL (should panic): $$b"; exit 1; \
+	    fi; \
+	    echo "  OK (panicked):       $$b"' _
 
 .PHONY: all clean test test-pass test-fail test-runtime test-framework test-ir test-paths test-leaks
 
@@ -95,19 +106,14 @@ test-fail: $(OUT)
 # observable program behaviour.
 test-ir: $(OUT)
 	@echo "=== IR backend regression tests (matrix: -O0/-O1/-O2) ==="
-	@fail=0; \
-	for f in tests/ir/*.ptt; do \
-		b=$$(basename $$f .ptt); \
-		for level in -O0 -O1 -O2; do \
-			if ./$(OUT) $$level test "$$f" > /dev/null 2>&1; then \
-				echo "  OK:   $$b $$level"; \
-			else \
-				echo "  FAIL: $$b $$level"; \
-				fail=1; \
-			fi; \
-		done; \
-	done; \
-	[ $$fail -eq 0 ] || (echo "Some IR backend tests failed"; exit 1)
+	@ls tests/ir/*.ptt | xargs -P$(TEST_JOBS) -n1 sh -c '\
+	    f="$$1"; b=$$(basename $$f .ptt); \
+	    for level in -O0 -O1 -O2; do \
+	      if ! ./$(OUT) $$level test "$$f" > /dev/null 2>&1; then \
+	        echo "  FAIL: $$b $$level"; exit 1; \
+	      fi; \
+	      echo "  OK:   $$b $$level"; \
+	    done' _
 
 test-runtime:
 	@echo "=== Runtime C tests ==="
@@ -129,16 +135,12 @@ test-runtime:
 
 test-framework: $(OUT)
 	@echo "=== Framework tests (erbos test) ==="
-	@fail=0; \
-	for f in tests/test_*.ptt tests/leetcode/test_*.ptt; do \
-		b=$$(basename $$f); \
-		if ! ./$(OUT) test "$$f" > /dev/null 2>&1; then \
-			echo "  FAIL: $$b"; fail=1; \
-		else \
-			echo "  OK:   $$b"; \
-		fi; \
-	done; \
-	[ $$fail -eq 0 ] || (echo "Some framework tests failed"; exit 1)
+	@ls tests/test_*.ptt tests/leetcode/test_*.ptt | xargs -P$(TEST_JOBS) -n1 sh -c '\
+	    f="$$1"; b=$$(basename $$f); \
+	    if ! ./$(OUT) test "$$f" > /dev/null 2>&1; then \
+	      echo "  FAIL: $$b"; exit 1; \
+	    fi; \
+	    echo "  OK:   $$b"' _
 
 test-paths: $(OUT)
 	@echo "=== Path handling regressions ==="
