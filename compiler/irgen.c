@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include "irgen.h"
 #include "token.h"
+#include "hashmap.h"
 
 typedef struct {
     IRFunc *func;
@@ -46,6 +47,13 @@ typedef struct {
     int loop_end;
     // Program ref for struct/enum info
     Node *program;
+    // T10: O(1) struct-name lookup. Built once at irgen_generate
+    // entry; replaces the seven linear scans of program->program.structs
+    // that previously fired on every NODE_FIELD_ACCESS / NODE_FIELD_ASSIGN.
+    // Maps `struct_name` -> Node *struct_def. NULL when irgen_generate
+    // hasn't built it yet (the helper functions tolerate the NULL by
+    // falling back to the linear walk).
+    Hashmap *struct_map;
 } IRGenCtx;
 
 static VReg new_vreg(IRGenCtx *c) { return c->vreg_next++; }
@@ -581,17 +589,10 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
             return dst;
         }
         case NODE_CALL: {
-            // Check if it's a struct constructor
-            int is_struct = 0;
-            if (c->program) {
-                for (int si = 0; si < c->program->program.structs.count; si++) {
-                    Node *s = c->program->program.structs.items[si];
-                    if (!strcmp(s->struct_def.name, n->call.name)) {
-                        is_struct = 1;
-                        break;
-                    }
-                }
-            }
+            // Check if it's a struct constructor (T10: O(1) lookup).
+            Node *struct_def = c->struct_map
+                ? (Node *)hashmap_get(c->struct_map, n->call.name) : NULL;
+            int is_struct = struct_def != NULL;
             if (is_struct) {
                 // Call _alloc_StructName
                 char alloc_name[128];
@@ -605,14 +606,6 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
                 // once and that types match. The positional form (with
                 // args) is rejected by the checker.
                 if (n->call.arg_names) {
-                    Node *struct_def = NULL;
-                    for (int si = 0; si < c->program->program.structs.count; si++) {
-                        Node *s = c->program->program.structs.items[si];
-                        if (!strcmp(s->struct_def.name, n->call.name)) {
-                            struct_def = s;
-                            break;
-                        }
-                    }
                     for (int i = 0; i < n->call.arg_count; i++) {
                         const char *fname = n->call.arg_names[i];
                         int field_idx = -1;
@@ -1092,17 +1085,17 @@ static VReg gen_expr(IRGenCtx *c, Node *n) {
                 emit(c, (IRInst){.op = IR_LOAD, .dst = dst, .a = obj, .imm = 0});
                 return dst;
             }
-            if (c->program && n->field_access.struct_name) {
-                for (int si = 0; si < c->program->program.structs.count; si++) {
-                    Node *s = c->program->program.structs.items[si];
-                    if (!strcmp(s->struct_def.name, n->field_access.struct_name)) {
-                        for (int fi = 0; fi < s->struct_def.field_count; fi++) {
-                            if (!strcmp(s->struct_def.field_names[fi], n->field_access.field)) {
-                                offset = fi * 8;
-                                break;
-                            }
+            if (c->struct_map && n->field_access.struct_name) {
+                /* T10: O(1) struct lookup; field walk stays linear
+                 * (typical struct has < 8 fields). */
+                Node *s = (Node *)hashmap_get(c->struct_map,
+                                              n->field_access.struct_name);
+                if (s) {
+                    for (int fi = 0; fi < s->struct_def.field_count; fi++) {
+                        if (!strcmp(s->struct_def.field_names[fi], n->field_access.field)) {
+                            offset = fi * 8;
+                            break;
                         }
-                        break;
                     }
                 }
             }
@@ -1307,15 +1300,12 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
             } else if (n->var_decl.value->type == NODE_CALL) {
                 const char *fn = n->var_decl.value->call.name;
                 int size = 0;
-                if (c->program) {
-                    for (int si = 0; si < c->program->program.structs.count; si++) {
-                        Node *s = c->program->program.structs.items[si];
-                        if (!strcmp(s->struct_def.name, fn)) {
-                            size = s->struct_def.field_count * 8;
-                            if (size == 0) size = 8;
-                            break;
-                        }
-                    }
+                /* T10: O(1) struct lookup. */
+                Node *s = c->struct_map
+                    ? (Node *)hashmap_get(c->struct_map, fn) : NULL;
+                if (s) {
+                    size = s->struct_def.field_count * 8;
+                    if (size == 0) size = 8;
                 }
                 if (size > 0) {
                     mark_heap_size(c, n->var_decl.name, size);
@@ -1471,10 +1461,11 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
             int offset = 0;
             int found = 0;
             const char *field_type = NULL;
-            if (c->program && n->field_assign.struct_name) {
-                for (int si = 0; si < c->program->program.structs.count && !found; si++) {
-                    Node *s = c->program->program.structs.items[si];
-                    if (strcmp(s->struct_def.name, n->field_assign.struct_name) != 0) continue;
+            if (c->struct_map && n->field_assign.struct_name) {
+                /* T10: O(1) struct lookup. */
+                Node *s = (Node *)hashmap_get(c->struct_map,
+                                              n->field_assign.struct_name);
+                if (s) {
                     for (int fi = 0; fi < s->struct_def.field_count; fi++) {
                         if (!strcmp(s->struct_def.field_names[fi], n->field_assign.field)) {
                             offset = fi * 8;
@@ -1513,15 +1504,9 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
             // `field be primitive_value` doesn't need a drop.
             if ((n->field_assign.is_move || n->field_assign.is_rep) &&
                 field_type) {
-                int field_is_struct = 0;
-                if (c->program) {
-                    for (int si = 0; si < c->program->program.structs.count; si++) {
-                        if (!strcmp(c->program->program.structs.items[si]->struct_def.name, field_type)) {
-                            field_is_struct = 1;
-                            break;
-                        }
-                    }
-                }
+                /* T10: O(1) struct lookup. */
+                int field_is_struct = c->struct_map &&
+                    hashmap_contains(c->struct_map, field_type);
                 int field_is_array = !strncmp(field_type, "array__", 7);
                 int field_is_byte_array = !strcmp(field_type, "array__byte");
                 if (field_is_struct) {
@@ -2158,6 +2143,16 @@ static void gen_stmt(IRGenCtx *c, Node *n) {
 IRProgram *irgen_generate(Node *program) {
     IRProgram *ir = calloc(1, sizeof(IRProgram));
 
+    // T10: O(1) struct-name -> Node* map, built once for the whole
+    // program. Every per-function IRGenCtx aliases this pointer; the
+    // map is freed at the bottom of irgen_generate after all functions
+    // have lowered.
+    Hashmap *struct_map = hashmap_new(0);
+    for (int si = 0; si < program->program.structs.count; si++) {
+        Node *s = program->program.structs.items[si];
+        if (s->struct_def.name) hashmap_put(struct_map, s->struct_def.name, s);
+    }
+
     for (int i = 0; i < program->program.funcs.count; i++) {
         Node *f = program->program.funcs.items[i];
 
@@ -2186,6 +2181,7 @@ IRProgram *irgen_generate(Node *program) {
         ctx.loop_start = -1;
         ctx.loop_end = -1;
         ctx.program = program;
+        ctx.struct_map = struct_map;
 
         // Register params as locals
         for (int j = 0; j < f->func_def.param_count; j++) {
@@ -2241,6 +2237,7 @@ IRProgram *irgen_generate(Node *program) {
         ctx.loop_start = -1;
         ctx.loop_end = -1;
         ctx.program = program;
+        ctx.struct_map = struct_map;
 
         gen_block(&ctx, t->test_def.body);
         // Test bodies don't have an explicit return; emit cleanup +
@@ -2262,5 +2259,6 @@ IRProgram *irgen_generate(Node *program) {
         free(ctx.local_array_esz);
     }
 
+    hashmap_free(struct_map);
     return ir;
 }
