@@ -2,9 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "checker.h"
+#include "hashmap.h"
 
 #define MAX_SYMS 256
-#define MAX_FUNCS 512
 
 typedef struct {
     char *name;
@@ -33,8 +33,19 @@ typedef struct {
 typedef struct {
     Symbol syms[MAX_SYMS];
     int count;
-    FuncInfo funcs[MAX_FUNCS];
+    // T11: dynamic function table (was a fixed `funcs[MAX_FUNCS=512]`).
+    // `funcs` is a malloc'd contiguous array sized to the program's
+    // function count; pointers `&funcs[i]` are stable across the
+    // checker's lifetime since the array is never reallocated after
+    // the initial sizing.
+    FuncInfo *funcs;
     int func_count;
+    // T11: parallel index for O(1) lookup, populated alongside the
+    // funcs[] array. Key encoding: free functions use `name`; methods
+    // use `<receiver_type>:<name>` (the colon is not a legal
+    // identifier character so the spaces don't collide). Value is
+    // `&funcs[i]`.
+    Hashmap *func_index;
     StructInfo *structs;
     int struct_count;
     // Import aliases (e.g. `use std/math` -> "math"); referenced as
@@ -204,25 +215,39 @@ static Type get_sym(Checker *c, const char *name) {
     return make_type(TYPE_UNKNOWN);
 }
 
+// Build the composite hashmap key for `(receiver_type, name)`. Free
+// functions have receiver_type == NULL and use the bare name; methods
+// use `<receiver_type>:<name>`. The colon is not a legal identifier
+// character so receiver/name halves never alias under a single key.
+static int func_key(char *out, size_t out_size,
+                    const char *receiver_type, const char *name) {
+    if (!name) { if (out_size) out[0] = '\0'; return 0; }
+    if (receiver_type) {
+        return snprintf(out, out_size, "%s:%s", receiver_type, name)
+               < (int)out_size;
+    }
+    size_t n = strlen(name);
+    if (n + 1 > out_size) { out[0] = '\0'; return 0; }
+    memcpy(out, name, n);
+    out[n] = '\0';
+    return 1;
+}
+
 // find_func looks up a *free* function (receiver_type == NULL).
+// T11: O(1) lookup via c->func_index.
 static FuncInfo *find_func(Checker *c, const char *name) {
-    for (int i = 0; i < c->func_count; i++)
-        if (!c->funcs[i].receiver_type && !strcmp(c->funcs[i].name, name))
-            return &c->funcs[i];
-    return NULL;
+    if (!c->func_index || !name) return NULL;
+    return (FuncInfo *)hashmap_get(c->func_index, name);
 }
 
 // find_method looks up a method on a specific struct/enum receiver type.
 // Returns NULL if no such method exists; caller decides what to do
-// (try free function, try built-in, etc.).
+// (try free function, try built-in, etc.). T11: O(1) lookup.
 static FuncInfo *find_method(Checker *c, const char *receiver_type, const char *name) {
-    if (!receiver_type) return NULL;
-    for (int i = 0; i < c->func_count; i++)
-        if (c->funcs[i].receiver_type &&
-            !strcmp(c->funcs[i].receiver_type, receiver_type) &&
-            !strcmp(c->funcs[i].name, name))
-            return &c->funcs[i];
-    return NULL;
+    if (!c->func_index || !receiver_type || !name) return NULL;
+    char key[512];
+    if (!func_key(key, sizeof(key), receiver_type, name)) return NULL;
+    return (FuncInfo *)hashmap_get(c->func_index, key);
 }
 
 static int is_struct(Checker *c, const char *name) {
@@ -2011,12 +2036,15 @@ void checker_run(Node *program) {
     }
 
     // Register functions
-    if (program->program.funcs.count > MAX_FUNCS) {
-        fprintf(stderr, "error: too many functions (%d), max is %d\n",
-            program->program.funcs.count, MAX_FUNCS);
-        exit(1);
-    }
     c.func_count = program->program.funcs.count;
+    // T11: allocate the function table to fit the program. Stable
+    // pointers — c.funcs is sized once and never reallocated. The
+    // parallel hashmap is populated below as each FuncInfo is filled
+    // in.
+    c.funcs = c.func_count > 0
+        ? calloc(c.func_count, sizeof(FuncInfo))
+        : NULL;
+    c.func_index = hashmap_new(0);
 
     // Multi-spark check: only one `spark { }` block per
     // compilation unit. Examples/library files should not
@@ -2048,6 +2076,24 @@ void checker_run(Node *program) {
         c.funcs[i].param_count = f->func_def.param_count;
         c.funcs[i].param_types_str = f->func_def.param_types;
         c.funcs[i].param_is_ref = f->func_def.param_is_ref;
+
+        // T11: register in the lookup index. Composite key for
+        // methods, bare name for free functions. First-writer-wins
+        // to match the previous linear-scan semantics (find_func /
+        // find_method scanned from i=0 and returned the first
+        // match). Today no upstream pass catches duplicate function
+        // declarations beyond multi-spark; keeping first-wins here
+        // means the linker continues to emit the first definition
+        // and reject the second with a duplicate-symbol error,
+        // exactly as before.
+        if (f->func_def.name) {
+            char key[512];
+            if (func_key(key, sizeof(key),
+                         f->func_def.receiver_type, f->func_def.name) &&
+                !hashmap_contains(c.func_index, key)) {
+                hashmap_put(c.func_index, key, &c.funcs[i]);
+            }
+        }
 
         // Validate method shape: receiver type must exist as a struct,
         // an enum, or a primitive type (str / int / bool — methods on
@@ -2129,4 +2175,10 @@ void checker_run(Node *program) {
         for (int j = 0; j < body->block.stmts.count; j++)
             check_stmt(&c, body->block.stmts.items[j]);
     }
+
+    // T11: tear down the dynamic function table + its lookup index.
+    // The strings inside FuncInfo (name / receiver_type / param_*) are
+    // owned by the AST, not by the checker, so they're not freed here.
+    free(c.funcs);
+    hashmap_free(c.func_index);
 }
