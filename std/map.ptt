@@ -1,12 +1,16 @@
 // std/map — generic Map of K, V backed by an open-addressed
-// hash table.
+// hash table (Robin Hood probing, backshift deletion; F-010).
 //
 // Layout:
 //   count    int           // number of FULL entries (visible len)
-//   occupied int           // FULL + DELETED (probe must walk past tombstones)
+//   occupied int           // tracks count; kept on the struct to
+//                          // preserve on-disk layout. Pre-F-010 it
+//                          // distinguished FULL from FULL+DELETED;
+//                          // backshift removed the tombstone state.
 //   keys     array of K
 //   vals     array of V
-//   states   array of byte  // 0 = EMPTY, 1 = FULL, 2 = DELETED
+//   states   array of byte  // 0 = EMPTY, 1 = FULL  (2 = DELETED
+//                           //   was retired with F-010 backshift)
 //
 // The three parallel arrays are always identical in cap, and that
 // cap is always a power of two. The probe uses

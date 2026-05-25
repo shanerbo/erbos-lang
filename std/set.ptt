@@ -1,11 +1,16 @@
 // std/set — generic Set of T backed by an open-addressed
-// hash table (same machinery as Map, no value array).
+// hash table (Robin Hood probing, backshift deletion; F-010).
+// Same machinery as Map, no value array.
 //
 // Layout:
 //   count    int           // number of FULL entries
-//   occupied int           // FULL + DELETED (probe must walk past tombstones)
+//   occupied int           // tracks count; kept on the struct to
+//                          // preserve on-disk layout. (Pre-F-010
+//                          // it distinguished FULL from FULL+DELETED;
+//                          // backshift retired the tombstone state.)
 //   data     array of T
-//   states   array of byte  // 0 = EMPTY, 1 = FULL, 2 = DELETED
+//   states   array of byte  // 0 = EMPTY, 1 = FULL  (2 = DELETED
+//                           //   was retired with F-010 backshift)
 //
 // `T = int` uses Knuth multiplicative hashing (`int.hash` in
 // std/math); `T = String` uses the djb2-shaped hash already
